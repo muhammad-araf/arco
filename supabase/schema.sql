@@ -335,3 +335,253 @@ INSERT INTO employees (code, full_name, designation, phone, pay_type, base_rate)
   ('EMP-002', 'Abdul Ghafoor', 'Godown Weight Supervisor', '0304-8765432', 'monthly', 45000),
   ('EMP-003', 'Riaz Hussain', 'Bardana & Packing Operator', '0322-5544332', 'daily', 1500)
 ON CONFLICT (code) DO NOTHING;
+-- ============================================================================
+-- APPENDIX — BACKEND CORE (work/backend-core, 2026-10-24)
+-- Added by the backend agent. APPEND ONLY: nothing above this section was
+-- edited. Apply after the base schema above, in order, on a fresh or
+-- existing database (all statements are idempotent).
+--
+-- What this adds:
+--  1. doc_numbering + next_doc_number(): atomic, server-side sequential
+--     numbering for inward / batch / gate pass / transfer / adjustment
+--     documents. Numbers are NEVER trusted from the client and NEVER
+--     reused after a reversal/return (the document keeps its number).
+--     The stored prefix per series is the configurable prefix/series
+--     the client spec requires; pass a different prefix only when
+--     creating a brand-new series.
+--  2. idempotency_keys: exact-once posting. The client passes a
+--     clientToken per post/reverse call; a replayed token returns the
+--     stored original result instead of writing duplicate ledger rows.
+--  3. Recipes + versioning, production batch inputs/outputs, machinery
+--     jobs, packing records, godown transfers, stock adjustments and
+--     gate-pass returns — tables the base schema referenced in the plan
+--     but did not create, plus the columns the backend actions need on
+--     existing voucher tables (reversal metadata, owner tracking,
+--     recipe version used).
+--  4. Unique constraints on document numbers and the indexes the
+--     ledger queries need: (godown_id, product_id), date, status,
+--     voucher_no.
+-- ============================================================================
+
+-- ---------------- 1. Sequential document numbering ----------------
+CREATE TABLE IF NOT EXISTS doc_numbering (
+  series TEXT PRIMARY KEY, -- 'inward' | 'batch' | 'gatepass' | 'transfer' | 'adjustment' | ...
+  prefix TEXT NOT NULL,    -- configurable prefix, e.g. 'INW', 'BAT', 'GP'
+  last_no INTEGER NOT NULL DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Atomic: a single statement, so two concurrent postings cannot receive
+-- the same number. Returns e.g. 'GP-000042'.
+CREATE OR REPLACE FUNCTION next_doc_number(p_series TEXT, p_prefix TEXT)
+RETURNS TEXT
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_next INTEGER;
+  v_prefix TEXT;
+BEGIN
+  INSERT INTO doc_numbering (series, prefix, last_no)
+  VALUES (p_series, p_prefix, 1)
+  ON CONFLICT (series)
+  DO UPDATE SET last_no = doc_numbering.last_no + 1, updated_at = NOW()
+  RETURNING last_no, prefix INTO v_next, v_prefix;
+  RETURN v_prefix || '-' || LPAD(v_next::TEXT, 6, '0');
+END;
+$$;
+
+-- ---------------- 2. Idempotency keys ----------------
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  client_token TEXT NOT NULL,
+  scope TEXT NOT NULL, -- e.g. 'gatepass:post', 'batch:reverse'
+  voucher_type TEXT NOT NULL,
+  voucher_id TEXT NOT NULL,
+  voucher_no TEXT NOT NULL,
+  result JSONB NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (client_token, scope)
+);
+CREATE INDEX IF NOT EXISTS idx_idempotency_voucher ON idempotency_keys(voucher_type, voucher_id);
+
+-- ---------------- 3. Recipes (versioned) ----------------
+CREATE TABLE IF NOT EXISTS recipes (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  output_product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  expected_yield_pct NUMERIC(5,2),
+  packaging_type_id UUID REFERENCES packaging_types(id) ON DELETE SET NULL,
+  status TEXT NOT NULL CHECK (status IN ('active', 'retired')) DEFAULT 'active',
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (code, version)
+);
+CREATE INDEX IF NOT EXISTS idx_recipes_code_status ON recipes(code, status);
+
+CREATE TABLE IF NOT EXISTS recipe_items (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  recipe_id UUID NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  required_ratio_pct NUMERIC(5,2) NOT NULL,
+  unit product_unit_enum NOT NULL DEFAULT 'kg'
+);
+
+-- ---------------- 4. Production batch lines ----------------
+CREATE TABLE IF NOT EXISTS production_batch_inputs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  batch_id UUID NOT NULL REFERENCES production_batches(id) ON DELETE CASCADE,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  planned_qty_kg NUMERIC(14,2) NOT NULL DEFAULT 0,
+  actual_qty_kg NUMERIC(14,2) NOT NULL DEFAULT 0,
+  -- Stock owner for this input; NULL = company-owned. Customer-owned
+  -- inputs deduct ONLY this party's balance, never company stock.
+  party_id UUID REFERENCES parties(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS production_batch_outputs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  batch_id UUID NOT NULL REFERENCES production_batches(id) ON DELETE CASCADE,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  output_type TEXT NOT NULL CHECK (output_type IN ('finished', 'byproduct')),
+  qty_kg NUMERIC(14,2) NOT NULL DEFAULT 0
+);
+
+-- ---------------- 5. Machinery jobs (service work) ----------------
+CREATE TABLE IF NOT EXISTS machinery_jobs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  job_no TEXT UNIQUE NOT NULL,
+  date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  customer_id UUID NOT NULL REFERENCES parties(id) ON DELETE RESTRICT,
+  machine_id UUID NOT NULL REFERENCES machines(id) ON DELETE RESTRICT,
+  godown_id UUID REFERENCES godowns(id) ON DELETE RESTRICT,
+  processing_type TEXT NOT NULL,
+  input_product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  input_weight_kg NUMERIC(14,2) NOT NULL DEFAULT 0,
+  output_product_id UUID REFERENCES products(id) ON DELETE RESTRICT,
+  output_weight_kg NUMERIC(14,2) NOT NULL DEFAULT 0,
+  waste_weight_kg NUMERIC(14,2) DEFAULT 0,
+  rate_basis rate_basis_enum NOT NULL DEFAULT 'per_kg',
+  rate NUMERIC(12,2) NOT NULL DEFAULT 0,
+  service_charge NUMERIC(15,2) NOT NULL DEFAULT 0,
+  is_customer_owned BOOLEAN NOT NULL DEFAULT FALSE,
+  status voucher_status_enum NOT NULL DEFAULT 'draft',
+  notes TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  posted_at TIMESTAMPTZ,
+  reversal_reason TEXT,
+  reversed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_machinery_jobs_status ON machinery_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_machinery_jobs_date ON machinery_jobs(date);
+
+-- ---------------- 6. Packing records (Bardana consumption) ----------------
+CREATE TABLE IF NOT EXISTS packing_records (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  job_or_batch_id UUID, -- production_batches.id or machinery_jobs.id
+  packaging_type_id UUID NOT NULL REFERENCES packaging_types(id) ON DELETE RESTRICT,
+  bags_count INTEGER NOT NULL DEFAULT 0,
+  capacity_kg NUMERIC(10,2) DEFAULT 50,
+  total_packed_kg NUMERIC(14,2) NOT NULL DEFAULT 0,
+  packing_rate NUMERIC(12,2) DEFAULT 0,
+  packing_charge NUMERIC(15,2) DEFAULT 0,
+  damaged_bags INTEGER NOT NULL DEFAULT 0,
+  status voucher_status_enum NOT NULL DEFAULT 'draft',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_packing_records_batch ON packing_records(job_or_batch_id);
+
+-- ---------------- 7. Godown transfers ----------------
+CREATE TABLE IF NOT EXISTS godown_transfers (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  transfer_no TEXT UNIQUE NOT NULL,
+  date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  from_godown_id UUID NOT NULL REFERENCES godowns(id) ON DELETE RESTRICT,
+  to_godown_id UUID NOT NULL REFERENCES godowns(id) ON DELETE RESTRICT,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  party_id UUID REFERENCES parties(id) ON DELETE SET NULL,
+  quantity NUMERIC(14,2) NOT NULL,
+  unit product_unit_enum NOT NULL DEFAULT 'kg',
+  reason TEXT NOT NULL,
+  notes TEXT,
+  status voucher_status_enum NOT NULL DEFAULT 'draft',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  posted_at TIMESTAMPTZ,
+  reversal_reason TEXT,
+  reversed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_transfers_status ON godown_transfers(status);
+CREATE INDEX IF NOT EXISTS idx_transfers_product ON godown_transfers(product_id);
+
+-- ---------------- 8. Stock adjustments ----------------
+CREATE TABLE IF NOT EXISTS stock_adjustments (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  adjustment_no TEXT UNIQUE NOT NULL,
+  date TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  godown_id UUID NOT NULL REFERENCES godowns(id) ON DELETE RESTRICT,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  party_id UUID REFERENCES parties(id) ON DELETE SET NULL,
+  quantity_before NUMERIC(14,2) NOT NULL,
+  quantity_after NUMERIC(14,2) NOT NULL,
+  delta_qty NUMERIC(14,2) NOT NULL,
+  reason TEXT NOT NULL,
+  approver TEXT NOT NULL,
+  notes TEXT,
+  status voucher_status_enum NOT NULL DEFAULT 'draft',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  posted_at TIMESTAMPTZ,
+  reversal_reason TEXT,
+  reversed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_adjustments_status ON stock_adjustments(status);
+
+-- ---------------- 9. Gate-pass returns ----------------
+CREATE TABLE IF NOT EXISTS gate_pass_returns (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  gate_pass_id UUID NOT NULL REFERENCES gate_passes(id) ON DELETE CASCADE,
+  product_id UUID NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  party_id UUID REFERENCES parties(id) ON DELETE SET NULL,
+  qty_kg NUMERIC(14,2) NOT NULL,
+  reason TEXT,
+  date TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_gate_pass_returns_pass ON gate_pass_returns(gate_pass_id);
+
+-- ---------------- 10. Columns added to existing voucher tables ----------------
+ALTER TABLE incoming_goods ADD COLUMN IF NOT EXISTS is_customer_owned BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE incoming_goods ADD COLUMN IF NOT EXISTS owner_party_id UUID REFERENCES parties(id) ON DELETE SET NULL;
+ALTER TABLE incoming_goods ADD COLUMN IF NOT EXISTS reversal_reason TEXT;
+ALTER TABLE incoming_goods ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ;
+
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS recipe_id UUID REFERENCES recipes(id) ON DELETE RESTRICT;
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS recipe_version_used INTEGER;
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS output_product_id UUID REFERENCES products(id) ON DELETE RESTRICT;
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS byproduct_product_id UUID REFERENCES products(id) ON DELETE RESTRICT;
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS packaging_type_id UUID REFERENCES packaging_types(id) ON DELETE SET NULL;
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS bags_consumed INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS packing_rate_per_bag NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS is_customer_owned BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS owner_party_id UUID REFERENCES parties(id) ON DELETE SET NULL;
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS reversal_reason TEXT;
+ALTER TABLE production_batches ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ;
+
+ALTER TABLE gate_passes ADD COLUMN IF NOT EXISTS reversal_reason TEXT;
+ALTER TABLE gate_passes ADD COLUMN IF NOT EXISTS reversed_at TIMESTAMPTZ;
+ALTER TABLE gate_passes ADD COLUMN IF NOT EXISTS return_reason TEXT;
+ALTER TABLE gate_passes ADD COLUMN IF NOT EXISTS returned_at TIMESTAMPTZ;
+-- Owner pool for a dispatch line; NULL = company-owned stock.
+ALTER TABLE gate_pass_items ADD COLUMN IF NOT EXISTS party_id UUID REFERENCES parties(id) ON DELETE SET NULL;
+
+-- ---------------- 11. Indexes on existing tables ----------------
+CREATE INDEX IF NOT EXISTS idx_stock_ledger_party ON stock_ledger(party_id);
+CREATE INDEX IF NOT EXISTS idx_stock_ledger_voucher_id ON stock_ledger(voucher_id);
+CREATE INDEX IF NOT EXISTS idx_incoming_goods_status ON incoming_goods(status);
+CREATE INDEX IF NOT EXISTS idx_incoming_goods_date ON incoming_goods(date);
+CREATE INDEX IF NOT EXISTS idx_batches_status ON production_batches(status);
+CREATE INDEX IF NOT EXISTS idx_batches_recipe ON production_batches(recipe_id);
+CREATE INDEX IF NOT EXISTS idx_gate_passes_status ON gate_passes(status);
+CREATE INDEX IF NOT EXISTS idx_gate_passes_date ON gate_passes(date);
+CREATE INDEX IF NOT EXISTS idx_gate_pass_items_pass ON gate_pass_items(gate_pass_id);
+
+-- END OF BACKEND-CORE APPENDIX

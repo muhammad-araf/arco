@@ -432,3 +432,162 @@ export interface DashboardMetrics {
   lowStockItemsCount: number
   recentMovements: StockLedgerEntry[]
 }
+
+// ================= BACKEND-CORE ADDITIONS (appended 2026-10-24) =================
+// Additive only: no existing interface above was edited. These types cover
+// the backend action layer (app/actions/*) and the schema appendix tables.
+// Server-action inputs are typed here so the UI team can import them
+// instead of re-declaring shapes (the action files themselves only export
+// async functions, per Next.js "use server" rules).
+
+/** Standard server-action return shape: every action returns this. */
+export interface ActionResult<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string;
+}
+
+/** Sequential document numbering (supabase/schema.sql appendix). */
+export interface DocNumbering {
+  series: string;
+  prefix: string;
+  last_no: number;
+  updated_at?: string;
+}
+
+/** Exact-once posting record (supabase/schema.sql appendix). */
+export interface IdempotencyKey {
+  client_token: string;
+  scope: string;
+  voucher_type: string;
+  voucher_id: string;
+  voucher_no: string;
+  result: unknown;
+  created_at: string;
+}
+
+export interface GodownTransfer {
+  id: string;
+  transfer_no: string;
+  date: string;
+  from_godown_id: string;
+  to_godown_id: string;
+  product_id: string;
+  party_id?: string | null;
+  quantity: number;
+  unit: ProductUnit;
+  reason: string;
+  notes?: string;
+  status: VoucherStatus;
+  created_at: string;
+  posted_at?: string;
+  reversal_reason?: string;
+  reversed_at?: string;
+}
+
+export interface StockAdjustment {
+  id: string;
+  adjustment_no: string;
+  date: string;
+  godown_id: string;
+  product_id: string;
+  party_id?: string | null;
+  quantity_before: number;
+  quantity_after: number;
+  delta_qty: number;
+  reason: string;
+  approver: string;
+  notes?: string;
+  status: VoucherStatus;
+  created_at: string;
+  posted_at?: string;
+  reversal_reason?: string;
+  reversed_at?: string;
+}
+
+export interface GatePassReturn {
+  id: string;
+  gate_pass_id: string;
+  product_id: string;
+  party_id?: string | null;
+  qty_kg: number;
+  reason?: string;
+  date: string;
+}
+
+/** Gate pass line with its stock-owner pool (NULL = company-owned). */
+export interface GatePassItemWithOwner extends GatePassItem {
+  party_id?: string | null;
+}
+
+export interface ProductionBatchInput {
+  id: string;
+  batch_id: string;
+  product_id: string;
+  planned_qty_kg: number;
+  actual_qty_kg: number;
+  party_id?: string | null;
+}
+
+export interface ProductionBatchOutput {
+  id: string;
+  batch_id: string;
+  product_id: string;
+  output_type: "finished" | "byproduct";
+  qty_kg: number;
+}
+
+/** Batch header fields added by the schema appendix (beyond the base ProductionBatch). */
+export interface ProductionBatchAppendix {
+  recipe_id?: string | null;
+  recipe_version_used?: number | null;
+  output_product_id?: string;
+  byproduct_product_id?: string | null;
+  packaging_type_id?: string | null;
+  bags_consumed?: number;
+  packing_rate_per_bag?: number;
+  is_customer_owned?: boolean;
+  owner_party_id?: string | null;
+  reversal_reason?: string;
+  reversed_at?: string;
+}
+
+/** One aggregated stock-summary row from inventory.getStockSummary. */
+export interface StockSummaryRow {
+  godown_id: string;
+  godown_name: string;
+  product_id: string;
+  product_name: string;
+  party_id: string | null;
+  party_name: string | null;
+  balance_kg: number;
+  unit: "kg";
+  min_stock_kg: number;
+  below_min_stock: boolean;
+}
+
+// ---- Server-action input shapes (see the matching action file for docs) ----
+export interface InwardItemInput {
+  productId: string;
+  bags: number;
+  grossWeightKg: number;
+  tareWeightKg?: number;
+  tarePerBagKg?: number;
+  ratePerUnit?: number;
+}
+
+export interface BatchInputInput {
+  productId: string;
+  actualQtyKg: number;
+  plannedQtyKg?: number;
+  partyId?: string;
+}
+
+export interface GatePassItemInput {
+  productId: string;
+  bags: number;
+  netWeightKg: number;
+  grossWeightKg?: number;
+  remarks?: string;
+  partyId?: string;
+}
