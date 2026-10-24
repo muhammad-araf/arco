@@ -16,7 +16,10 @@ import {
   Boxes,
   Download,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { listGatePasses, createGatePassDraft, postGatePass, reverseGatePass, returnGatePass } from "@/app/actions/gatepass"
+import { getStockSummary } from "@/app/actions/inventory"
+import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
+import { GatePassPrint, PrintButton } from "@/components/print"
 import { GatePass, GatePassItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDate, formatDateTime } from "@/lib/utils"
 import { exportToCSV } from "@/lib/export-utils"
@@ -38,6 +41,9 @@ export default function GatePassPage() {
   const [godowns, setGodowns] = React.useState<Godown[]>([])
   const [products, setProducts] = React.useState<Product[]>([])
   const [customers, setCustomers] = React.useState<Party[]>([])
+  const [summaryRows, setSummaryRows] = React.useState<any[]>([])
+  const [returnTarget, setReturnTarget] = React.useState<any | null>(null)
+  const [returnPending, setReturnPending] = React.useState(false)
 
   // Modal / Print State
   const [isModalOpen, setIsModalOpen] = React.useState(false)
@@ -74,20 +80,26 @@ export default function GatePassPage() {
     { productId: "", bags: 100, netWeight: 5000, remarks: "50kg Packed Certified Bags" },
   ])
 
-  const loadData = React.useCallback(() => {
-    setGatePasses(GodownStore.getGatePasses())
-    setGodowns(GodownStore.getGodowns())
-    setProducts(GodownStore.getProducts())
-    setCustomers(GodownStore.getParties().filter((p) => p.type === "customer" || p.type === "both"))
-  }, [])
-
-  React.useEffect(() => {
-    loadData()
-    setDrillFilter(getUrlFilter())
+  const loadData = React.useCallback(async () => {
+    setIsLoading(true)
+    const [gp, g, pr, pa, sm] = await Promise.all([listGatePasses(), listGodowns(), listProducts(), listParties(), getStockSummary()])
+    const failed = [gp, g, pr, pa, sm].find((x) => !x.success)
+    if (failed) setFormError(failed.error ?? "Could not load gate pass data.")
+    const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
+    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+    const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+    setGodowns(godownList); setProducts(productList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both"))
+    setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
+    setGatePasses((Array.isArray(gp.data) ? gp.data : []).map((row: any) => ({
+      ...row,
+      customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
+      godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+      items: (row.gate_pass_items ?? row.items ?? []).map((it: any) => ({
+        ...it, product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+      })),
+    })))
     setIsLoading(false)
-    window.addEventListener("arco-godown-data-updated", loadData)
-    return () => window.removeEventListener("arco-godown-data-updated", loadData)
-  }, [loadData])
+  }, [])
 
   React.useEffect(() => {
     if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
@@ -139,7 +151,7 @@ export default function GatePassPage() {
       if (!item.productId) return setFormError(`Line ${i + 1}: select a product.`)
       if (!isPositive(Number(item.bags))) return setFormError(`Line ${i + 1}: bags must be greater than zero.`)
       if (!isPositive(Number(item.netWeight))) return setFormError(`Line ${i + 1}: net weight must be greater than zero.`)
-      const available = GodownStore.getProductStock(item.productId, godownId)
+      const available = summaryRows.filter((r) => r.product_id === item.productId && r.godown_id === godownId).reduce((a, r) => a + (Number(r.balance_kg) || 0), 0)
       if (item.netWeight > available) {
         const prod = products.find((p) => p.id === item.productId)
         return setFormError(`Insufficient stock for ${prod?.name || "Product"}: ${available} kg available in this godown, but ${item.netWeight} kg requested. Reduce the quantity or pick another godown.`)
@@ -187,67 +199,71 @@ export default function GatePassPage() {
     setShowPostConfirm(true)
   }
 
-  const handleConfirmPost = () => {
+  const handleConfirmPost = async () => {
     if (!draftPass || postGuard.current) return
     postGuard.current = true
     setIsPending(true)
     try {
-      GodownStore.postGatePass(draftPass)
-      setFormNotice(`${draftPass.pass_no} dispatched — ${formatWeight(draftPass.total_weight_kg)} deducted from ${draftPass.godown_name || "the godown"}.`)
-      setSelectedPassForPrint(draftPass)
-    } finally {
-      setIsPending(false)
-      postGuard.current = false
+      const created = await createGatePassDraft({
+        customerId, godownId, vehicleNo: vehicleNo.trim(), driverName: driverName.trim(),
+        driverPhone: driverPhone || undefined, transporter: transporter || undefined,
+        destination: destination.trim() || undefined, orderRef: orderRef || undefined, notes: notes || undefined,
+        items: items.map((it) => ({ productId: it.productId, bags: Number(it.bags), netWeightKg: Number(it.netWeight), remarks: it.remarks })),
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not create the gate pass draft.")
+        return
+      }
+      const posted = await postGatePass((created.data as any).id, `gatepass-${Date.now()}`)
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the gate pass.")
+        return
+      }
+      const row: any = posted.data ?? created.data
+      setFormNotice(`${row.pass_no ?? draftPass.pass_no} dispatched — ${formatWeight(row.total_weight_kg ?? draftPass.total_weight_kg)} deducted from ${draftPass.godown_name || "the godown"}.`)
+      setSelectedPassForPrint({ ...draftPass, pass_no: row.pass_no ?? draftPass.pass_no, status: "posted" })
       setShowPostConfirm(false)
       setIsModalOpen(false)
       setDraftPass(null)
+      await loadData()
+    } finally {
+      setIsPending(false)
+      postGuard.current = false
+    }
+  }
+
+  const handleFullReturn = async () => {
+    if (!returnTarget || returnPending) return
+    setReturnPending(true)
+    try {
+      const res = await returnGatePass(returnTarget.id, { reason: "Full return of dispatched goods" }, `gatepass-return-${Date.now()}`)
+      if (!res.success) {
+        setFormError(res.error ?? "Could not return the gate pass.")
+        return
+      }
+      setFormNotice(`${returnTarget.pass_no} returned in full — stock restored.`)
+      setReturnTarget(null)
+      await loadData()
+    } finally {
+      setReturnPending(false)
     }
   }
 
   // Spec §9.3: cancellation after posting creates a reversal with reason;
   // the pass stays searchable as "reversed" and stock is restored by
   // compensating inward ledger rows. The pass number is never reused.
-  const handleConfirmReversal = (reasonCode: string, reason: string) => {
+  const handleConfirmReversal = async (reasonCode: string, reason: string) => {
     if (!reversalTarget || isReversing) return
     setIsReversing(true)
     try {
-      const state = (GodownStore as any).getState()
-      const now = new Date().toISOString()
-      const runningByProduct: Record<string, number> = {}
-      const rows = reversalTarget.items.map((item, idx) => {
-        if (runningByProduct[item.product_id] === undefined) {
-          runningByProduct[item.product_id] = GodownStore.getProductStock(item.product_id, reversalTarget.godown_id)
-        }
-        runningByProduct[item.product_id] += item.net_weight_kg
-        return {
-          id: `stk-gprev-${Date.now()}-${idx}`,
-          date: now,
-          voucher_type: "adjustment",
-          voucher_id: reversalTarget.id,
-          voucher_no: reversalTarget.pass_no,
-          godown_id: reversalTarget.godown_id,
-          godown_name: reversalTarget.godown_name,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          party_id: reversalTarget.customer_id,
-          party_name: reversalTarget.customer_name,
-          inward_qty: item.net_weight_kg,
-          outward_qty: 0,
-          unit: "kg",
-          running_balance: runningByProduct[item.product_id],
-          notes: `Reversal of ${reversalTarget.pass_no} [${reasonCode}]: ${reason}`,
-          created_at: now,
-        }
-      })
-      state.stockLedger = [...rows, ...state.stockLedger]
-      state.gatePasses = state.gatePasses.map((gp: GatePass) =>
-        gp.id === reversalTarget.id
-          ? { ...gp, status: "reversed" as const, notes: `${gp.notes ? gp.notes + " | " : ""}Reversed [${reasonCode}]: ${reason}` }
-          : gp
-      )
-      ;(GodownStore as any).saveState(state)
+      const res = await reverseGatePass(reversalTarget.id, `${reasonCode}: ${reason}`, `gatepass-rev-${Date.now()}`)
+      if (!res.success) {
+        setFormError(res.error ?? "Could not reverse the gate pass.")
+        return
+      }
       setFormNotice(`${reversalTarget.pass_no} reversed — dispatched stock restored. Reason recorded: ${reasonCode}.`)
       setReversalTarget(null)
+      await loadData()
     } finally {
       setIsReversing(false)
     }
@@ -396,6 +412,16 @@ export default function GatePassPage() {
                       {gp.status === "posted" && (
                         <button
                           type="button"
+                          onClick={() => setReturnTarget(gp)}
+                          className="px-2 py-1 rounded-md hover:bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[11px] font-semibold cursor-pointer"
+                          title="Return this pass in full (partial returns pass items via returnGatePass)"
+                        >
+                          Return
+                        </button>
+                      )}
+                      {gp.status === "posted" && (
+                        <button
+                          type="button"
                           onClick={() => setReversalTarget(gp)}
                           className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer"
                           title="Reverse this dispatched pass (requires a reason)"
@@ -535,7 +561,7 @@ export default function GatePassPage() {
 
                 <div className="space-y-2">
                   {items.map((item, idx) => {
-                    const available = item.productId ? GodownStore.getProductStock(item.productId, godownId) : 0
+                    const available = item.productId ? summaryRows.filter((r) => r.product_id === item.productId && r.godown_id === godownId).reduce((a, r) => a + (Number(r.balance_kg) || 0), 0) : 0
                     return (
                       <div
                         key={idx}
@@ -740,18 +766,38 @@ export default function GatePassPage() {
               >
                 Close
               </button>
-              <button
-                type="button"
-                onClick={() => window.print()}
-                className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer"
-              >
-                <Printer className="h-4 w-4" />
-                <span>Print Official Gate Pass (A4)</span>
-              </button>
+              <PrintButton label="Print Official Gate Pass (A4)" className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
             </div>
           </div>
         </div>
       )}
+      {selectedPassForPrint && selectedPassForPrint.status === "posted" && (
+        <div className="hidden print:block">
+          <GatePassPrint
+            passNo={selectedPassForPrint.pass_no}
+            date={selectedPassForPrint.date}
+            status={selectedPassForPrint.status}
+            customerName={selectedPassForPrint.customer_name}
+            destination={selectedPassForPrint.destination}
+            godown={selectedPassForPrint.godown_name}
+            orderRef={selectedPassForPrint.order_ref}
+            transporter={selectedPassForPrint.transporter}
+            vehicleNo={selectedPassForPrint.vehicle_no}
+            driverName={selectedPassForPrint.driver_name}
+            driverPhone={selectedPassForPrint.driver_phone}
+            items={selectedPassForPrint.items.map((it) => ({ product: it.product_name, bags: it.bags_count, weightKg: it.net_weight_kg, grossWeightKg: it.gross_weight_kg, remarks: it.remarks }))}
+          />
+        </div>
+      )}
+      <ConfirmDialog
+        open={returnTarget !== null}
+        title={`Return ${returnTarget?.pass_no ?? ""} in full?`}
+        description="The full dispatched quantity is returned to stock. For a partial return, call returnGatePass with item quantities — the server action supports it; this button covers the full-return flow."
+        confirmLabel="Return in full"
+        pending={returnPending}
+        onConfirm={handleFullReturn}
+        onCancel={() => setReturnTarget(null)}
+      />
       <ConfirmDialog
         open={showPostConfirm}
         title="Authorize this gate pass?"
