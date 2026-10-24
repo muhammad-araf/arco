@@ -15,6 +15,16 @@ import {
 import { GodownStore } from "@/lib/services/godown-store"
 import { CustomerReceipt, Party } from "@/lib/types/database"
 import { formatCurrency, formatDate } from "@/lib/utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  EmptyState,
+  FilterBanner,
+  PageSkeleton,
+  SubmitSpinner,
+  getUrlFilter,
+  isPositive,
+} from "@/components/erp-ui"
 
 export default function BillingPage() {
   const [receipts, setReceipts] = React.useState<CustomerReceipt[]>([])
@@ -22,6 +32,14 @@ export default function BillingPage() {
 
   // Modal
   const [isReceiptModalOpen, setIsReceiptModalOpen] = React.useState(false)
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [formError, setFormError] = React.useState("")
+  const [formNotice, setFormNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showConfirm, setShowConfirm] = React.useState(false)
+  const [draftReceipt, setDraftReceipt] = React.useState<CustomerReceipt | null>(null)
+  const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
+  const receiptGuard = React.useRef(false)
   const [customerId, setCustomerId] = React.useState("")
   const [amount, setAmount] = React.useState<number>(100000)
   const [paymentMethod, setPaymentMethod] = React.useState<"cash" | "bank" | "online">("bank")
@@ -36,6 +54,8 @@ export default function BillingPage() {
 
   React.useEffect(() => {
     loadData()
+    setDrillFilter(getUrlFilter())
+    setIsLoading(false)
     window.addEventListener("arco-godown-data-updated", loadData)
     return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
@@ -51,12 +71,17 @@ export default function BillingPage() {
 
   const handleRecordReceipt = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!customerId || amount <= 0) return
-
+    if (isPending) return
+    // Spec §11.2: a receipt collects an earlier receivable — it must name a
+    // customer, be positive, and may not over-collect that customer's balance.
+    if (!customerId) return setFormError("Select the customer paying this receipt.")
+    if (!isPositive(amount)) return setFormError("Receipt amount must be greater than zero.")
     const selectedCust = customers.find((c) => c.id === customerId)
+    const custBalance = selectedCust ? (selectedCust.current_balance !== undefined ? selectedCust.current_balance : selectedCust.opening_balance) : 0
+    if (amount > custBalance) return setFormError(`Receipt (${formatCurrency(amount)}) exceeds ${selectedCust?.name || "this customer"}'s outstanding balance (${formatCurrency(custBalance)}). A receipt collects a receivable; it cannot create a negative balance. Record the balance amount or less.`)
+    setFormError("")
     const receiptNo = `RCT-2026-${String(receipts.length + 1).padStart(3, "0")}`
-
-    const newReceipt: CustomerReceipt = {
+    setDraftReceipt({
       id: `rct-${Date.now()}`,
       receipt_no: receiptNo,
       date: new Date().toISOString(),
@@ -68,40 +93,59 @@ export default function BillingPage() {
       is_advance: false,
       notes: notes || undefined,
       created_at: new Date().toISOString(),
-    }
-
-    const state = (GodownStore as any).getState()
-    state.receipts = [newReceipt, ...(state.receipts || [])]
-
-    // Reduce customer receivable balance
-    state.parties = state.parties.map((p: Party) =>
-      p.id === customerId
-        ? { ...p, current_balance: Math.max(0, (p.current_balance || p.opening_balance) - amount) }
-        : p
-    )
-
-    // Add to cash ledger
-    const lastCashBal = state.cashLedger.length > 0 ? state.cashLedger[state.cashLedger.length - 1].running_balance : 0
-    state.cashLedger.push({
-      id: `cl-${Date.now()}`,
-      date: new Date().toISOString(),
-      voucher_type: "receipt",
-      voucher_id: newReceipt.id,
-      voucher_no: receiptNo,
-      account: paymentMethod === "cash" ? "cash" : "bank",
-      debit: amount,
-      credit: 0,
-      running_balance: lastCashBal + amount,
-      description: `Payment receipt from ${selectedCust?.name} (${referenceNo || "Direct"})`,
-      created_at: new Date().toISOString(),
     })
-
-    ;(GodownStore as any).saveState(state)
-    setIsReceiptModalOpen(false)
+    setShowConfirm(true)
   }
+
+  const handleConfirmReceipt = () => {
+    if (!draftReceipt || receiptGuard.current) return
+    receiptGuard.current = true
+    setIsPending(true)
+    try {
+      const selectedCust = customers.find((c) => c.id === customerId)
+      const state = (GodownStore as any).getState()
+      state.receipts = [draftReceipt, ...(state.receipts || [])]
+      state.parties = state.parties.map((p: Party) =>
+        p.id === customerId
+          ? { ...p, current_balance: Math.max(0, (p.current_balance || p.opening_balance) - draftReceipt.amount) }
+          : p
+      )
+      const lastCashBal = state.cashLedger.length > 0 ? state.cashLedger[state.cashLedger.length - 1].running_balance : 0
+      state.cashLedger.push({
+        id: `cl-${Date.now()}`,
+        date: new Date().toISOString(),
+        voucher_type: "receipt",
+        voucher_id: draftReceipt.id,
+        voucher_no: draftReceipt.receipt_no,
+        account: paymentMethod === "cash" ? "cash" : "bank",
+        debit: draftReceipt.amount,
+        credit: 0,
+        running_balance: lastCashBal + draftReceipt.amount,
+        description: `Payment receipt from ${selectedCust?.name} (${referenceNo || "Direct"})`,
+        created_at: new Date().toISOString(),
+      })
+      ;(GodownStore as any).saveState(state)
+      setFormNotice(`${draftReceipt.receipt_no} posted — ${formatCurrency(draftReceipt.amount)} received from ${selectedCust?.name} via ${paymentMethod}. Receivable reduced; cash/bank increased.`)
+    } finally {
+      setIsPending(false)
+      receiptGuard.current = false
+      setShowConfirm(false)
+      setIsReceiptModalOpen(false)
+      setDraftReceipt(null)
+    }
+  }
+
+  const visibleCustomers = drillFilter === "receivable"
+    ? customers.filter((c) => (c.current_balance !== undefined ? c.current_balance : c.opening_balance) > 0)
+    : customers
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
+      <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
@@ -149,7 +193,17 @@ export default function BillingPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">
-                {customers.map((c) => {
+                {visibleCustomers.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="py-4">
+                      <EmptyState
+                        title={drillFilter === "receivable" ? "No outstanding receivables" : "No customers yet"}
+                        hint={drillFilter === "receivable" ? "Every customer balance is settled." : "Add customers in Master Data to record receipts against them."}
+                      />
+                    </td>
+                  </tr>
+                )}
+                {visibleCustomers.map((c) => {
                   const bal = c.current_balance !== undefined ? c.current_balance : c.opening_balance
                   return (
                     <tr key={c.id} className="hover:bg-muted/30 transition-colors">
@@ -206,9 +260,12 @@ export default function BillingPage() {
               </div>
             ))}
             {receipts.length === 0 && (
-              <div className="py-8 text-center text-muted-foreground text-xs">
-                No receipts recorded yet. Click "Record Customer Receipt" to log payment.
-              </div>
+              <EmptyState
+                title="No receipts recorded yet"
+                hint="A receipt collects an earlier invoice — it increases cash/bank and reduces the customer's receivable, without creating new revenue."
+                actionLabel="Record Customer Receipt"
+                onAction={() => setIsReceiptModalOpen(true)}
+              />
             )}
           </div>
         </div>
@@ -233,6 +290,7 @@ export default function BillingPage() {
             </div>
 
             <form onSubmit={handleRecordReceipt} className="space-y-4 text-xs">
+              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div>
                 <label className="block font-medium text-foreground mb-1">Customer / Payer</label>
                 <select
@@ -308,16 +366,26 @@ export default function BillingPage() {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Post Receipt to Daybook</span>
+                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+                  <span>{isPending ? "Posting…" : "Post Receipt to Daybook"}</span>
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={showConfirm}
+        title="Post this customer receipt?"
+        description={draftReceipt ? `${draftReceipt.receipt_no}: ${formatCurrency(draftReceipt.amount)} from ${draftReceipt.customer_name || "the customer"} via ${draftReceipt.payment_method}. This increases cash/bank and reduces the receivable — it is a collection, not new revenue.` : ""}
+        confirmLabel="Post Receipt to Daybook"
+        pending={isPending}
+        onConfirm={handleConfirmReceipt}
+        onCancel={() => { setShowConfirm(false); setDraftReceipt(null) }}
+      />
     </div>
   )
 }

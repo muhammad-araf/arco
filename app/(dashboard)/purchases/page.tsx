@@ -12,6 +12,17 @@ import {
 import { GodownStore } from "@/lib/services/godown-store"
 import { PurchaseVoucher, Party, Godown, Product } from "@/lib/types/database"
 import { formatCurrency, formatWeight, formatDate } from "@/lib/utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  EmptyState,
+  FilterBanner,
+  PageSkeleton,
+  ReversalDialog,
+  SubmitSpinner,
+  getUrlFilter,
+  isPositive,
+} from "@/components/erp-ui"
 
 export default function PurchasesPage() {
   const [purchases, setPurchases] = React.useState<PurchaseVoucher[]>([])
@@ -21,6 +32,16 @@ export default function PurchasesPage() {
 
   // Modal
   const [isModalOpen, setIsModalOpen] = React.useState(false)
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [formError, setFormError] = React.useState("")
+  const [formNotice, setFormNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showConfirm, setShowConfirm] = React.useState(false)
+  const [draftPurchase, setDraftPurchase] = React.useState<PurchaseVoucher | null>(null)
+  const [reversalTarget, setReversalTarget] = React.useState<PurchaseVoucher | null>(null)
+  const [isReversing, setIsReversing] = React.useState(false)
+  const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
+  const purchaseGuard = React.useRef(false)
   const [vendorId, setVendorId] = React.useState("")
   const [godownId, setGodownId] = React.useState("")
   const [invoiceRef, setInvoiceRef] = React.useState("")
@@ -40,6 +61,8 @@ export default function PurchasesPage() {
 
   React.useEffect(() => {
     loadData()
+    setDrillFilter(getUrlFilter())
+    setIsLoading(false)
     window.addEventListener("arco-godown-data-updated", loadData)
     return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
@@ -55,14 +78,22 @@ export default function PurchasesPage() {
 
   const handleRecordPurchase = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!vendorId || !godownId || !productId || quantity <= 0) return
-
+    if (isPending) return
+    // Spec §10: required fields, positive quantity and price, and payment
+    // may not exceed the invoice total — each failure says what to fix.
+    if (!vendorId) return setFormError("Select the supplier / vendor for this purchase.")
+    if (!godownId) return setFormError("Select the godown receiving this purchase.")
+    if (!productId) return setFormError("Select the product being purchased.")
+    if (!isPositive(quantity)) return setFormError("Quantity must be greater than zero.")
+    if (!isPositive(unitPrice)) return setFormError("Unit price must be greater than zero.")
+    if (paidAmount < 0) return setFormError("Paid amount cannot be negative.")
+    if (paidAmount > totalAmount) return setFormError(`Paid amount (${formatCurrency(paidAmount)}) exceeds the invoice total (${formatCurrency(totalAmount)}). A payment is allocated to a specific invoice and cannot overpay it.`)
+    setFormError("")
     const selectedVendor = vendors.find((v) => v.id === vendorId)
     const selectedGodown = godowns.find((g) => g.id === godownId)
     const selectedProd = products.find((p) => p.id === productId)
     const purchaseNo = `PUR-2026-${String(purchases.length + 1).padStart(3, "0")}`
-
-    const newPurchase: PurchaseVoucher = {
+    setDraftPurchase({
       id: `pur-${Date.now()}`,
       purchase_no: purchaseNo,
       date: new Date().toISOString(),
@@ -72,7 +103,7 @@ export default function PurchasesPage() {
       godown_id: godownId,
       godown_name: selectedGodown?.name,
       total_amount: totalAmount,
-      paidAmount,
+      paid_amount: paidAmount,
       balance_amount: balanceAmount,
       status: "posted",
       notes: notes || undefined,
@@ -90,22 +121,67 @@ export default function PurchasesPage() {
         },
       ],
       created_at: new Date().toISOString(),
-    }
-
-    const state = (GodownStore as any).getState()
-    state.purchases = [newPurchase, ...(state.purchases || [])]
-
-    // Update vendor balance
-    state.parties = state.parties.map((p: Party) =>
-      p.id === vendorId ? { ...p, current_balance: (p.current_balance || p.opening_balance) + balanceAmount } : p
-    )
-
-    ;(GodownStore as any).saveState(state)
-    setIsModalOpen(false)
+    })
+    setShowConfirm(true)
   }
+
+  const handleConfirmPurchase = () => {
+    if (!draftPurchase || purchaseGuard.current) return
+    purchaseGuard.current = true
+    setIsPending(true)
+    try {
+      const state = (GodownStore as any).getState()
+      state.purchases = [draftPurchase, ...(state.purchases || [])]
+      state.parties = state.parties.map((p: Party) =>
+        p.id === vendorId ? { ...p, current_balance: (p.current_balance || p.opening_balance) + draftPurchase.balance_amount } : p
+      )
+      ;(GodownStore as any).saveState(state)
+      setFormNotice(`${draftPurchase.purchase_no} posted — payable of ${formatCurrency(draftPurchase.balance_amount)} added to ${draftPurchase.vendor_name || "the vendor"}.`)
+    } finally {
+      setIsPending(false)
+      purchaseGuard.current = false
+      setShowConfirm(false)
+      setIsModalOpen(false)
+      setDraftPurchase(null)
+    }
+  }
+
+  // Spec §1.1: reversal never deletes. The invoice stays visible as
+  // "reversed" and the payable added by it is unwound from the vendor.
+  // Note: this prototype's purchases do not add stock, so no stock row
+  // is unwound here — stock-linked purchase receipt lands in Phase 2.
+  const handleConfirmReversal = (reasonCode: string, reason: string) => {
+    if (!reversalTarget || isReversing) return
+    setIsReversing(true)
+    try {
+      const state = (GodownStore as any).getState()
+      state.parties = state.parties.map((p: Party) =>
+        p.id === reversalTarget.vendor_id ? { ...p, current_balance: (p.current_balance || p.opening_balance) - reversalTarget.balance_amount } : p
+      )
+      state.purchases = state.purchases.map((p: PurchaseVoucher) =>
+        p.id === reversalTarget.id
+          ? { ...p, status: "reversed" as const, notes: `${p.notes ? p.notes + " | " : ""}Reversed [${reasonCode}]: ${reason}` }
+          : p
+      )
+      ;(GodownStore as any).saveState(state)
+      setFormNotice(`${reversalTarget.purchase_no} reversed — vendor payable unwound. Reason recorded: ${reasonCode}.`)
+      setReversalTarget(null)
+    } finally {
+      setIsReversing(false)
+    }
+  }
+
+  const visiblePurchases = drillFilter === "payable"
+    ? purchases.filter((p) => p.status === "posted" && p.balance_amount > 0)
+    : purchases
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
+      <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
@@ -132,7 +208,7 @@ export default function PurchasesPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <Building2 className="h-4 w-4 text-emerald-500" />
-            Vendor Purchase Invoices ({purchases.length})
+            Vendor Purchase Invoices ({visiblePurchases.length})
           </h2>
         </div>
 
@@ -148,10 +224,23 @@ export default function PurchasesPage() {
                 <th className="pb-3 font-bold text-right">Paid Amount</th>
                 <th className="pb-3 font-bold text-right">Remaining Balance</th>
                 <th className="pb-3 font-bold text-center">Status</th>
+                <th className="pb-3 font-bold text-center">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
-              {purchases.map((p) => (
+              {visiblePurchases.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="py-4">
+                    <EmptyState
+                      title={drillFilter === "payable" ? "No outstanding vendor balances" : "No purchase vouchers recorded yet"}
+                      hint={drillFilter === "payable" ? "Every posted purchase is fully paid." : "Record raw seed or bardana orders — unpaid balances become vendor payables."}
+                      actionLabel="New Purchase Invoice"
+                      onAction={() => setIsModalOpen(true)}
+                    />
+                  </td>
+                </tr>
+              )}
+              {visiblePurchases.map((p) => (
                 <tr key={p.id} className="hover:bg-muted/30 transition-colors">
                   <td className="py-3 font-mono font-bold text-foreground">{p.purchase_no}</td>
                   <td className="py-3 text-muted-foreground">{formatDate(p.date)}</td>
@@ -165,19 +254,25 @@ export default function PurchasesPage() {
                     {formatCurrency(p.balance_amount)}
                   </td>
                   <td className="py-3 text-center">
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
-                      Posted
+                    <span className={p.status === "reversed" ? "px-2 py-0.5 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase" : "px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase"}>
+                      {p.status === "reversed" ? "Reversed" : "Posted"}
                     </span>
+                  </td>
+                  <td className="py-3 text-center">
+                    {p.status === "posted" && (
+                      <button
+                        type="button"
+                        onClick={() => setReversalTarget(p)}
+                        className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer"
+                        title="Reverse this purchase (requires a reason)"
+                      >
+                        Reverse
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
-              {purchases.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="py-8 text-center text-muted-foreground">
-                    No purchase vouchers recorded yet. Click "New Purchase Invoice" to record raw seed/bardana orders.
-                  </td>
-                </tr>
-              )}
+
             </tbody>
           </table>
         </div>
@@ -202,6 +297,7 @@ export default function PurchasesPage() {
             </div>
 
             <form onSubmit={handleRecordPurchase} className="space-y-4 text-xs">
+              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1">Supplier / Grower</label>
@@ -322,16 +418,34 @@ export default function PurchasesPage() {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Post Purchase Invoice</span>
+                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+                  <span>{isPending ? "Posting…" : "Post Purchase Invoice"}</span>
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={showConfirm}
+        title="Post this purchase invoice?"
+        description={draftPurchase ? `${draftPurchase.purchase_no} for ${draftPurchase.vendor_name || "the vendor"}: total ${formatCurrency(draftPurchase.total_amount)}, paid ${formatCurrency(draftPurchase.paid_amount)}, balance ${formatCurrency(draftPurchase.balance_amount)} added to vendor payables.` : ""}
+        confirmLabel="Post Purchase Invoice"
+        pending={isPending}
+        onConfirm={handleConfirmPurchase}
+        onCancel={() => { setShowConfirm(false); setDraftPurchase(null) }}
+      />
+      <ReversalDialog
+        open={!!reversalTarget}
+        voucherLabel={reversalTarget?.purchase_no ?? ""}
+        note="The payable added by this invoice will be unwound from the vendor balance."
+        pending={isReversing}
+        onConfirm={handleConfirmReversal}
+        onCancel={() => setReversalTarget(null)}
+      />
     </div>
   )
 }
