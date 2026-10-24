@@ -14,7 +14,9 @@ import {
   FileText,
   Boxes,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { listInward, getInward, createInwardDraft, postInward, reverseInward } from "@/app/actions/inward"
+import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
+import { InwardSlipPrint, PrintButton } from "@/components/print"
 import { IncomingGoodsVoucher, IncomingGoodsItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatCurrency, formatDate } from "@/lib/utils"
 import {
@@ -70,19 +72,35 @@ export default function InwardPage() {
     { productId: "", bags: 100, grossWeight: 5050, tareWeight: 50, rate: 120 },
   ])
 
-  const loadData = React.useCallback(() => {
-    setVouchers(GodownStore.getInwardVouchers())
-    setGodowns(GodownStore.getGodowns())
-    setProducts(GodownStore.getProducts())
-    setParties(GodownStore.getParties().filter((p) => p.type === "supplier" || p.type === "both" || p.type === "source"))
+  // Supabase-backed load: DB rows (incoming_goods + incoming_goods_items)
+  // are mapped onto the page's local voucher shape; names come from the
+  // master lists, not from hand-edited local state.
+  const loadData = React.useCallback(async () => {
+    setIsLoading(true)
+    const [v, g, pr, pa] = await Promise.all([listInward(), listGodowns(), listProducts(), listParties()])
+    const failed = [v, g, pr, pa].find((r) => !r.success)
+    if (failed) setFormError(failed.error ?? "Could not load inward data.")
+    const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
+    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+    const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+    setGodowns(godownList)
+    setProducts(productList)
+    setParties(partyList.filter((pt) => pt.type === "supplier" || pt.type === "both" || pt.type === "source"))
+    setVouchers((Array.isArray(v.data) ? v.data : []).map((row: any) => ({
+      ...row,
+      party_name: partyList.find((x) => x.id === row.party_id)?.name ?? row.party_id,
+      godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+      items: (row.incoming_goods_items ?? row.items ?? []).map((it: any) => ({
+        ...it,
+        product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+      })),
+    })))
+    setIsLoading(false)
   }, [])
 
   React.useEffect(() => {
     loadData()
     setDrillFilter(getUrlFilter())
-    setIsLoading(false)
-    window.addEventListener("arco-godown-data-updated", loadData)
-    return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
 
   React.useEffect(() => {
@@ -190,70 +208,59 @@ export default function InwardPage() {
     setShowPostConfirm(true)
   }
 
-  const handleConfirmPost = () => {
+  const handleConfirmPost = async () => {
     if (!draftVoucher || postGuard.current) return
     postGuard.current = true
     setIsPending(true)
     try {
-      GodownStore.postInwardVoucher(draftVoucher)
-      setFormNotice(`${draftVoucher.voucher_no} posted — ${formatWeight(draftVoucher.total_net_weight_kg)} added to ${draftVoucher.godown_name || "the godown"}.`)
-      setSelectedVoucherForPrint(draftVoucher)
-    } finally {
-      setIsPending(false)
-      postGuard.current = false
+      const token = `inward-${Date.now()}`
+      const created = await createInwardDraft({
+        partyId, godownId, biltyNo: biltyNo || undefined, vehicleNo: vehicleNo || undefined,
+        driverName: driverName || undefined, driverPhone: driverPhone || undefined, notes: notes || undefined,
+        items: items.map((it) => ({
+          productId: it.productId, bags: Number(it.bags), grossWeightKg: Number(it.grossWeight),
+          tareWeightKg: Number(it.tareWeight), ratePerUnit: Number(it.rate),
+        })),
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not create the inward draft.")
+        return
+      }
+      const posted = await postInward((created.data as any).id, token)
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the inward voucher.")
+        return
+      }
+      const row: any = posted.data ?? created.data
+      setFormNotice(`${row.voucher_no ?? draftVoucher.voucher_no} posted — ${formatWeight(row.total_net_weight_kg ?? draftVoucher.total_net_weight_kg)} added to ${draftVoucher.godown_name || "the godown"}.`)
+      setSelectedVoucherForPrint({ ...draftVoucher, voucher_no: row.voucher_no ?? draftVoucher.voucher_no, status: "posted" })
       setShowPostConfirm(false)
       setIsFormOpen(false)
       setDraftVoucher(null)
+      await loadData()
+    } finally {
+      setIsPending(false)
+      postGuard.current = false
     }
   }
 
   // Spec §1.1: a posted voucher is never silently deleted. Reversal keeps
   // the voucher visible as "reversed" and writes compensating outward
   // ledger rows so the stock position is restored, with reason on record.
-  const handleConfirmReversal = (reasonCode: string, reason: string) => {
+  const handleConfirmReversal = async (reasonCode: string, reason: string) => {
     if (!reversalTarget || isReversing) return
     setIsReversing(true)
     try {
-      const state = (GodownStore as any).getState()
-      const now = new Date().toISOString()
-      // Track a running balance per product so multi-line reversals of
-      // the same product still show correct sequential balances.
-      const runningByProduct: Record<string, number> = {}
-      const rows = reversalTarget.items.map((item, idx) => {
-        if (runningByProduct[item.product_id] === undefined) {
-          runningByProduct[item.product_id] = GodownStore.getProductStock(item.product_id, reversalTarget.godown_id)
-        }
-        runningByProduct[item.product_id] -= item.net_weight_kg
-        const current = runningByProduct[item.product_id]
-        return {
-          id: `stk-rev-${Date.now()}-${idx}`,
-          date: now,
-          voucher_type: "adjustment",
-          voucher_id: reversalTarget.id,
-          voucher_no: reversalTarget.voucher_no,
-          godown_id: reversalTarget.godown_id,
-          godown_name: reversalTarget.godown_name,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          party_id: reversalTarget.party_id,
-          party_name: reversalTarget.party_name,
-          inward_qty: 0,
-          outward_qty: item.net_weight_kg,
-          unit: "kg",
-          running_balance: current,
-          notes: `Reversal of ${reversalTarget.voucher_no} [${reasonCode}]: ${reason}`,
-          created_at: now,
-        }
-      })
-      state.stockLedger = [...rows, ...state.stockLedger]
-      state.inwardVouchers = state.inwardVouchers.map((v: IncomingGoodsVoucher) =>
-        v.id === reversalTarget.id
-          ? { ...v, status: "reversed" as const, notes: `${v.notes ? v.notes + " | " : ""}Reversed [${reasonCode}]: ${reason}` }
-          : v
-      )
-      ;(GodownStore as any).saveState(state)
+      const res = await reverseInward(reversalTarget.id, `${reasonCode}: ${reason}`, `inward-rev-${Date.now()}`)
+      if (!res.success) {
+        setFormError(res.error ?? "Could not reverse the voucher.")
+        return
+      }
       setFormNotice(`${reversalTarget.voucher_no} reversed — stock restored. Reason recorded: ${reasonCode}.`)
+      const target = reversalTarget
       setReversalTarget(null)
+      await loadData()
+      void target
     } finally {
       setIsReversing(false)
     }
@@ -722,16 +729,32 @@ export default function InwardPage() {
               >
                 Close
               </button>
-              <button
-                type="button"
-                onClick={() => window.print()}
+              <PrintButton
+                label="Print Receiving Slip"
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer"
-              >
-                <Printer className="h-4 w-4" />
-                <span>Print Receiving Slip</span>
-              </button>
+              />
             </div>
           </div>
+        </div>
+      )}
+      {selectedVoucherForPrint && selectedVoucherForPrint.status === "posted" && (
+        <div className="hidden print:block">
+          <InwardSlipPrint
+            voucherNo={selectedVoucherForPrint.voucher_no}
+            date={selectedVoucherForPrint.date}
+            supplierName={selectedVoucherForPrint.party_name}
+            godown={selectedVoucherForPrint.godown_name}
+            biltyNo={selectedVoucherForPrint.bilty_no}
+            vehicleNo={selectedVoucherForPrint.vehicle_no}
+            driverName={selectedVoucherForPrint.driver_name}
+            items={selectedVoucherForPrint.items.map((it) => ({
+              product: it.product_name, bags: it.bags_count, grossWeightKg: it.gross_weight_kg,
+              tareWeightKg: it.tare_weight_kg, netWeightKg: it.net_weight_kg,
+            }))}
+            totalBags={selectedVoucherForPrint.total_bags}
+            totalNetKg={selectedVoucherForPrint.total_net_weight_kg}
+            notes={selectedVoucherForPrint.notes}
+          />
         </div>
       )}
       <ConfirmDialog
