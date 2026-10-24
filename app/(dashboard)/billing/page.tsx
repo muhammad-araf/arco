@@ -12,7 +12,9 @@ import {
   CreditCard,
   TrendingUp,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { listReceipts, listInvoices, createReceipt, postReceipt, reverseReceipt, createInvoice, postInvoice, reverseInvoice } from "@/app/actions/finance"
+import { listParties } from "@/app/actions/masters"
+import { ReceiptVoucherPrint, PrintButton } from "@/components/print"
 import { CustomerReceipt, Party } from "@/lib/types/database"
 import { formatCurrency, formatDate } from "@/lib/utils"
 import {
@@ -21,6 +23,7 @@ import {
   EmptyState,
   FilterBanner,
   PageSkeleton,
+  ReversalDialog,
   SubmitSpinner,
   getUrlFilter,
   isPositive,
@@ -45,29 +48,47 @@ export default function BillingPage() {
   const [paymentMethod, setPaymentMethod] = React.useState<"cash" | "bank" | "online">("bank")
   const [referenceNo, setReferenceNo] = React.useState("")
   const [notes, setNotes] = React.useState("")
+  const [invoices, setInvoices] = React.useState<any[]>([])
+  const [allocInvoiceId, setAllocInvoiceId] = React.useState("")
+  const [allocAmount, setAllocAmount] = React.useState<number>(0)
+  const [printReceipt, setPrintReceipt] = React.useState<any | null>(null)
+  const [receiptReverseTarget, setReceiptReverseTarget] = React.useState<any | null>(null)
+  const [receiptReversing, setReceiptReversing] = React.useState(false)
+  const [invCustomerId, setInvCustomerId] = React.useState("")
+  const [invDesc, setInvDesc] = React.useState("Service charges")
+  const [invQty, setInvQty] = React.useState<number>(1)
+  const [invPrice, setInvPrice] = React.useState<number>(0)
+  const [invPending, setInvPending] = React.useState(false)
+  const [invReverseTarget, setInvReverseTarget] = React.useState<any | null>(null)
+  const [invReversing, setInvReversing] = React.useState(false)
 
-  const loadData = React.useCallback(() => {
-    const state = (GodownStore as any).getState()
-    setReceipts(state.receipts || [])
-    setCustomers(GodownStore.getParties().filter((p) => p.type === "customer" || p.type === "both"))
-  }, [])
-
-  React.useEffect(() => {
-    loadData()
-    setDrillFilter(getUrlFilter())
+  const loadData = React.useCallback(async () => {
+    setIsLoading(true)
+    const [re, inv, pa] = await Promise.all([listReceipts(), listInvoices(), listParties()])
+    const failed = [re, inv, pa].find((x) => !x.success)
+    if (failed) setFormError(failed.error ?? "Could not load billing data.")
+    const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+    setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both"))
+    setInvoices(Array.isArray(inv.data) ? inv.data : [])
+    setReceipts((Array.isArray(re.data) ? re.data : []).map((row: any) => ({
+      ...row,
+      customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
+      payment_method: row.account ?? row.payment_method,
+    })))
     setIsLoading(false)
-    window.addEventListener("arco-godown-data-updated", loadData)
-    return () => window.removeEventListener("arco-godown-data-updated", loadData)
-  }, [loadData])
+  }, [])
 
   React.useEffect(() => {
     if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
   }, [customers, customerId])
 
-  const totalReceivables = customers.reduce(
-    (sum, c) => sum + (c.current_balance !== undefined ? c.current_balance : c.opening_balance),
-    0
-  )
+  const custBalance = (c: Party) => {
+    const opening = c.balance_type === "payable" ? -Number(c.opening_balance || 0) : Number(c.opening_balance || 0)
+    const invBal = invoices.filter((i) => i.customer_id === c.id && i.status === "posted").reduce((a, i) => a + (Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)) || 0), 0)
+    return opening + invBal
+  }
+  const totalReceivables = customers.reduce((sum, c) => sum + Math.max(0, custBalance(c)), 0)
+  const customerInvoices = invoices.filter((i) => i.customer_id === customerId && i.status === "posted" && Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)) > 0)
 
   const handleRecordReceipt = (e: React.FormEvent) => {
     e.preventDefault()
@@ -77,8 +98,10 @@ export default function BillingPage() {
     if (!customerId) return setFormError("Select the customer paying this receipt.")
     if (!isPositive(amount)) return setFormError("Receipt amount must be greater than zero.")
     const selectedCust = customers.find((c) => c.id === customerId)
-    const custBalance = selectedCust ? (selectedCust.current_balance !== undefined ? selectedCust.current_balance : selectedCust.opening_balance) : 0
-    if (amount > custBalance) return setFormError(`Receipt (${formatCurrency(amount)}) exceeds ${selectedCust?.name || "this customer"}'s outstanding balance (${formatCurrency(custBalance)}). A receipt collects a receivable; it cannot create a negative balance. Record the balance amount or less.`)
+    const bal = selectedCust ? custBalance(selectedCust) : 0
+    if (allocInvoiceId && allocAmount > amount) return setFormError(`Allocation (${formatCurrency(allocAmount)}) cannot exceed the receipt amount (${formatCurrency(amount)}).`)
+    if (allocInvoiceId && allocAmount <= 0) return setFormError("An allocation amount must be greater than zero.")
+    if (!allocInvoiceId && amount > bal && bal > 0) return setFormError(`Receipt (${formatCurrency(amount)}) exceeds ${selectedCust?.name || "this customer"}'s outstanding balance (${formatCurrency(bal)}). Allocate it to a specific invoice, or record the balance amount or less.`)
     setFormError("")
     const receiptNo = `RCT-2026-${String(receipts.length + 1).padStart(3, "0")}`
     setDraftReceipt({
@@ -97,46 +120,94 @@ export default function BillingPage() {
     setShowConfirm(true)
   }
 
-  const handleConfirmReceipt = () => {
+  const handleConfirmReceipt = async () => {
     if (!draftReceipt || receiptGuard.current) return
     receiptGuard.current = true
     setIsPending(true)
     try {
-      const selectedCust = customers.find((c) => c.id === customerId)
-      const state = (GodownStore as any).getState()
-      state.receipts = [draftReceipt, ...(state.receipts || [])]
-      state.parties = state.parties.map((p: Party) =>
-        p.id === customerId
-          ? { ...p, current_balance: Math.max(0, (p.current_balance || p.opening_balance) - draftReceipt.amount) }
-          : p
-      )
-      const lastCashBal = state.cashLedger.length > 0 ? state.cashLedger[state.cashLedger.length - 1].running_balance : 0
-      state.cashLedger.push({
-        id: `cl-${Date.now()}`,
-        date: new Date().toISOString(),
-        voucher_type: "receipt",
-        voucher_id: draftReceipt.id,
-        voucher_no: draftReceipt.receipt_no,
-        account: paymentMethod === "cash" ? "cash" : "bank",
-        debit: draftReceipt.amount,
-        credit: 0,
-        running_balance: lastCashBal + draftReceipt.amount,
-        description: `Payment receipt from ${selectedCust?.name} (${referenceNo || "Direct"})`,
-        created_at: new Date().toISOString(),
+      const created = await createReceipt({
+        customerId, account: paymentMethod, amount,
+        referenceNo: referenceNo || undefined, notes: notes || undefined,
+        clientToken: `receipt-${Date.now()}`,
+        allocations: allocInvoiceId && allocAmount > 0 ? [{ invoiceId: allocInvoiceId, amount: allocAmount }] : [],
       })
-      ;(GodownStore as any).saveState(state)
-      setFormNotice(`${draftReceipt.receipt_no} posted — ${formatCurrency(draftReceipt.amount)} received from ${selectedCust?.name} via ${paymentMethod}. Receivable reduced; cash/bank increased.`)
-    } finally {
-      setIsPending(false)
-      receiptGuard.current = false
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not create the receipt.")
+        return
+      }
+      const posted = await postReceipt((created.data as any).id)
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the receipt.")
+        return
+      }
+      const row: any = posted.data ?? created.data
+      const selectedCust = customers.find((c) => c.id === customerId)
+      setFormNotice(`${row.receipt_no ?? draftReceipt.receipt_no} posted — ${formatCurrency(amount)} received from ${selectedCust?.name} via ${paymentMethod}. Receivable reduced; cash/bank increased.`)
+      setPrintReceipt({ ...draftReceipt, receipt_no: row.receipt_no ?? draftReceipt.receipt_no, status: "posted", customer_name: selectedCust?.name, allocations: allocInvoiceId ? [{ invoice_no: invoices.find((i) => i.id === allocInvoiceId)?.invoice_no, amount: allocAmount }] : [] })
       setShowConfirm(false)
       setIsReceiptModalOpen(false)
       setDraftReceipt(null)
+      await loadData()
+    } finally {
+      setIsPending(false)
+      receiptGuard.current = false
     }
   }
 
+  const handleReceiptReverse = async (reasonCode: string, reason: string) => {
+    if (!receiptReverseTarget || receiptReversing) return
+    setReceiptReversing(true)
+    try {
+      const res = await reverseReceipt(receiptReverseTarget.id, `${reasonCode}: ${reason}`)
+      if (!res.success) { setFormError(res.error ?? "Could not reverse the receipt."); return }
+      setFormNotice(`${receiptReverseTarget.receipt_no} reversed.`)
+      setReceiptReverseTarget(null)
+      await loadData()
+    } finally { setReceiptReversing(false) }
+  }
+
+  const handleCreateInvoice = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (invPending) return
+    if (!invCustomerId || !invDesc.trim() || !(invQty > 0) || invPrice < 0) {
+      setFormError("Invoice needs a customer, a description, a positive quantity and a non-negative price.")
+      return
+    }
+    setInvPending(true)
+    try {
+      const created = await createInvoice({
+        customerId: invCustomerId, sourceType: "manual", clientToken: `invoice-${Date.now()}`,
+        lines: [{ description: invDesc.trim(), quantity: invQty, unitPrice: invPrice }],
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not create the invoice.")
+        return
+      }
+      const posted = await postInvoice((created.data as any).id)
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the invoice.")
+        return
+      }
+      const row: any = posted.data ?? created.data
+      setFormNotice(`Invoice ${row.invoice_no ?? ""} posted for ${formatCurrency(invQty * invPrice)}.`)
+      await loadData()
+    } finally { setInvPending(false) }
+  }
+
+  const handleInvoiceReverse = async (reasonCode: string, reason: string) => {
+    if (!invReverseTarget || invReversing) return
+    setInvReversing(true)
+    try {
+      const res = await reverseInvoice(invReverseTarget.id, `${reasonCode}: ${reason}`)
+      if (!res.success) { setFormError(res.error ?? "Could not reverse the invoice."); return }
+      setFormNotice(`Invoice ${invReverseTarget.invoice_no} reversed.`)
+      setInvReverseTarget(null)
+      await loadData()
+    } finally { setInvReversing(false) }
+  }
+
   const visibleCustomers = drillFilter === "receivable"
-    ? customers.filter((c) => (c.current_balance !== undefined ? c.current_balance : c.opening_balance) > 0)
+    ? customers.filter((c) => custBalance(c) > 0)
     : customers
 
   if (isLoading) return <PageSkeleton />
@@ -204,7 +275,7 @@ export default function BillingPage() {
                   </tr>
                 )}
                 {visibleCustomers.map((c) => {
-                  const bal = c.current_balance !== undefined ? c.current_balance : c.opening_balance
+                  const bal = custBalance(c)
                   return (
                     <tr key={c.id} className="hover:bg-muted/30 transition-colors">
                       <td className="py-3 font-mono font-bold text-muted-foreground">{c.code}</td>
@@ -257,6 +328,10 @@ export default function BillingPage() {
                   <span className="uppercase">{r.payment_method}</span>
                   <span>{formatDate(r.date)}</span>
                 </div>
+                <div className="flex gap-2 pt-1">
+                  <button type="button" onClick={() => setPrintReceipt(r)} className="px-2 py-1 rounded-md bg-card hover:bg-muted/60 border border-border/70 text-[11px] font-semibold cursor-pointer">Print voucher</button>
+                  {(r as any).status === "posted" && (<button type="button" onClick={() => setReceiptReverseTarget(r)} className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}
+                </div>
               </div>
             ))}
             {receipts.length === 0 && (
@@ -301,7 +376,7 @@ export default function BillingPage() {
                 >
                   {customers.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name} (Due: {formatCurrency(c.current_balance !== undefined ? c.current_balance : c.opening_balance)})
+                      {c.name} (Due: {formatCurrency(custBalance(c))})
                     </option>
                   ))}
                 </select>
@@ -332,6 +407,16 @@ export default function BillingPage() {
                     <option value="online">Online Transfer / Raast</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block font-medium text-foreground mb-1">Allocate to invoice (explicit allocation)</label>
+                <select value={allocInvoiceId} onChange={(e) => { setAllocInvoiceId(e.target.value); const inv = invoices.find((i) => i.id === e.target.value); setAllocAmount(inv ? Number(inv.balance_amount ?? Number(inv.total_amount || 0) - Number(inv.paid_amount || 0)) : 0) }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                  <option value="">Unallocated (advance / on-account)</option>
+                  {customerInvoices.map((i) => (<option key={i.id} value={i.id}>{i.invoice_no} — outstanding {formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</option>))}
+                </select>
+                {allocInvoiceId && (<input type="number" value={allocAmount} onChange={(e) => setAllocAmount(Number(e.target.value))} min="1" placeholder="Allocation amount" className="mt-2 w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" />)}
+                <p className="mt-1 text-[11px] text-muted-foreground">Allocations are recorded on the receipt (invoice_allocations). An unallocated receipt is an on-account collection, not revenue.</p>
               </div>
 
               <div>
@@ -377,6 +462,47 @@ export default function BillingPage() {
           </div>
         </div>
       )}
+      <div className="expensive-card p-5">
+        <h2 className="text-sm font-bold text-foreground mb-1">Customer Invoices</h2>
+        <p className="text-xs text-muted-foreground mb-4">Invoices are revenue when posted; receipts only collect them. Create a manual invoice below (machinery/packing/sale sources invoice through their own flows), post it, and reverse posted ones with a mandatory reason.</p>
+        <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Invoice</th><th className="pb-2">Customer</th><th className="pb-2 text-right">Total</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
+          <tbody className="divide-y divide-border/40">
+            {invoices.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No invoices yet.</td></tr>}
+            {invoices.map((i) => (<tr key={i.id}><td className="py-2 font-mono font-bold">{i.invoice_no}</td><td className="py-2">{customers.find((c) => c.id === i.customer_id)?.name ?? i.customer_id}</td><td className="py-2 text-right">{formatCurrency(Number(i.total_amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(i.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</td><td className="py-2 text-center">{i.status}{i.status === "posted" && (<button type="button" onClick={() => setInvReverseTarget(i)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
+          </tbody></table></div>
+        <form onSubmit={handleCreateInvoice} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          <div><label className="block font-medium text-foreground mb-1">Customer *</label><select value={invCustomerId} onChange={(e) => setInvCustomerId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select customer</option>{customers.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1">Description *</label><input value={invDesc} onChange={(e) => setInvDesc(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Quantity *</label><input type="number" value={invQty} onChange={(e) => setInvQty(Number(e.target.value))} min="1" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Unit price *</label><input type="number" value={invPrice} onChange={(e) => setInvPrice(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={invPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{invPending ? "Posting…" : "Create & post invoice"}</button></div>
+        </form>
+      </div>
+      {printReceipt && printReceipt.status === "posted" && (
+        <div className="expensive-card p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">Receipt voucher print document for {printReceipt.receipt_no}.</p>
+            <div className="flex gap-2">
+              <PrintButton label="Print voucher" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
+              <button type="button" onClick={() => setPrintReceipt(null)} className="px-4 py-2 rounded-lg bg-card border border-border/80 text-xs font-semibold cursor-pointer">Close</button>
+            </div>
+          </div>
+          <div className="hidden print:block mt-2">
+            <ReceiptVoucherPrint
+              receiptNo={printReceipt.receipt_no}
+              date={printReceipt.date}
+              customerName={printReceipt.customer_name}
+              paymentMethod={printReceipt.payment_method}
+              referenceNo={printReceipt.reference_no}
+              amount={printReceipt.amount}
+              allocations={(printReceipt.invoice_allocations ?? printReceipt.allocations ?? []).map((a: any) => ({ invoiceNo: a.invoice_no, amount: a.amount }))}
+              notes={printReceipt.notes}
+            />
+          </div>
+        </div>
+      )}
+      <ReversalDialog open={!!receiptReverseTarget} voucherLabel={receiptReverseTarget?.receipt_no ?? ""} pending={receiptReversing} onConfirm={handleReceiptReverse} onCancel={() => setReceiptReverseTarget(null)} />
+      <ReversalDialog open={!!invReverseTarget} voucherLabel={invReverseTarget?.invoice_no ?? ""} pending={invReversing} onConfirm={handleInvoiceReverse} onCancel={() => setInvReverseTarget(null)} />
       <ConfirmDialog
         open={showConfirm}
         title="Post this customer receipt?"

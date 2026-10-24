@@ -9,7 +9,8 @@ import {
   CheckCircle2,
   Package,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { listPurchases, createPurchase, postPurchase, reversePurchase, listPurchaseReturns, createPurchaseReturn, allocatePayment } from "@/app/actions/finance"
+import { listParties, listGodowns, listProducts } from "@/app/actions/masters"
 import { PurchaseVoucher, Party, Godown, Product } from "@/lib/types/database"
 import { formatCurrency, formatWeight, formatDate } from "@/lib/utils"
 import {
@@ -41,6 +42,12 @@ export default function PurchasesPage() {
   const [reversalTarget, setReversalTarget] = React.useState<PurchaseVoucher | null>(null)
   const [isReversing, setIsReversing] = React.useState(false)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
+  const [returns, setReturns] = React.useState<any[]>([])
+  const [retPurchaseId, setRetPurchaseId] = React.useState("")
+  const [retQty, setRetQty] = React.useState<number>(0)
+  const [retPrice, setRetPrice] = React.useState<number>(0)
+  const [retReason, setRetReason] = React.useState("")
+  const [retPending, setRetPending] = React.useState(false)
   const purchaseGuard = React.useRef(false)
   const [vendorId, setVendorId] = React.useState("")
   const [godownId, setGodownId] = React.useState("")
@@ -51,21 +58,27 @@ export default function PurchasesPage() {
   const [paidAmount, setPaidAmount] = React.useState<number>(500000)
   const [notes, setNotes] = React.useState("")
 
-  const loadData = React.useCallback(() => {
-    const state = (GodownStore as any).getState()
-    setPurchases(state.purchases || [])
-    setVendors(GodownStore.getParties().filter((p) => p.type === "supplier" || p.type === "both"))
-    setGodowns(GodownStore.getGodowns())
-    setProducts(GodownStore.getProducts())
-  }, [])
-
-  React.useEffect(() => {
-    loadData()
-    setDrillFilter(getUrlFilter())
+  const loadData = React.useCallback(async () => {
+    setIsLoading(true)
+    const [pu, pa, g, pr, re] = await Promise.all([listPurchases(), listParties(), listGodowns(), listProducts(), listPurchaseReturns()])
+    const failed = [pu, pa, g, pr, re].find((x) => !x.success)
+    if (failed) setFormError(failed.error ?? "Could not load purchase data.")
+    const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+    const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
+    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+    setVendors(partyList.filter((x) => x.type === "supplier" || x.type === "both"))
+    setGodowns(godownList); setProducts(productList)
+    setReturns(Array.isArray(re.data) ? re.data : [])
+    setPurchases((Array.isArray(pu.data) ? pu.data : []).map((row: any) => ({
+      ...row,
+      vendor_name: partyList.find((x) => x.id === row.vendor_id)?.name ?? row.vendor_id,
+      godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+      items: (row.purchase_items ?? row.items ?? []).map((it: any) => ({
+        ...it, product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+      })),
+    })))
     setIsLoading(false)
-    window.addEventListener("arco-godown-data-updated", loadData)
-    return () => window.removeEventListener("arco-godown-data-updated", loadData)
-  }, [loadData])
+  }, [])
 
   React.useEffect(() => {
     if (vendors.length > 0 && !vendorId) setVendorId(vendors[0].id)
@@ -125,24 +138,68 @@ export default function PurchasesPage() {
     setShowConfirm(true)
   }
 
-  const handleConfirmPurchase = () => {
+  const handleConfirmPurchase = async () => {
     if (!draftPurchase || purchaseGuard.current) return
     purchaseGuard.current = true
     setIsPending(true)
     try {
-      const state = (GodownStore as any).getState()
-      state.purchases = [draftPurchase, ...(state.purchases || [])]
-      state.parties = state.parties.map((p: Party) =>
-        p.id === vendorId ? { ...p, current_balance: (p.current_balance || p.opening_balance) + draftPurchase.balance_amount } : p
-      )
-      ;(GodownStore as any).saveState(state)
-      setFormNotice(`${draftPurchase.purchase_no} posted — payable of ${formatCurrency(draftPurchase.balance_amount)} added to ${draftPurchase.vendor_name || "the vendor"}.`)
-    } finally {
-      setIsPending(false)
-      purchaseGuard.current = false
+      const created = await createPurchase({
+        vendorId, invoiceRef: invoiceRef || undefined, godownId: godownId || undefined,
+        notes: notes || undefined, clientToken: `purchase-${Date.now()}`,
+        items: [{ itemType: "seed", productId, quantity, unit: "kg", unitPrice }],
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not create the purchase draft.")
+        return
+      }
+      const posted = await postPurchase((created.data as any).id)
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the purchase.")
+        return
+      }
+      let payNote = ""
+      if (paidAmount > 0) {
+        const pay = await allocatePayment({
+          vendorId, account: "cash", amount: paidAmount, settlementKind: "purchase",
+          clientToken: `vendorpay-${Date.now()}`,
+          allocations: [{ targetType: "purchase", targetId: (created.data as any).id, amount: paidAmount }],
+        })
+        payNote = pay.success ? ` Paid ${formatCurrency(paidAmount)} allocated to it.` : ` Payment of ${formatCurrency(paidAmount)} could not be allocated: ${pay.error ?? "unknown error"} — record it as a vendor payment separately.`
+      }
+      const row: any = posted.data ?? created.data
+      setFormNotice(`${row.purchase_no ?? draftPurchase.purchase_no} posted — payable of ${formatCurrency(row.balance_amount ?? draftPurchase.balance_amount)} added to ${draftPurchase.vendor_name || "the vendor"}.${payNote}`)
       setShowConfirm(false)
       setIsModalOpen(false)
       setDraftPurchase(null)
+      await loadData()
+    } finally {
+      setIsPending(false)
+      purchaseGuard.current = false
+    }
+  }
+
+  const handlePurchaseReturn = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (retPending) return
+    const purchase = purchases.find((x) => x.id === retPurchaseId)
+    const firstItem = (purchase as any)?.purchase_items?.[0] ?? (purchase as any)?.items?.[0]
+    if (!purchase || !firstItem) return setFormError("Select a posted purchase with at least one line to return.")
+    if (!retReason.trim()) return setFormError("A reason is required for a purchase return.")
+    if (!(retQty > 0) || retPrice < 0) return setFormError("Return quantity must be > 0 and price cannot be negative.")
+    setRetPending(true)
+    try {
+      const res = await createPurchaseReturn({
+        purchaseId: retPurchaseId, reason: retReason.trim(), clientToken: `purchasereturn-${Date.now()}`,
+        items: [{ purchaseItemId: firstItem.id, quantity: retQty, unitPrice: retPrice }],
+      })
+      if (!res.success) {
+        setFormError(res.error ?? "Could not record the purchase return.")
+        return
+      }
+      setFormNotice("Purchase return recorded against the posted purchase.")
+      await loadData()
+    } finally {
+      setRetPending(false)
     }
   }
 
@@ -150,22 +207,18 @@ export default function PurchasesPage() {
   // "reversed" and the payable added by it is unwound from the vendor.
   // Note: this prototype's purchases do not add stock, so no stock row
   // is unwound here — stock-linked purchase receipt lands in Phase 2.
-  const handleConfirmReversal = (reasonCode: string, reason: string) => {
+  const handleConfirmReversal = async (reasonCode: string, reason: string) => {
     if (!reversalTarget || isReversing) return
     setIsReversing(true)
     try {
-      const state = (GodownStore as any).getState()
-      state.parties = state.parties.map((p: Party) =>
-        p.id === reversalTarget.vendor_id ? { ...p, current_balance: (p.current_balance || p.opening_balance) - reversalTarget.balance_amount } : p
-      )
-      state.purchases = state.purchases.map((p: PurchaseVoucher) =>
-        p.id === reversalTarget.id
-          ? { ...p, status: "reversed" as const, notes: `${p.notes ? p.notes + " | " : ""}Reversed [${reasonCode}]: ${reason}` }
-          : p
-      )
-      ;(GodownStore as any).saveState(state)
+      const res = await reversePurchase(reversalTarget.id, `${reasonCode}: ${reason}`)
+      if (!res.success) {
+        setFormError(res.error ?? "Could not reverse the purchase.")
+        return
+      }
       setFormNotice(`${reversalTarget.purchase_no} reversed — vendor payable unwound. Reason recorded: ${reasonCode}.`)
       setReversalTarget(null)
+      await loadData()
     } finally {
       setIsReversing(false)
     }
@@ -438,6 +491,17 @@ export default function PurchasesPage() {
         onConfirm={handleConfirmPurchase}
         onCancel={() => { setShowConfirm(false); setDraftPurchase(null) }}
       />
+      <div className="expensive-card p-5">
+        <h2 className="text-sm font-bold text-foreground mb-1">Purchase Returns</h2>
+        <p className="text-xs text-muted-foreground mb-4">Returns link to a posted original purchase (createPurchaseReturn) and need a reason. This form returns the first line of the selected purchase; {returns.length} return(s) on record.</p>
+        <form onSubmit={handlePurchaseReturn} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          <div><label className="block font-medium text-foreground mb-1">Posted purchase *</label><select value={retPurchaseId} onChange={(e) => setRetPurchaseId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select purchase</option>{purchases.filter((x) => x.status === "posted").map((x) => (<option key={x.id} value={x.id}>{x.purchase_no}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1">Return quantity *</label><input type="number" value={retQty} onChange={(e) => setRetQty(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Unit price *</label><input type="number" value={retPrice} onChange={(e) => setRetPrice(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Reason *</label><input value={retReason} onChange={(e) => setRetReason(e.target.value)} placeholder="Why is this being returned?" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={retPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{retPending ? "Recording…" : "Record purchase return"}</button></div>
+        </form>
+      </div>
       <ReversalDialog
         open={!!reversalTarget}
         voucherLabel={reversalTarget?.purchase_no ?? ""}
