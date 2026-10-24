@@ -7,6 +7,12 @@ import { TodayBadge } from "@/components/today-badge"
 import { createClient } from "@/lib/supabase/server"
 import { ShieldCheck, Warehouse } from "lucide-react"
 
+// Authenticated shell: the layout awaits the session (cookies), so
+// these routes can never be statically prerendered. `instant = false`
+// is the Cache Components way to declare a blocking (dynamic) route —
+// every dashboard page is per-operator data behind the sign-in guard.
+export const instant = false
+
 export default async function DashboardLayout({
   children,
 }: {
@@ -53,7 +59,7 @@ export default async function DashboardLayout({
 
             <div className="hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-muted/40 border border-border/60 text-xs text-muted-foreground">
               <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-              <span>Single Role: <strong className="text-foreground">Full Authority</strong></span>
+              <span>Role-based access</span>
             </div>
 
             <ThemeToggle />
