@@ -15,6 +15,14 @@ import {
 import { GodownStore } from "@/lib/services/godown-store"
 import { PackagingType, PackingRecord, Product } from "@/lib/types/database"
 import { formatBags, formatCurrency, formatWeight, formatDate } from "@/lib/utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  EmptyState,
+  PageSkeleton,
+  SubmitSpinner,
+  isPositive,
+} from "@/components/erp-ui"
 
 export default function PackingPage() {
   const [packaging, setPackaging] = React.useState<PackagingType[]>([])
@@ -23,6 +31,13 @@ export default function PackingPage() {
 
   // Modal
   const [isModalOpen, setIsModalOpen] = React.useState(false)
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [formError, setFormError] = React.useState("")
+  const [formNotice, setFormNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showConfirm, setShowConfirm] = React.useState(false)
+  const [draftRecord, setDraftRecord] = React.useState<PackingRecord | null>(null)
+  const packGuard = React.useRef(false)
   const [packagingId, setPackagingId] = React.useState("")
   const [productId, setProductId] = React.useState("")
   const [bagsPacked, setBagsPacked] = React.useState<number>(100)
@@ -39,6 +54,7 @@ export default function PackingPage() {
 
   React.useEffect(() => {
     loadData()
+    setIsLoading(false)
     window.addEventListener("arco-godown-data-updated", loadData)
     return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
@@ -55,16 +71,21 @@ export default function PackingPage() {
 
   const handleRecordPacking = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!packagingId || !productId || bagsPacked <= 0) return
-
+    if (isPending) return
+    // Spec §8: positive bag count, non-negative damage/rate, and the
+    // bardana stock guard — packed + damaged bags both leave inventory.
+    if (!packagingId) return setFormError("Select a bag / bardana type.")
+    if (!productId) return setFormError("Select the product being packed.")
+    if (!isPositive(bagsPacked)) return setFormError("Bags packed must be greater than zero.")
+    if (damagedBags < 0) return setFormError("Damaged bags cannot be negative.")
+    if (packingRate < 0) return setFormError("Packing rate cannot be negative.")
     const totalBagsNeeded = bagsPacked + damagedBags
     if (selectedPkg && selectedPkg.current_stock < totalBagsNeeded) {
-      alert(`Insufficient bag stock in bardana godown. Available: ${selectedPkg.current_stock} bags`)
-      return
+      return setFormError(`Insufficient bag stock: ${selectedPkg.current_stock} ${selectedPkg.name} bags available, but ${totalBagsNeeded} needed (${bagsPacked} packed + ${damagedBags} damaged). Purchase more bardana first.`)
     }
-
+    setFormError("")
     const selectedProd = products.find((p) => p.id === productId)
-    const newRecord: PackingRecord = {
+    setDraftRecord({
       id: `pck-${Date.now()}`,
       packing_no: `PCK-2026-${String(packingRecords.length + 1).padStart(3, "0")}`,
       date: new Date().toISOString(),
@@ -82,21 +103,49 @@ export default function PackingPage() {
       status: "posted",
       notes: notes || undefined,
       created_at: new Date().toISOString(),
-    }
-
-    // Deduct bags from packaging inventory
-    const state = (GodownStore as any).getState()
-    state.packaging = state.packaging.map((pkg: PackagingType) =>
-      pkg.id === packagingId ? { ...pkg, current_stock: pkg.current_stock - totalBagsNeeded } : pkg
-    )
-    state.packingRecords = [newRecord, ...(state.packingRecords || [])]
-    ;(GodownStore as any).saveState(state)
-
-    setIsModalOpen(false)
+    })
+    setShowConfirm(true)
   }
+
+  const handleConfirmPacking = () => {
+    if (!draftRecord || packGuard.current) return
+    packGuard.current = true
+    setIsPending(true)
+    try {
+      const totalBagsNeeded = draftRecord.bags_packed + (draftRecord.damaged_bags || 0)
+      const state = (GodownStore as any).getState()
+      state.packaging = state.packaging.map((pkg: PackagingType) =>
+        pkg.id === packagingId ? { ...pkg, current_stock: pkg.current_stock - totalBagsNeeded } : pkg
+      )
+      state.packingRecords = [draftRecord, ...(state.packingRecords || [])]
+      ;(GodownStore as any).saveState(state)
+      setFormNotice(`${draftRecord.packing_no} posted — ${draftRecord.bags_packed} bags packed (${formatWeight(draftRecord.total_packed_kg)}), ${draftRecord.damaged_bags || 0} damaged, ${totalBagsNeeded} bags deducted from bardana.`)
+    } finally {
+      setIsPending(false)
+      packGuard.current = false
+      setShowConfirm(false)
+      setIsModalOpen(false)
+      setDraftRecord(null)
+    }
+  }
+
+  // Spec §8.2 / §16 bardana ledger, derived from posted packing records:
+  // closing is the live packaging stock; consumed/damaged are totals to date.
+  const bardanaLedger = packaging.map((pkg) => {
+    const recs = packingRecords.filter((r) => r.packaging_type_id === pkg.id)
+    return {
+      ...pkg,
+      consumed: recs.reduce((a, r) => a + r.bags_packed, 0),
+      damaged: recs.reduce((a, r) => a + (r.damaged_bags || 0), 0),
+    }
+  })
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
@@ -151,6 +200,52 @@ export default function PackingPage() {
         ))}
       </div>
 
+      {/* Bardana Ledger (spec §8.2): consumed + damaged to date, live closing */}
+      <div className="expensive-card p-5">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
+            <PackageCheck className="h-4 w-4 text-emerald-500" />
+            Bardana Ledger — Consumed, Damaged &amp; Closing
+          </h2>
+          <span className="text-xs text-muted-foreground">Opening + purchases are tracked in Masters &amp; Purchases; closing here is live stock.</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left border-collapse text-xs">
+            <thead>
+              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+                <th className="pb-3 font-bold">Bag / Bardana Type</th>
+                <th className="pb-3 font-bold text-right">Consumed (packed)</th>
+                <th className="pb-3 font-bold text-right">Damaged</th>
+                <th className="pb-3 font-bold text-right">Closing Stock</th>
+                <th className="pb-3 font-bold text-center">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/40">
+              {bardanaLedger.map((pkg) => (
+                <tr key={pkg.id} className="hover:bg-muted/30 transition-colors">
+                  <td className="py-3 font-semibold text-foreground">{pkg.name}</td>
+                  <td className="py-3 text-right font-mono">{pkg.consumed} bags</td>
+                  <td className="py-3 text-right font-mono text-red-600 dark:text-red-400">{pkg.damaged} bags</td>
+                  <td className="py-3 text-right font-black text-emerald-600 dark:text-emerald-400">{pkg.current_stock} bags</td>
+                  <td className="py-3 text-center">
+                    <span className={pkg.current_stock <= pkg.reorder_level ? "px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase border border-amber-500/20" : "px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20"}>
+                      {pkg.current_stock <= pkg.reorder_level ? "Order needed" : "Sufficient"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {bardanaLedger.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-4">
+                    <EmptyState title="No packaging types yet" hint="Add bag / bardana types in Master Data to track consumption here." />
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       {/* Packing Records Table */}
       <div className="expensive-card p-5">
         <div className="flex items-center justify-between mb-4">
@@ -198,8 +293,13 @@ export default function PackingPage() {
               ))}
               {packingRecords.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-muted-foreground font-sans">
-                    No packing entries yet. Click "Record Packing & Bag Consumption" to log bagging operations.
+                  <td colSpan={9} className="py-4 font-sans">
+                    <EmptyState
+                      title="No packing entries yet"
+                      hint="Log a bagging run — packed and damaged bags are both deducted from bardana stock."
+                      actionLabel="Record Packing & Bag Consumption"
+                      onAction={() => setIsModalOpen(true)}
+                    />
                   </td>
                 </tr>
               )}
@@ -227,6 +327,7 @@ export default function PackingPage() {
             </div>
 
             <form onSubmit={handleRecordPacking} className="space-y-4 text-xs">
+              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div>
                 <label className="block font-medium text-foreground mb-1">Product Seed to Pack</label>
                 <select
@@ -320,16 +421,26 @@ export default function PackingPage() {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Post & Deduct Bardana</span>
+                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+                  <span>{isPending ? "Posting…" : "Post & Deduct Bardana"}</span>
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={showConfirm}
+        title="Post this packing record?"
+        description={draftRecord ? `${draftRecord.packing_no} will pack ${draftRecord.bags_packed} bags (${formatWeight(draftRecord.total_packed_kg)}) of ${draftRecord.output_product_name || "the selected product"} and deduct ${draftRecord.bags_packed + (draftRecord.damaged_bags || 0)} ${draftRecord.packaging_name || "bags"} from bardana stock (packed + damaged). Packing charge: ${formatCurrency(draftRecord.packing_charge)}.` : ""}
+        confirmLabel="Post & Deduct Bardana"
+        pending={isPending}
+        onConfirm={handleConfirmPacking}
+        onCancel={() => { setShowConfirm(false); setDraftRecord(null) }}
+      />
     </div>
   )
 }

@@ -14,6 +14,14 @@ import {
 import { GodownStore } from "@/lib/services/godown-store"
 import { MachineryJob, Machine, Party, Product, RateBasis } from "@/lib/types/database"
 import { formatCurrency, formatWeight, formatDate } from "@/lib/utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  EmptyState,
+  PageSkeleton,
+  SubmitSpinner,
+  isPositive,
+} from "@/components/erp-ui"
 
 export default function MachineryJobsPage() {
   const [jobs, setJobs] = React.useState<MachineryJob[]>([])
@@ -23,6 +31,13 @@ export default function MachineryJobsPage() {
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = React.useState(false)
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [formError, setFormError] = React.useState("")
+  const [formNotice, setFormNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showConfirm, setShowConfirm] = React.useState(false)
+  const [draftJob, setDraftJob] = React.useState<MachineryJob | null>(null)
+  const jobGuard = React.useRef(false)
   const [customerId, setCustomerId] = React.useState("")
   const [machineId, setMachineId] = React.useState("")
   const [processingType, setProcessingType] = React.useState("Grading & Cleaning")
@@ -44,6 +59,7 @@ export default function MachineryJobsPage() {
 
   React.useEffect(() => {
     loadData()
+    setIsLoading(false)
     window.addEventListener("arco-godown-data-updated", loadData)
     return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
@@ -66,14 +82,22 @@ export default function MachineryJobsPage() {
 
   const handleCreateJob = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!customerId || !machineId || !inputProductId) return
-
+    if (isPending) return
+    // Spec §7: required fields, positive weights, non-negative waste and
+    // rate — output + waste may not exceed input for a grading job.
+    if (!customerId) return setFormError("Select the customer / grain owner for this job.")
+    if (!machineId) return setFormError("Select the machine that will run this job.")
+    if (!inputProductId) return setFormError("Select the input product.")
+    if (!isPositive(inputWeight)) return setFormError("Input weight must be greater than zero.")
+    if (outputWeight < 0 || wasteWeight < 0) return setFormError("Output and waste weights cannot be negative.")
+    if (outputWeight + wasteWeight > inputWeight) return setFormError(`Output (${outputWeight} kg) + waste (${wasteWeight} kg) exceeds input (${inputWeight} kg). Correct the weights before saving.`)
+    if (rate < 0) return setFormError("Rate cannot be negative.")
+    setFormError("")
     const selectedCust = customers.find((c) => c.id === customerId)
     const selectedMach = machines.find((m) => m.id === machineId)
     const selectedProd = products.find((p) => p.id === inputProductId)
     const jobNo = `JOB-2026-${String(jobs.length + 1).padStart(3, "0")}`
-
-    const newJob: MachineryJob = {
+    setDraftJob({
       id: `job-${Date.now()}`,
       job_no: jobNo,
       date: new Date().toISOString(),
@@ -95,17 +119,34 @@ export default function MachineryJobsPage() {
       payment_status: "unbilled",
       notes: notes || undefined,
       created_at: new Date().toISOString(),
-    }
-
-    const state = (GodownStore as any).getState()
-    state.machineryJobs = [newJob, ...state.machineryJobs]
-    ;(GodownStore as any).saveState(state)
-
-    setIsModalOpen(false)
+    })
+    setShowConfirm(true)
   }
+
+  const handleConfirmJob = () => {
+    if (!draftJob || jobGuard.current) return
+    jobGuard.current = true
+    setIsPending(true)
+    try {
+      const state = (GodownStore as any).getState()
+      state.machineryJobs = [draftJob, ...state.machineryJobs]
+      ;(GodownStore as any).saveState(state)
+      setFormNotice(`${draftJob.job_no} recorded — service charge ${formatCurrency(draftJob.service_charge)} (${draftJob.rate_basis.replace("_", " ")}). Customer-owned stock is not counted as company inventory.`)
+    } finally {
+      setIsPending(false)
+      jobGuard.current = false
+      setShowConfirm(false)
+      setIsModalOpen(false)
+      setDraftJob(null)
+    }
+  }
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
@@ -175,8 +216,13 @@ export default function MachineryJobsPage() {
               ))}
               {jobs.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-muted-foreground">
-                    No machinery jobs recorded yet. Click "New Machinery Service Job" to log processing.
+                  <td colSpan={10} className="py-4">
+                    <EmptyState
+                      title="No machinery jobs recorded yet"
+                      hint="Log a grading, cleaning or treatment job — the service charge is calculated from the rate basis you pick."
+                      actionLabel="New Machinery Service Job"
+                      onAction={() => setIsModalOpen(true)}
+                    />
                   </td>
                 </tr>
               )}
@@ -204,6 +250,7 @@ export default function MachineryJobsPage() {
             </div>
 
             <form onSubmit={handleCreateJob} className="space-y-4 text-xs">
+              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1">Customer / Grain Owner</label>
@@ -326,16 +373,26 @@ export default function MachineryJobsPage() {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Save & Record Service Job</span>
+                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+                  <span>{isPending ? "Saving…" : "Save & Record Service Job"}</span>
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={showConfirm}
+        title="Record this machinery job?"
+        description={draftJob ? `${draftJob.job_no} for ${draftJob.customer_name || "the customer"}: ${formatWeight(draftJob.input_weight_kg)} in, ${formatWeight(draftJob.output_weight_kg)} out, service charge ${formatCurrency(draftJob.service_charge)}. ${draftJob.is_customer_owned ? "The grain is customer-owned, so company stock is untouched." : "Company-owned input stock is used."}` : ""}
+        confirmLabel="Save & Record Service Job"
+        pending={isPending}
+        onConfirm={handleConfirmJob}
+        onCancel={() => { setShowConfirm(false); setDraftJob(null) }}
+      />
     </div>
   )
 }
