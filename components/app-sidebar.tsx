@@ -72,6 +72,8 @@ const navSections: NavSection[] = [
       { title: "Reports & P&L", href: "/reports", icon: BarChart3 },
       { title: "Excel Import & Balances", href: "/migration", icon: UploadCloud },
       { title: "Master Data", href: "/masters", icon: Database },
+      { title: "Users & Roles", href: "/users", icon: Users2 },
+      { title: "Audit Log", href: "/audit", icon: ShieldCheck },
     ],
   },
 ]
