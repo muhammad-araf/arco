@@ -14,11 +14,27 @@ import {
 import { GodownStore } from "@/lib/services/godown-store"
 import { Employee, AttendanceRecord, AttendanceStatus } from "@/lib/types/database"
 import { formatCurrency, formatDate } from "@/lib/utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  EmptyState,
+  FilterBanner,
+  PageSkeleton,
+  SubmitSpinner,
+  getUrlFilter,
+} from "@/components/erp-ui"
 
 export default function PayrollPage() {
   const [employees, setEmployees] = React.useState<Employee[]>([])
   const [attendanceDate, setAttendanceDate] = React.useState(new Date().toISOString().slice(0, 10))
   const [attendanceState, setAttendanceState] = React.useState<{ [empId: string]: AttendanceStatus }>({})
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [formError, setFormError] = React.useState("")
+  const [formNotice, setFormNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showConfirm, setShowConfirm] = React.useState(false)
+  const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
+  const saveGuard = React.useRef(false)
 
   const loadData = React.useCallback(() => {
     const emps = GodownStore.getEmployees()
@@ -32,6 +48,8 @@ export default function PayrollPage() {
 
   React.useEffect(() => {
     loadData()
+    setDrillFilter(getUrlFilter())
+    setIsLoading(false)
   }, [loadData])
 
   const handleStatusChange = (empId: string, status: AttendanceStatus) => {
@@ -39,11 +57,63 @@ export default function PayrollPage() {
   }
 
   const handleSaveAttendance = () => {
-    alert("Attendance successfully recorded for " + attendanceDate)
+    // Spec §13.2: one record per employee per date; a future date cannot
+    // be marked, and re-saving a date corrects it instead of duplicating.
+    if (!attendanceDate) return setFormError("Pick the attendance date first.")
+    if (attendanceDate > new Date().toISOString().slice(0, 10)) return setFormError("Attendance cannot be marked for a future date. Pick today or an earlier date.")
+    if (employees.length === 0) return setFormError("No employees exist yet. Add staff in Master Data before marking attendance.")
+    setFormError("")
+    setShowConfirm(true)
   }
+
+  const handleConfirmSave = () => {
+    if (saveGuard.current) return
+    saveGuard.current = true
+    setIsPending(true)
+    try {
+      const state = (GodownStore as any).getState()
+      const existing = (state.attendance || []).filter(
+        (a: AttendanceRecord) => !(a.date.slice(0, 10) === attendanceDate && employees.some((e) => e.id === a.employee_id))
+      )
+      const fresh: AttendanceRecord[] = employees.map((emp) => ({
+        id: `att-${attendanceDate}-${emp.id}`,
+        date: new Date(`${attendanceDate}T00:00:00`).toISOString(),
+        employee_id: emp.id,
+        employee_name: emp.full_name,
+        status: attendanceState[emp.id] || "present",
+        overtime_hours: 0,
+        created_at: new Date().toISOString(),
+      }))
+      state.attendance = [...fresh, ...existing]
+      ;(GodownStore as any).saveState(state)
+      const presentCount = fresh.filter((a) => a.status === "present").length
+      const halfCount = fresh.filter((a) => a.status === "half_day").length
+      setFormNotice(`Attendance saved for ${attendanceDate}: ${presentCount} present, ${halfCount} half-day, ${fresh.length - presentCount - halfCount} leave/absent. Re-saving this date updates the same records instead of duplicating them.`)
+    } finally {
+      setIsPending(false)
+      saveGuard.current = false
+      setShowConfirm(false)
+    }
+  }
+
+  const registerTotals = employees.reduce(
+    (acc, emp) => {
+      const baseEarned = emp.pay_type === "monthly" ? emp.base_rate : emp.base_rate * 26
+      return { base: acc.base + baseEarned, net: acc.net + baseEarned }
+    },
+    { base: 0, net: 0 }
+  )
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
+      {drillFilter === "unpaid" && (
+        <AlertBanner tone="warning" message="No finalized payroll periods exist yet in this prototype — the register below is an estimate for the current period, not a finalized payable. Finalize and pay periods in Phase 2 payroll." />
+      )}
+      <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
@@ -58,10 +128,11 @@ export default function PayrollPage() {
         <button
           type="button"
           onClick={handleSaveAttendance}
-          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+          disabled={isPending}
+          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          <CheckCircle2 className="h-4 w-4" />
-          <span>Save Today's Attendance</span>
+          {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+          <span>{isPending ? "Saving…" : "Save Today's Attendance"}</span>
         </button>
       </div>
 
@@ -100,6 +171,16 @@ export default function PayrollPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
+              {employees.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-4">
+                    <EmptyState
+                      title="No employees yet"
+                      hint="Add staff in Master Data — code, designation, pay type and base rate — then mark attendance here."
+                    />
+                  </td>
+                </tr>
+              )}
               {employees.map((emp) => {
                 const currentStatus = attendanceState[emp.id] || "present"
                 return (
@@ -196,7 +277,9 @@ export default function PayrollPage() {
               {employees.map((emp) => {
                 const eligibleDays = 26
                 const baseEarned = emp.pay_type === "monthly" ? emp.base_rate : emp.base_rate * eligibleDays
-                const advance = 5000
+                // No advance ledger exists in this prototype, so no advance
+                // is deducted here (a flat placeholder was shown before).
+                const advance = 0
                 const netPayable = baseEarned - advance
 
                 return (
@@ -217,10 +300,31 @@ export default function PayrollPage() {
                   </tr>
                 )
               })}
+              {employees.length > 0 && (
+                <tr className="border-t-2 border-border font-bold">
+                  <td className="py-3 font-sans" colSpan={3}>Register totals (estimate)</td>
+                  <td className="py-3 text-right">{formatCurrency(registerTotals.base)}</td>
+                  <td className="py-3 text-right text-muted-foreground">—</td>
+                  <td className="py-3 text-right font-black text-emerald-600 dark:text-emerald-400 text-sm">{formatCurrency(registerTotals.net)}</td>
+                  <td className="py-3" />
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
+        <p className="text-[11px] text-muted-foreground mt-3">
+          Estimate only: 26 standard business days; daily staff at base rate × 26, monthly staff at base rate. Advance recovery is 0 until the employee advance ledger lands (Phase 2) — payroll rules (paid leave, half-day conversion, denominator) still need client approval per spec §13.4.
+        </p>
       </div>
+      <ConfirmDialog
+        open={showConfirm}
+        title="Save attendance?"
+        description={`Save the roster for ${attendanceDate} for ${employees.length} employee${employees.length === 1 ? "" : "s"}. If this date was saved before, the marks are updated in place — no duplicate records are created.`}
+        confirmLabel="Save Attendance"
+        pending={isPending}
+        onConfirm={handleConfirmSave}
+        onCancel={() => setShowConfirm(false)}
+      />
     </div>
   )
 }
