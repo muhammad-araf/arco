@@ -14,6 +14,14 @@ import {
 import { GodownStore } from "@/lib/services/godown-store"
 import { Product, Godown, Party, Machine } from "@/lib/types/database"
 import { formatCurrency, formatWeight } from "@/lib/utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  EmptyState,
+  PageSkeleton,
+  SubmitSpinner,
+  isPositive,
+} from "@/components/erp-ui"
 
 export default function MastersPage() {
   const [activeTab, setActiveTab] = React.useState<"products" | "godowns" | "parties" | "machines">("products")
@@ -24,6 +32,14 @@ export default function MastersPage() {
 
   // New Product Form
   const [isNewProdOpen, setIsNewProdOpen] = React.useState(false)
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [formError, setFormError] = React.useState("")
+  const [formNotice, setFormNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showConfirm, setShowConfirm] = React.useState(false)
+  const [draftProduct, setDraftProduct] = React.useState<Product | null>(null)
+  const [toggleTarget, setToggleTarget] = React.useState<Product | null>(null)
+  const productGuard = React.useRef(false)
   const [prodName, setProdName] = React.useState("")
   const [prodCategory, setProdCategory] = React.useState<any>("raw_seed")
   const [prodMinStock, setProdMinStock] = React.useState<number>(2000)
@@ -38,35 +54,78 @@ export default function MastersPage() {
 
   React.useEffect(() => {
     loadData()
+    setIsLoading(false)
+    window.addEventListener("arco-godown-data-updated", loadData)
+    return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
 
   const handleAddProduct = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!prodName) return
-
-    const newProd: Product = {
+    if (isPending) return
+    // Spec §3.1: name required, positive bag weight, non-negative safety
+    // stock, and no duplicate product name (codes are generated unique).
+    if (!prodName.trim()) return setFormError("Product name is required.")
+    if (!isPositive(weightPerBag)) return setFormError("Standard bag weight must be greater than zero.")
+    if (prodMinStock < 0) return setFormError("Minimum safety stock cannot be negative.")
+    if (products.some((p) => p.name.trim().toLowerCase() === prodName.trim().toLowerCase())) return setFormError(`A product named "${prodName.trim()}" already exists. Pick a different name instead of duplicating the master.`)
+    setFormError("")
+    setDraftProduct({
       id: `prod-${Date.now()}`,
       code: `PRD-${Date.now().toString().slice(-4)}`,
-      name: prodName,
+      name: prodName.trim(),
       category: prodCategory,
       default_unit: "kg",
       weight_per_bag: weightPerBag,
       min_stock: prodMinStock,
       is_active: true,
       created_at: new Date().toISOString(),
-    }
-
-    const state = (GodownStore as any).getState()
-    state.products = [...state.products, newProd]
-    ;(GodownStore as any).saveState(state)
-
-    setProducts(state.products)
-    setIsNewProdOpen(false)
-    setProdName("")
+    })
+    setShowConfirm(true)
   }
+
+  const handleConfirmProduct = () => {
+    if (!draftProduct || productGuard.current) return
+    productGuard.current = true
+    setIsPending(true)
+    try {
+      const state = (GodownStore as any).getState()
+      state.products = [...state.products, draftProduct]
+      ;(GodownStore as any).saveState(state)
+      setProducts(state.products)
+      setFormNotice(`Product "${draftProduct.name}" created (${draftProduct.code}) and available in every product list.`)
+    } finally {
+      setIsPending(false)
+      productGuard.current = false
+      setShowConfirm(false)
+      setIsNewProdOpen(false)
+      setDraftProduct(null)
+      setProdName("")
+    }
+  }
+
+  // Spec §3.1: never delete a product that transactions reference — flip
+  // it inactive instead. Deactivation is confirmed, and the dialog warns
+  // when the product already has stock-ledger history.
+  const handleConfirmToggle = () => {
+    if (!toggleTarget) return
+    const state = (GodownStore as any).getState()
+    state.products = state.products.map((p: Product) =>
+      p.id === toggleTarget.id ? { ...p, is_active: !p.is_active } : p
+    )
+    ;(GodownStore as any).saveState(state)
+    setProducts(state.products)
+    setFormNotice(`Product "${toggleTarget.name}" is now ${toggleTarget.is_active ? "inactive (hidden from new vouchers, history kept)" : "active again"}.`)
+    setToggleTarget(null)
+  }
+
+  const referencedIds = new Set(GodownStore.getStockLedger().map((e) => e.product_id))
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
@@ -91,7 +150,7 @@ export default function MastersPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-2 p-1 rounded-lg bg-muted/60 border border-border/60 self-start w-fit text-xs font-semibold">
+      <div className="flex flex-wrap items-center gap-2 p-1 rounded-lg bg-muted/60 border border-border/60 self-start max-w-full text-xs font-semibold">
         <button
           type="button"
           onClick={() => setActiveTab("products")}
@@ -148,9 +207,22 @@ export default function MastersPage() {
                   <th className="pb-3 font-bold text-right">Standard Bag Wt</th>
                   <th className="pb-3 font-bold text-right">Safety Stock</th>
                   <th className="pb-3 font-bold text-center">Status</th>
+                  <th className="pb-3 font-bold text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">
+                {products.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="py-4">
+                      <EmptyState
+                        title="No products yet"
+                        hint="Add your first product master — raw seed, finished seed, intermediate or by-product — to use it across inward, production and gate pass."
+                        actionLabel="Add New Product"
+                        onAction={() => setIsNewProdOpen(true)}
+                      />
+                    </td>
+                  </tr>
+                )}
                 {products.map((p) => (
                   <tr key={p.id} className="hover:bg-muted/30 transition-colors">
                     <td className="py-3 font-mono font-bold text-muted-foreground">{p.code}</td>
@@ -160,9 +232,19 @@ export default function MastersPage() {
                     <td className="py-3 text-right font-mono text-foreground">{p.weight_per_bag || 50} kg</td>
                     <td className="py-3 text-right font-mono font-bold text-foreground">{formatWeight(p.min_stock || 0)}</td>
                     <td className="py-3 text-center">
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
-                        Active
+                      <span className={p.is_active ? "px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase" : "px-2 py-0.5 rounded-full bg-muted text-muted-foreground text-[10px] font-bold uppercase"}>
+                        {p.is_active ? "Active" : "Inactive"}
                       </span>
+                    </td>
+                    <td className="py-3 text-center">
+                      <button
+                        type="button"
+                        onClick={() => setToggleTarget(p)}
+                        className="px-2 py-1 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer"
+                        title={p.is_active ? "Deactivate (never delete a referenced product)" : "Reactivate product"}
+                      >
+                        {p.is_active ? "Deactivate" : "Reactivate"}
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -308,6 +390,7 @@ export default function MastersPage() {
             </div>
 
             <form onSubmit={handleAddProduct} className="space-y-4 text-xs">
+              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div>
                 <label className="block font-medium text-foreground mb-1">Product Title</label>
                 <input
@@ -369,16 +452,35 @@ export default function MastersPage() {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Create Product</span>
+                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+                  <span>{isPending ? "Creating…" : "Create Product"}</span>
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={showConfirm}
+        title="Create this product?"
+        description={draftProduct ? `"${draftProduct.name}" (${draftProduct.category.replace("_", " ")}, ${draftProduct.weight_per_bag} kg standard bag, safety stock ${draftProduct.min_stock} kg) will be added to the product master and appear in inward, production, gate pass and purchase lists.` : ""}
+        confirmLabel="Create Product"
+        pending={isPending}
+        onConfirm={handleConfirmProduct}
+        onCancel={() => { setShowConfirm(false); setDraftProduct(null) }}
+      />
+      <ConfirmDialog
+        open={!!toggleTarget}
+        title={toggleTarget?.is_active ? `Deactivate "${toggleTarget?.name}"?` : `Reactivate "${toggleTarget?.name}"?`}
+        description={toggleTarget?.is_active ? (referencedIds.has(toggleTarget.id) ? "This product already has stock-ledger history. It will NOT be deleted — it becomes inactive, stays in history, and is hidden from new vouchers." : "This product will become inactive and hidden from new vouchers. Its history is kept.") : "This product will be available in new vouchers again."}
+        confirmLabel={toggleTarget?.is_active ? "Deactivate" : "Reactivate"}
+        destructive={toggleTarget?.is_active}
+        onConfirm={handleConfirmToggle}
+        onCancel={() => setToggleTarget(null)}
+      />
     </div>
   )
 }

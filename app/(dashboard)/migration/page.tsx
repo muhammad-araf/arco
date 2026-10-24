@@ -16,6 +16,13 @@ import {
 } from "lucide-react"
 import { GodownStore } from "@/lib/services/godown-store"
 import { formatCurrency, formatWeight } from "@/lib/utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  PageSkeleton,
+  SubmitSpinner,
+  isPositive,
+} from "@/components/erp-ui"
 
 interface DataDictionaryItem {
   excelSheet: string
@@ -92,10 +99,18 @@ export default function MigrationPage() {
 
   const [godowns, setGodowns] = React.useState<any[]>([])
   const [products, setProducts] = React.useState<any[]>([])
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [formError, setFormError] = React.useState("")
+  const [formNotice, setFormNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showOpeningConfirm, setShowOpeningConfirm] = React.useState(false)
+  const [parsedFile, setParsedFile] = React.useState<{ name: string; headers: string[]; rows: string[][] } | null>(null)
+  const [importError, setImportError] = React.useState("")
 
   React.useEffect(() => {
     setGodowns(GodownStore.getGodowns())
     setProducts(GodownStore.getProducts())
+    setIsLoading(false)
   }, [])
 
   React.useEffect(() => {
@@ -103,23 +118,97 @@ export default function MigrationPage() {
     if (products.length > 0 && !openingProductId) setOpeningProductId(products[0].id)
   }, [godowns, products, openingGodownId, openingProductId])
 
-  const handleSimulateCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Parse the ACTUAL file the user picked (CSV text). .xlsx files are not
+  // parsed in the browser here — they are flagged honestly instead of
+  // pretending 48 rows were imported.
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-
-    // Simulate instant parsing of client spreadsheet
-    setTimeout(() => {
-      setImportedRowsCount(48)
-    }, 500)
+    setImportError("")
+    setParsedFile(null)
+    setImportedRowsCount(null)
+    if (!/\.csv$/i.test(file.name)) {
+      setImportError(`"${file.name}" is not a CSV file. Excel (.xlsx) parsing is not available in this prototype — export the sheet as CSV and upload that, so the rows previewed are the rows actually in your file.`)
+      return
+    }
+    try {
+      const text = await file.text()
+      const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0)
+      if (lines.length < 2) {
+        setImportError("This file has no data rows — it needs a header row plus at least one data row.")
+        return
+      }
+      const splitRow = (row: string) => row.split(",").map((c) => c.trim().replace(/^"|"$/g, ""))
+      const headers = splitRow(lines[0])
+      const rows = lines.slice(1).map(splitRow)
+      setParsedFile({ name: file.name, headers, rows })
+      setImportedRowsCount(rows.length)
+    } catch {
+      setImportError("Could not read this file. Check it is a valid CSV export and try again.")
+    }
   }
 
   const handleSaveOpeningBalance = (e: React.FormEvent) => {
     e.preventDefault()
-    alert("Opening balance entries verified and locked into the ledger as of " + asOfDate)
+    if (isPending) return
+    // Spec §3.4: an opening balance needs an as-of date, a source note,
+    // a positive weight, and must be distinguishable from ordinary rows.
+    if (!asOfDate) return setFormError("Pick the as-of date for this opening balance.")
+    if (!openingGodownId) return setFormError("Select the godown this opening stock belongs to.")
+    if (!openingProductId) return setFormError("Select the product for this opening stock.")
+    if (!isPositive(openingStockWeight)) return setFormError("Opening stock weight must be greater than zero.")
+    if (!openingNotes.trim()) return setFormError("A source note is required — e.g. which scale count sheet this balance came from.")
+    const already = GodownStore.getStockLedger().some(
+      (entry) => entry.voucher_no.startsWith("OPN-") && entry.product_id === openingProductId && entry.godown_id === openingGodownId
+    )
+    if (already) return setFormError("An opening balance for this product and godown is already recorded. Correcting it needs a stock adjustment (Phase 2) — recording a second opening row would double-count stock.")
+    setFormError("")
+    setShowOpeningConfirm(true)
   }
+
+  const handleConfirmOpening = () => {
+    if (isPending) return
+    setIsPending(true)
+    try {
+      const state = (GodownStore as any).getState()
+      const godown = godowns.find((g) => g.id === openingGodownId)
+      const product = products.find((p) => p.id === openingProductId)
+      const now = new Date().toISOString()
+      const current = GodownStore.getProductStock(openingProductId, openingGodownId)
+      state.stockLedger = [
+        {
+          id: `stk-opn-${Date.now()}`,
+          date: new Date(`${asOfDate}T00:00:00`).toISOString(),
+          voucher_type: "adjustment",
+          voucher_id: `opn-${Date.now()}`,
+          voucher_no: `OPN-${asOfDate.replace(/-/g, "")}-${openingProductId.slice(-4)}`,
+          godown_id: openingGodownId,
+          godown_name: godown?.name,
+          product_id: openingProductId,
+          product_name: product?.name,
+          inward_qty: openingStockWeight,
+          outward_qty: 0,
+          unit: "kg",
+          running_balance: current + openingStockWeight,
+          notes: `Opening balance as of ${asOfDate}. Source: ${openingNotes.trim()}. Approved by Operator Administrator (Single Role).`,
+          created_at: now,
+        },
+        ...state.stockLedger,
+      ]
+      ;(GodownStore as any).saveState(state)
+      setFormNotice(`Opening stock locked: ${openingStockWeight} kg of ${product?.name} in ${godown?.name} as of ${asOfDate}. It appears in the stock ledger as an OPN- row, distinct from ordinary transactions.`)
+    } finally {
+      setIsPending(false)
+      setShowOpeningConfirm(false)
+    }
+  }
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
@@ -133,7 +222,7 @@ export default function MigrationPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center gap-2 p-1 rounded-lg bg-muted/60 border border-border/60 self-start w-fit text-xs font-semibold">
+      <div className="flex flex-wrap items-center gap-2 p-1 rounded-lg bg-muted/60 border border-border/60 self-start max-w-full text-xs font-semibold">
         <button
           type="button"
           onClick={() => setActiveTab("dictionary")}
@@ -239,6 +328,7 @@ export default function MigrationPage() {
           </div>
 
           <form onSubmit={handleSaveOpeningBalance} className="space-y-4 text-xs">
+            <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block font-medium text-foreground mb-1">Opening Balance "As Of" Date</label>
@@ -305,9 +395,10 @@ export default function MigrationPage() {
               </div>
             </div>
 
+            <p className="text-[11px] text-muted-foreground -mt-1">Cash opening is reference-only here: the opening cash row already exists in the cashbook, and re-posting it would double-count. This form locks the stock opening row below.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block font-medium text-foreground mb-1">Opening Cash in Hand (PKR)</label>
+                <label className="block font-medium text-foreground mb-1">Opening Cash in Hand (PKR) — reference only</label>
                 <input
                   type="number"
                   value={openingCash}
@@ -331,10 +422,11 @@ export default function MigrationPage() {
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="submit"
-                className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                disabled={isPending}
+                className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                <CheckCircle2 className="h-4 w-4" />
-                <span>Lock Opening Balances</span>
+                {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+                <span>{isPending ? "Locking…" : "Lock Opening Balances"}</span>
               </button>
             </div>
           </form>
@@ -392,39 +484,65 @@ export default function MigrationPage() {
           {/* Upload Drop Area */}
           <div className="border-2 border-dashed border-border/80 hover:border-primary/50 rounded-xl p-8 text-center bg-muted/20 transition-colors">
             <FileSpreadsheet className="h-10 w-10 text-emerald-500 mx-auto mb-3" />
-            <div className="text-xs font-bold text-foreground">Select an Excel (.xlsx) or CSV file to import</div>
+            <div className="text-xs font-bold text-foreground">Select a CSV file to preview</div>
             <div className="text-[11px] text-muted-foreground mt-1">
-              Supports client column layouts from the legacy workbook.
+              CSV exports from the legacy workbook are parsed in your browser and previewed below. Nothing is written yet.
             </div>
             <label className="mt-4 inline-block px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer transition-colors">
               Browse Spreadsheet
-              <input type="file" accept=".xlsx,.xls,.csv" onChange={handleSimulateCSVUpload} className="hidden" />
+              <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
             </label>
           </div>
 
-          {importedRowsCount && (
-            <div className="p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+          <AlertBanner tone="error" message={importError} onDismiss={() => setImportError("")} />
+          {parsedFile && (
+            <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs space-y-3">
+              <div className="flex items-start gap-2">
+                <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />
                 <div>
-                  <strong className="text-foreground">{importedRowsCount} records parsed successfully!</strong>
-                  <div className="text-[11px] text-muted-foreground">All rows matched data dictionary specifications.</div>
+                  <strong className="text-foreground">{parsedFile.rows.length} data rows parsed from {parsedFile.name} for {importType.replace("_", " ")}.</strong>
+                  <div className="text-[11px] text-muted-foreground mt-0.5">
+                    Preview only — nothing was written to masters. Writing rows needs the column mapping to be confirmed first (spec §18: ambiguous columns must be flagged, not guessed), which lands with the Phase 2 import.
+                  </div>
+                  <div className="text-[11px] mt-1">Columns found: <span className="font-mono">{parsedFile.headers.join(", ")}</span></div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  alert("Successfully imported " + importedRowsCount + " rows into the master database.")
-                  setImportedRowsCount(null)
-                }}
-                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer"
-              >
-                Commit to System
-              </button>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+                      {parsedFile.headers.map((h) => (
+                        <th key={h} className="pb-2 pr-3 font-bold">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/40">
+                    {parsedFile.rows.slice(0, 5).map((row, i) => (
+                      <tr key={i}>
+                        {row.map((cell, j) => (
+                          <td key={j} className="py-2 pr-3 font-mono">{cell}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {parsedFile.rows.length > 5 && (
+                  <p className="text-[11px] text-muted-foreground mt-2">Showing first 5 of {parsedFile.rows.length} rows.</p>
+                )}
+              </div>
             </div>
           )}
         </div>
       )}
+      <ConfirmDialog
+        open={showOpeningConfirm}
+        title="Lock this opening balance?"
+        description={`Record ${openingStockWeight} kg of ${products.find((p) => p.id === openingProductId)?.name || "the selected product"} in ${godowns.find((g) => g.id === openingGodownId)?.name || "the selected godown"} as of ${asOfDate}, marked as an opening (OPN-) ledger row with source note "${openingNotes.trim()}". Opening rows are distinct from ordinary transactions.`}
+        confirmLabel="Lock Opening Balance"
+        pending={isPending}
+        onConfirm={handleConfirmOpening}
+        onCancel={() => setShowOpeningConfirm(false)}
+      />
     </div>
   )
 }
