@@ -11,7 +11,8 @@ import {
   CheckCircle2,
   Trash2,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { listProducts, listGodowns, listParties, listMachines, listPackagingTypes, listEmployees, createProduct, deactivateProduct, createGodown, deactivateGodown, createParty, deactivateParty, createMachine, deactivateMachine, createPackagingType, createEmployee } from "@/app/actions/masters"
+import { getStockLedger } from "@/app/actions/inventory"
 import { Product, Godown, Party, Machine } from "@/lib/types/database"
 import { formatCurrency, formatWeight } from "@/lib/utils"
 import {
@@ -39,25 +40,40 @@ export default function MastersPage() {
   const [showConfirm, setShowConfirm] = React.useState(false)
   const [draftProduct, setDraftProduct] = React.useState<Product | null>(null)
   const [toggleTarget, setToggleTarget] = React.useState<Product | null>(null)
+  const [referencedIds, setReferencedIds] = React.useState<Set<string>>(new Set())
+  const [packaging, setPackaging] = React.useState<any[]>([])
+  const [employees, setEmployees] = React.useState<any[]>([])
+  const [masterKind, setMasterKind] = React.useState<"godown" | "party" | "machine" | "packaging" | "employee">("godown")
+  const [masterCode, setMasterCode] = React.useState("")
+  const [masterName, setMasterName] = React.useState("")
+  const [masterExtra, setMasterExtra] = React.useState("")
+  const [masterPending, setMasterPending] = React.useState(false)
+  const [deactTarget, setDeactTarget] = React.useState<{ kind: string; id: string; name: string } | null>(null)
+  const [deactPending, setDeactPending] = React.useState(false)
   const productGuard = React.useRef(false)
   const [prodName, setProdName] = React.useState("")
   const [prodCategory, setProdCategory] = React.useState<any>("raw_seed")
   const [prodMinStock, setProdMinStock] = React.useState<number>(2000)
   const [weightPerBag, setWeightPerBag] = React.useState<number>(50)
 
-  const loadData = React.useCallback(() => {
-    setProducts(GodownStore.getProducts())
-    setGodowns(GodownStore.getGodowns())
-    setParties(GodownStore.getParties())
-    setMachines(GodownStore.getMachines())
+  const loadData = React.useCallback(async () => {
+    setIsLoading(true)
+    const [pr, g, pa, m, pk, em, le] = await Promise.all([listProducts(true), listGodowns(true), listParties(true), listMachines(true), listPackagingTypes(true), listEmployees(true), getStockLedger({ limit: 500 })])
+    const failed = [pr, g, pa, m, pk, em, le].find((x) => !x.success)
+    if (failed) setFormError(failed.error ?? "Could not load master data.")
+    setProducts(Array.isArray(pr.data) ? pr.data : [])
+    setGodowns(Array.isArray(g.data) ? g.data : [])
+    setParties(Array.isArray(pa.data) ? pa.data : [])
+    setMachines(Array.isArray(m.data) ? m.data : [])
+    setPackaging(Array.isArray(pk.data) ? pk.data : [])
+    setEmployees(Array.isArray(em.data) ? em.data : [])
+    setReferencedIds(new Set((Array.isArray(le.data) ? le.data : []).map((e: any) => e.product_id)))
+    setIsLoading(false)
   }, [])
 
   React.useEffect(() => {
     loadData()
-    setIsLoading(false)
-    window.addEventListener("arco-godown-data-updated", loadData)
-    return () => window.removeEventListener("arco-godown-data-updated", loadData)
-  }, [loadData])
+  }, [])
 
   const handleAddProduct = (e: React.FormEvent) => {
     e.preventDefault()
@@ -71,7 +87,7 @@ export default function MastersPage() {
     setFormError("")
     setDraftProduct({
       id: `prod-${Date.now()}`,
-      code: `PRD-${Date.now().toString().slice(-4)}`,
+      code: `PRD-${prodName.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 12)}-${Date.now().toString().slice(-4)}`,
       name: prodName.trim(),
       category: prodCategory,
       default_unit: "kg",
@@ -83,42 +99,92 @@ export default function MastersPage() {
     setShowConfirm(true)
   }
 
-  const handleConfirmProduct = () => {
+  const handleConfirmProduct = async () => {
     if (!draftProduct || productGuard.current) return
     productGuard.current = true
     setIsPending(true)
     try {
-      const state = (GodownStore as any).getState()
-      state.products = [...state.products, draftProduct]
-      ;(GodownStore as any).saveState(state)
-      setProducts(state.products)
-      setFormNotice(`Product "${draftProduct.name}" created (${draftProduct.code}) and available in every product list.`)
-    } finally {
-      setIsPending(false)
-      productGuard.current = false
+      const res = await createProduct({ code: draftProduct.code, name: draftProduct.name, category: draftProduct.category, weight_per_bag: draftProduct.weight_per_bag, min_stock: draftProduct.min_stock })
+      if (!res.success) {
+        setFormError(res.error ?? "Could not create the product.")
+        return
+      }
+      setFormNotice(`Product "${draftProduct.name}" created (${(res.data as any)?.code ?? draftProduct.code}) and available in every product list.`)
       setShowConfirm(false)
       setIsNewProdOpen(false)
       setDraftProduct(null)
       setProdName("")
+      await loadData()
+    } finally {
+      setIsPending(false)
+      productGuard.current = false
     }
+  }
+
+  const handleCreateMaster = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (masterPending || !masterCode.trim() || !masterName.trim()) {
+      setFormError("Master code and name are required.")
+      return
+    }
+    setMasterPending(true)
+    try {
+      let res: any
+      if (masterKind === "godown") res = await createGodown({ code: masterCode.trim(), name: masterName.trim() })
+      else if (masterKind === "party") res = await createParty({ code: masterCode.trim(), name: masterName.trim(), type: masterExtra || "customer" })
+      else if (masterKind === "machine") res = await createMachine({ code: masterCode.trim(), name: masterName.trim(), processing_type: masterExtra || "Grading" })
+      else if (masterKind === "packaging") res = await createPackagingType({ code: masterCode.trim(), name: masterName.trim() })
+      else res = await createEmployee({ code: masterCode.trim(), full_name: masterName.trim(), designation: masterExtra || "Staff" })
+      if (!res.success) {
+        setFormError(res.error ?? "Could not create the master record.")
+        return
+      }
+      setFormNotice(`${masterKind} "${masterName.trim()}" created.`)
+      setMasterCode(""); setMasterName(""); setMasterExtra("")
+      await loadData()
+    } finally { setMasterPending(false) }
+  }
+
+  const handleDeactivateMaster = async () => {
+    if (!deactTarget || deactPending) return
+    setDeactPending(true)
+    try {
+      let res: any
+      if (deactTarget.kind === "godown") res = await deactivateGodown(deactTarget.id)
+      else if (deactTarget.kind === "party") res = await deactivateParty(deactTarget.id)
+      else res = await deactivateMachine(deactTarget.id)
+      if (!res.success) {
+        setFormError(res.error ?? "Could not deactivate.")
+        return
+      }
+      setFormNotice(`"${deactTarget.name}" deactivated — never deleted; history is kept.`)
+      setDeactTarget(null)
+      await loadData()
+    } finally { setDeactPending(false) }
   }
 
   // Spec §3.1: never delete a product that transactions reference — flip
   // it inactive instead. Deactivation is confirmed, and the dialog warns
   // when the product already has stock-ledger history.
-  const handleConfirmToggle = () => {
+  const handleConfirmToggle = async () => {
     if (!toggleTarget) return
-    const state = (GodownStore as any).getState()
-    state.products = state.products.map((p: Product) =>
-      p.id === toggleTarget.id ? { ...p, is_active: !p.is_active } : p
-    )
-    ;(GodownStore as any).saveState(state)
-    setProducts(state.products)
-    setFormNotice(`Product "${toggleTarget.name}" is now ${toggleTarget.is_active ? "inactive (hidden from new vouchers, history kept)" : "active again"}.`)
+    if (!toggleTarget.is_active) {
+      // No reactivate action exists in masters.ts — deactivation is one-way
+      // via the server actions, so this is reported rather than faked.
+      setFormError("No reactivate action exists yet in masters.ts: a deactivated product stays inactive. Only deactivation is available from this page.")
+      setToggleTarget(null)
+      return
+    }
+    const res = await deactivateProduct(toggleTarget.id)
+    if (!res.success) {
+      setFormError(res.error ?? "Could not deactivate the product.")
+      return
+    }
+    setFormNotice(`Product "${toggleTarget.name}" is now inactive (hidden from new vouchers, history kept).`)
     setToggleTarget(null)
+    await loadData()
   }
 
-  const referencedIds = new Set(GodownStore.getStockLedger().map((e) => e.product_id))
 
   if (isLoading) return <PageSkeleton />
 
@@ -277,8 +343,9 @@ export default function MastersPage() {
                     <td className="py-3 text-right font-mono font-black text-foreground">{g.capacity_metric_tons} MT</td>
                     <td className="py-3 text-center">
                       <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
-                        Operational
+                        {g.is_active === false ? "Inactive" : "Operational"}
                       </span>
+                      {g.is_active !== false && (<button type="button" onClick={() => setDeactTarget({ kind: "godown", id: g.id, name: g.name })} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Deactivate</button>)}
                     </td>
                   </tr>
                 ))}
@@ -322,8 +389,9 @@ export default function MastersPage() {
                     </td>
                     <td className="py-3 text-center">
                       <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
-                        Active
+                        {pty.is_active === false ? "Inactive" : "Active"}
                       </span>
+                      {pty.is_active !== false && (<button type="button" onClick={() => setDeactTarget({ kind: "party", id: pty.id, name: pty.name })} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Deactivate</button>)}
                     </td>
                   </tr>
                 ))}
@@ -360,8 +428,9 @@ export default function MastersPage() {
                     <td className="py-3 text-foreground font-semibold">{m.operator_name || "Plant Master"}</td>
                     <td className="py-3 text-center">
                       <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
-                        Ready
+                        {m.is_active === false ? "Inactive" : "Ready"}
                       </span>
+                      {m.is_active !== false && (<button type="button" onClick={() => setDeactTarget({ kind: "machine", id: m.id, name: m.name })} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Deactivate</button>)}
                     </td>
                   </tr>
                 ))}
@@ -471,6 +540,27 @@ export default function MastersPage() {
         pending={isPending}
         onConfirm={handleConfirmProduct}
         onCancel={() => { setShowConfirm(false); setDraftProduct(null) }}
+      />
+      <div className="expensive-card p-5">
+        <h2 className="text-sm font-bold text-foreground mb-1">Add a master record</h2>
+        <p className="text-xs text-muted-foreground mb-4">Create (never delete) via masters.ts actions. Packaging types ({packaging.length}) and employees ({employees.length}) are listed here as counts; their full tables live in the packing and payroll sections. Deactivation is one-way — no reactivate action exists yet.</p>
+        <form onSubmit={handleCreateMaster} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          <div><label className="block font-medium text-foreground mb-1">Kind *</label><select value={masterKind} onChange={(e) => setMasterKind(e.target.value as any)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="godown">Godown</option><option value="party">Party</option><option value="machine">Machine</option><option value="packaging">Packaging type</option><option value="employee">Employee</option></select></div>
+          <div><label className="block font-medium text-foreground mb-1">Code *</label><input value={masterCode} onChange={(e) => setMasterCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Name *</label><input value={masterName} onChange={(e) => setMasterName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Detail (party type / processing type / designation)</label><input value={masterExtra} onChange={(e) => setMasterExtra(e.target.value)} placeholder="Optional — defaults apply" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+          <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={masterPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{masterPending ? "Creating…" : "Create master record"}</button></div>
+        </form>
+      </div>
+      <ConfirmDialog
+        open={deactTarget !== null}
+        title={`Deactivate "${deactTarget?.name ?? ""}"?`}
+        description="This never deletes the record: it becomes inactive, stays in history, and is hidden from new vouchers."
+        confirmLabel="Deactivate"
+        destructive
+        pending={deactPending}
+        onConfirm={handleDeactivateMaster}
+        onCancel={() => setDeactTarget(null)}
       />
       <ConfirmDialog
         open={!!toggleTarget}

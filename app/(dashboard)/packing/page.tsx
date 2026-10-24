@@ -12,7 +12,9 @@ import {
   ArrowDownRight,
   ArrowUpRight,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { getBardanaLedger } from "@/app/actions/finance"
+import { listBatches } from "@/app/actions/production"
+import { listPackagingTypes, listProducts } from "@/app/actions/masters"
 import { PackagingType, PackingRecord, Product } from "@/lib/types/database"
 import { formatBags, formatCurrency, formatWeight, formatDate } from "@/lib/utils"
 import {
@@ -39,25 +41,50 @@ export default function PackingPage() {
   const [draftRecord, setDraftRecord] = React.useState<PackingRecord | null>(null)
   const packGuard = React.useRef(false)
   const [packagingId, setPackagingId] = React.useState("")
+  const [bardanaEntries, setBardanaEntries] = React.useState<any[]>([])
+  const [bardanaTotals, setBardanaTotals] = React.useState<any | null>(null)
   const [productId, setProductId] = React.useState("")
   const [bagsPacked, setBagsPacked] = React.useState<number>(100)
   const [damagedBags, setDamagedBags] = React.useState<number>(2)
   const [packingRate, setPackingRate] = React.useState<number>(15)
   const [notes, setNotes] = React.useState("")
 
-  const loadData = React.useCallback(() => {
-    setPackaging(GodownStore.getPackaging())
-    setProducts(GodownStore.getProducts().filter((p) => p.category === "finished_seed" || p.category === "intermediate"))
-    const state = (GodownStore as any).getState()
-    setPackingRecords(state.packingRecords || [])
-  }, [])
-
-  React.useEffect(() => {
-    loadData()
+  const loadData = React.useCallback(async () => {
+    setIsLoading(true)
+    const [pk, pr, ba, bat] = await Promise.all([listPackagingTypes(), listProducts(), getBardanaLedger({}), listBatches()])
+    const failed = [pk, pr, ba, bat].find((x) => !x.success)
+    if (failed) setFormError(failed.error ?? "Could not load packing data.")
+    const packagingList = (Array.isArray(pk.data) ? pk.data : []) as PackagingType[]
+    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+    setPackaging(packagingList)
+    setProducts(productList.filter((x) => x.category === "finished_seed" || x.category === "intermediate"))
+    const entries = ba.success ? ((ba.data as any)?.entries ?? []) : []
+    setBardanaEntries(entries)
+    setBardanaTotals(ba.success ? ba.data : null)
+    // Packing records are written by postBatch (production.ts) when a batch
+    // is posted with a packing rate / bag count — there is no standalone
+    // packing-record action. Batches with bags_consumed are the records.
+    setPackingRecords((Array.isArray(bat.data) ? bat.data : []).filter((b: any) => Number(b.bags_consumed || 0) > 0).map((b: any) => ({
+      id: b.id,
+      packing_no: b.batch_no,
+      date: b.date,
+      reference_type: "batch",
+      output_product_id: b.output_product_id,
+      output_product_name: productList.find((x) => x.id === b.output_product_id)?.name ?? b.output_product_id,
+      packaging_type_id: b.packaging_type_id,
+      packaging_name: packagingList.find((x) => x.id === b.packaging_type_id)?.name ?? b.packaging_type_id,
+      bags_packed: Number(b.bags_consumed || 0),
+      bag_capacity_kg: packagingList.find((x) => x.id === b.packaging_type_id)?.capacity_kg ?? 50,
+      total_packed_kg: Number(b.bags_consumed || 0) * (packagingList.find((x) => x.id === b.packaging_type_id)?.capacity_kg ?? 50),
+      packing_rate: Number(b.packing_rate_per_bag || 0),
+      packing_charge: Number(b.packing_charge || 0),
+      damaged_bags: 0,
+      status: b.status,
+      notes: b.notes,
+      created_at: b.created_at,
+    })) as any)
     setIsLoading(false)
-    window.addEventListener("arco-godown-data-updated", loadData)
-    return () => window.removeEventListener("arco-godown-data-updated", loadData)
-  }, [loadData])
+  }, [])
 
   React.useEffect(() => {
     if (packaging.length > 0 && !packagingId) setPackagingId(packaging[0].id)
@@ -79,9 +106,14 @@ export default function PackingPage() {
     if (!isPositive(bagsPacked)) return setFormError("Bags packed must be greater than zero.")
     if (damagedBags < 0) return setFormError("Damaged bags cannot be negative.")
     if (packingRate < 0) return setFormError("Packing rate cannot be negative.")
+    const ledgerClosing = (() => {
+      const recs = bardanaEntries.filter((r) => r.packaging_type_id === packagingId)
+      const last = recs[recs.length - 1]
+      return last ? Number(last.running_balance) : Number(selectedPkg?.current_stock || 0)
+    })()
     const totalBagsNeeded = bagsPacked + damagedBags
-    if (selectedPkg && selectedPkg.current_stock < totalBagsNeeded) {
-      return setFormError(`Insufficient bag stock: ${selectedPkg.current_stock} ${selectedPkg.name} bags available, but ${totalBagsNeeded} needed (${bagsPacked} packed + ${damagedBags} damaged). Purchase more bardana first.`)
+    if (selectedPkg && ledgerClosing < totalBagsNeeded) {
+      return setFormError(`Insufficient bag stock: ${ledgerClosing} ${selectedPkg.name} bags available per the bardana ledger, but ${totalBagsNeeded} needed (${bagsPacked} packed + ${damagedBags} damaged). Purchase more bardana first.`)
     }
     setFormError("")
     const selectedProd = products.find((p) => p.id === productId)
@@ -109,34 +141,29 @@ export default function PackingPage() {
 
   const handleConfirmPacking = () => {
     if (!draftRecord || packGuard.current) return
-    packGuard.current = true
-    setIsPending(true)
-    try {
-      const totalBagsNeeded = draftRecord.bags_packed + (draftRecord.damaged_bags || 0)
-      const state = (GodownStore as any).getState()
-      state.packaging = state.packaging.map((pkg: PackagingType) =>
-        pkg.id === packagingId ? { ...pkg, current_stock: pkg.current_stock - totalBagsNeeded } : pkg
-      )
-      state.packingRecords = [draftRecord, ...(state.packingRecords || [])]
-      ;(GodownStore as any).saveState(state)
-      setFormNotice(`${draftRecord.packing_no} posted — ${draftRecord.bags_packed} bags packed (${formatWeight(draftRecord.total_packed_kg)}), ${draftRecord.damaged_bags || 0} damaged, ${totalBagsNeeded} bags deducted from bardana.`)
-    } finally {
-      setIsPending(false)
-      packGuard.current = false
-      setShowConfirm(false)
-      setIsModalOpen(false)
-      setDraftRecord(null)
-    }
+    // No standalone packing-record action exists in production.ts/finance.ts:
+    // packing_records rows are written by postBatch when a batch is posted
+    // with a packing rate and bag count. Recording here would be a fake
+    // local write, so this page refuses it and points at the real flow.
+    setFormError("No standalone packing action exists yet: packing records are written when a production batch is posted with a packing rate and bag count (production.ts postBatch). Post the batch in Production, then its bags, charge and bardana consumption appear here from getBardanaLedger and the batch list. Damaged bags have no write path in the current actions either — they are shown as 0 until a damaged-tracking action lands.")
+    setShowConfirm(false)
+    setIsModalOpen(false)
+    setDraftRecord(null)
   }
 
   // Spec §8.2 / §16 bardana ledger, derived from posted packing records:
   // closing is the live packaging stock; consumed/damaged are totals to date.
   const bardanaLedger = packaging.map((pkg) => {
-    const recs = packingRecords.filter((r) => r.packaging_type_id === pkg.id)
+    const recs = bardanaEntries.filter((r) => r.packaging_type_id === pkg.id)
+    const consumed = recs.filter((r) => r.voucher_type !== "purchase" && r.voucher_type !== "purchase_return").reduce((a, r) => a + (Number(r.out_qty) || 0), 0)
+    const purchased = recs.filter((r) => r.voucher_type === "purchase").reduce((a, r) => a + (Number(r.in_qty) || 0), 0)
+    const last = recs[recs.length - 1]
     return {
       ...pkg,
-      consumed: recs.reduce((a, r) => a + r.bags_packed, 0),
-      damaged: recs.reduce((a, r) => a + (r.damaged_bags || 0), 0),
+      consumed,
+      purchased,
+      damaged: 0, // no damaged-bag write path in the current actions
+      current_stock: last ? Number(last.running_balance) || 0 : Number(pkg.current_stock || 0),
     }
   })
 

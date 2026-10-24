@@ -14,7 +14,8 @@ import {
   Layers,
   FileText,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { createOpeningBalance, listOpeningBalances } from "@/app/actions/finance"
+import { listGodowns, listProducts } from "@/app/actions/masters"
 import { formatCurrency, formatWeight } from "@/lib/utils"
 import {
   AlertBanner,
@@ -105,12 +106,21 @@ export default function MigrationPage() {
   const [isPending, setIsPending] = React.useState(false)
   const [showOpeningConfirm, setShowOpeningConfirm] = React.useState(false)
   const [parsedFile, setParsedFile] = React.useState<{ name: string; headers: string[]; rows: string[][] } | null>(null)
+  const [openingBalances, setOpeningBalances] = React.useState<any[]>([])
   const [importError, setImportError] = React.useState("")
 
   React.useEffect(() => {
-    setGodowns(GodownStore.getGodowns())
-    setProducts(GodownStore.getProducts())
-    setIsLoading(false)
+    const load = async () => {
+      setIsLoading(true)
+      const [g, pr, ob] = await Promise.all([listGodowns(), listProducts(), listOpeningBalances()])
+      const failed = [g, pr, ob].find((x) => !x.success)
+      if (failed) setFormError(failed.error ?? "Could not load migration data.")
+      setGodowns(Array.isArray(g.data) ? g.data : [])
+      setProducts(Array.isArray(pr.data) ? pr.data : [])
+      setOpeningBalances(Array.isArray(ob.data) ? ob.data : [])
+      setIsLoading(false)
+    }
+    load()
   }, [])
 
   React.useEffect(() => {
@@ -158,48 +168,43 @@ export default function MigrationPage() {
     if (!openingProductId) return setFormError("Select the product for this opening stock.")
     if (!isPositive(openingStockWeight)) return setFormError("Opening stock weight must be greater than zero.")
     if (!openingNotes.trim()) return setFormError("A source note is required — e.g. which scale count sheet this balance came from.")
-    const already = GodownStore.getStockLedger().some(
-      (entry) => entry.voucher_no.startsWith("OPN-") && entry.product_id === openingProductId && entry.godown_id === openingGodownId
+    const already = openingBalances.some(
+      (b) => b.balance_kind === "stock" && b.product_id === openingProductId && b.godown_id === openingGodownId
     )
     if (already) return setFormError("An opening balance for this product and godown is already recorded. Correcting it needs a stock adjustment (Phase 2) — recording a second opening row would double-count stock.")
     setFormError("")
     setShowOpeningConfirm(true)
   }
 
-  const handleConfirmOpening = () => {
+  const handleConfirmOpening = async () => {
     if (isPending) return
     setIsPending(true)
     try {
-      const state = (GodownStore as any).getState()
       const godown = godowns.find((g) => g.id === openingGodownId)
       const product = products.find((p) => p.id === openingProductId)
-      const now = new Date().toISOString()
-      const current = GodownStore.getProductStock(openingProductId, openingGodownId)
-      state.stockLedger = [
-        {
-          id: `stk-opn-${Date.now()}`,
-          date: new Date(`${asOfDate}T00:00:00`).toISOString(),
-          voucher_type: "adjustment",
-          voucher_id: `opn-${Date.now()}`,
-          voucher_no: `OPN-${asOfDate.replace(/-/g, "")}-${openingProductId.slice(-4)}`,
-          godown_id: openingGodownId,
-          godown_name: godown?.name,
-          product_id: openingProductId,
-          product_name: product?.name,
-          inward_qty: openingStockWeight,
-          outward_qty: 0,
-          unit: "kg",
-          running_balance: current + openingStockWeight,
-          notes: `Opening balance as of ${asOfDate}. Source: ${openingNotes.trim()}. Approved by Operator Administrator (Single Role).`,
-          created_at: now,
-        },
-        ...state.stockLedger,
-      ]
-      ;(GodownStore as any).saveState(state)
-      setFormNotice(`Opening stock locked: ${openingStockWeight} kg of ${product?.name} in ${godown?.name} as of ${asOfDate}. It appears in the stock ledger as an OPN- row, distinct from ordinary transactions.`)
+      const stock = await createOpeningBalance({
+        balanceKind: "stock", entityKey: `stock:${openingGodownId}:${openingProductId}`,
+        productId: openingProductId, godownId: openingGodownId, quantity: openingStockWeight,
+        asOf: asOfDate, sourceNote: openingNotes.trim(),
+      })
+      if (!stock.success) {
+        setFormError(stock.error ?? "Could not record the opening stock balance.")
+        return
+      }
+      let cashNote = ""
+      if (openingCash > 0) {
+        const cash = await createOpeningBalance({
+          balanceKind: "cash", entityKey: "cash:opening",
+          amount: openingCash, asOf: asOfDate, sourceNote: openingNotes.trim(),
+        })
+        cashNote = cash.success ? ` Cash opening of ${formatCurrency(openingCash)} recorded as an evidence row (no cash account selected).` : ` Cash opening could not be recorded: ${cash.error ?? "unknown error"}.`
+      }
+      setFormNotice(`Opening stock locked: ${openingStockWeight} kg of ${product?.name} in ${godown?.name} as of ${asOfDate} (opening_balances evidence row; stock itself is established through the opening-balance record, not a fake ledger row).${cashNote}`)
+      setShowOpeningConfirm(false)
+      const ob = await listOpeningBalances()
+      if (ob.success) setOpeningBalances(Array.isArray(ob.data) ? ob.data : [])
     } finally {
       setIsPending(false)
-      setShowOpeningConfirm(false)
     }
   }
 
@@ -433,6 +438,16 @@ export default function MigrationPage() {
         </div>
       )}
 
+      {activeTab === "opening_balances" && openingBalances.length > 0 && (
+        <div className="expensive-card p-5">
+          <h2 className="text-sm font-bold text-foreground mb-3">Recorded opening balances ({openingBalances.length})</h2>
+          <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Kind</th><th className="pb-2">Entity</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-right">Quantity</th><th className="pb-2">As of</th></tr></thead>
+            <tbody className="divide-y divide-border/40">
+              {openingBalances.map((b: any) => (<tr key={b.id}><td className="py-2">{b.balance_kind}</td><td className="py-2 font-mono">{b.entity_key}</td><td className="py-2 text-right">{formatCurrency(Number(b.amount || 0))}</td><td className="py-2 text-right">{formatWeight(Number(b.quantity || 0))}</td><td className="py-2">{b.as_of?.slice(0, 10)}</td></tr>))}
+            </tbody></table></div>
+          <p className="text-[11px] text-muted-foreground mt-2">CSV import stays preview-only: the import tab parses a CSV and shows its headers and first rows with the mapping notice, but does not write rows — no fake imports.</p>
+        </div>
+      )}
       {/* Tab 3: Spreadsheet Import Wizard */}
       {activeTab === "import" && (
         <div className="expensive-card p-6 space-y-6">
