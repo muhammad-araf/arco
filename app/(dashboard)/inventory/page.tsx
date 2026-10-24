@@ -399,7 +399,7 @@ export default function InventoryPage() {
               <tbody className="divide-y divide-border/40 font-mono">
                 {filteredLedger.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="py-4 font-sans">
+                    <td colSpan={9} className="py-4 font-sans">
                       <EmptyState
                         title="No ledger movements match these filters"
                         hint="Post an inward voucher, batch or gate pass and its movement will appear here with its voucher reference."
