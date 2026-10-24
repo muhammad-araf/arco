@@ -20,6 +20,18 @@ import { GodownStore } from "@/lib/services/godown-store"
 import { GatePass, GatePassItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDate, formatDateTime } from "@/lib/utils"
 import { exportToCSV } from "@/lib/export-utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  EmptyState,
+  FilterBanner,
+  PageSkeleton,
+  ReversalDialog,
+  SubmitSpinner,
+  getUrlFilter,
+  isPositive,
+  isTodayISO,
+} from "@/components/erp-ui"
 
 export default function GatePassPage() {
   const [gatePasses, setGatePasses] = React.useState<GatePass[]>([])
@@ -30,6 +42,16 @@ export default function GatePassPage() {
   // Modal / Print State
   const [isModalOpen, setIsModalOpen] = React.useState(false)
   const [selectedPassForPrint, setSelectedPassForPrint] = React.useState<GatePass | null>(null)
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [formError, setFormError] = React.useState("")
+  const [formNotice, setFormNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showPostConfirm, setShowPostConfirm] = React.useState(false)
+  const [draftPass, setDraftPass] = React.useState<GatePass | null>(null)
+  const [reversalTarget, setReversalTarget] = React.useState<GatePass | null>(null)
+  const [isReversing, setIsReversing] = React.useState(false)
+  const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
+  const postGuard = React.useRef(false)
 
   // Form Fields
   const [customerId, setCustomerId] = React.useState("")
@@ -61,6 +83,8 @@ export default function GatePassPage() {
 
   React.useEffect(() => {
     loadData()
+    setDrillFilter(getUrlFilter())
+    setIsLoading(false)
     window.addEventListener("arco-godown-data-updated", loadData)
     return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
@@ -102,22 +126,29 @@ export default function GatePassPage() {
 
   const handleIssueGatePass = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!customerId || !godownId || !vehicleNo || !driverName) return
-
-    // Stock verification
-    for (const item of items) {
+    if (isPending) return
+    // Spec §9.3/§9.5: required fields, positive quantities, and the stock
+    // guard — every failure names the product and the numbers involved.
+    if (!customerId) return setFormError("Select the customer / receiver before issuing a gate pass.")
+    if (!godownId) return setFormError("Select the dispatch godown so stock is deducted from the right place.")
+    if (!vehicleNo.trim()) return setFormError("Vehicle number is required on a gate pass.")
+    if (!driverName.trim()) return setFormError("Driver name is required on a gate pass.")
+    if (!destination.trim()) return setFormError("Destination is required so the pass states where the goods are going.")
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (!item.productId) return setFormError(`Line ${i + 1}: select a product.`)
+      if (!isPositive(Number(item.bags))) return setFormError(`Line ${i + 1}: bags must be greater than zero.`)
+      if (!isPositive(Number(item.netWeight))) return setFormError(`Line ${i + 1}: net weight must be greater than zero.`)
       const available = GodownStore.getProductStock(item.productId, godownId)
       if (item.netWeight > available) {
         const prod = products.find((p) => p.id === item.productId)
-        alert(`Insufficient stock for ${prod?.name || "Product"}. Available: ${available} kg, Requested: ${item.netWeight} kg`)
-        return
+        return setFormError(`Insufficient stock for ${prod?.name || "Product"}: ${available} kg available in this godown, but ${item.netWeight} kg requested. Reduce the quantity or pick another godown.`)
       }
     }
-
+    setFormError("")
     const selectedCust = customers.find((c) => c.id === customerId)
     const selectedGodown = godowns.find((g) => g.id === godownId)
     const passNo = `GP-2026-${String(gatePasses.length + 85).padStart(4, "0")}`
-
     const gatePassItems: GatePassItem[] = items.map((item, idx) => {
       const prod = products.find((p) => p.id === item.productId)
       return {
@@ -131,8 +162,7 @@ export default function GatePassPage() {
         remarks: item.remarks,
       }
     })
-
-    const newPass: GatePass = {
+    setDraftPass({
       id: `gp-${Date.now()}`,
       pass_no: passNo,
       date: new Date().toISOString(),
@@ -153,15 +183,89 @@ export default function GatePassPage() {
       items: gatePassItems,
       created_at: new Date().toISOString(),
       dispatched_at: new Date().toISOString(),
-    }
-
-    GodownStore.postGatePass(newPass)
-    setIsModalOpen(false)
-    setSelectedPassForPrint(newPass)
+    })
+    setShowPostConfirm(true)
   }
+
+  const handleConfirmPost = () => {
+    if (!draftPass || postGuard.current) return
+    postGuard.current = true
+    setIsPending(true)
+    try {
+      GodownStore.postGatePass(draftPass)
+      setFormNotice(`${draftPass.pass_no} dispatched — ${formatWeight(draftPass.total_weight_kg)} deducted from ${draftPass.godown_name || "the godown"}.`)
+      setSelectedPassForPrint(draftPass)
+    } finally {
+      setIsPending(false)
+      postGuard.current = false
+      setShowPostConfirm(false)
+      setIsModalOpen(false)
+      setDraftPass(null)
+    }
+  }
+
+  // Spec §9.3: cancellation after posting creates a reversal with reason;
+  // the pass stays searchable as "reversed" and stock is restored by
+  // compensating inward ledger rows. The pass number is never reused.
+  const handleConfirmReversal = (reasonCode: string, reason: string) => {
+    if (!reversalTarget || isReversing) return
+    setIsReversing(true)
+    try {
+      const state = (GodownStore as any).getState()
+      const now = new Date().toISOString()
+      const runningByProduct: Record<string, number> = {}
+      const rows = reversalTarget.items.map((item, idx) => {
+        if (runningByProduct[item.product_id] === undefined) {
+          runningByProduct[item.product_id] = GodownStore.getProductStock(item.product_id, reversalTarget.godown_id)
+        }
+        runningByProduct[item.product_id] += item.net_weight_kg
+        return {
+          id: `stk-gprev-${Date.now()}-${idx}`,
+          date: now,
+          voucher_type: "adjustment",
+          voucher_id: reversalTarget.id,
+          voucher_no: reversalTarget.pass_no,
+          godown_id: reversalTarget.godown_id,
+          godown_name: reversalTarget.godown_name,
+          product_id: item.product_id,
+          product_name: item.product_name,
+          party_id: reversalTarget.customer_id,
+          party_name: reversalTarget.customer_name,
+          inward_qty: item.net_weight_kg,
+          outward_qty: 0,
+          unit: "kg",
+          running_balance: runningByProduct[item.product_id],
+          notes: `Reversal of ${reversalTarget.pass_no} [${reasonCode}]: ${reason}`,
+          created_at: now,
+        }
+      })
+      state.stockLedger = [...rows, ...state.stockLedger]
+      state.gatePasses = state.gatePasses.map((gp: GatePass) =>
+        gp.id === reversalTarget.id
+          ? { ...gp, status: "reversed" as const, notes: `${gp.notes ? gp.notes + " | " : ""}Reversed [${reasonCode}]: ${reason}` }
+          : gp
+      )
+      ;(GodownStore as any).saveState(state)
+      setFormNotice(`${reversalTarget.pass_no} reversed — dispatched stock restored. Reason recorded: ${reasonCode}.`)
+      setReversalTarget(null)
+    } finally {
+      setIsReversing(false)
+    }
+  }
+
+  const visiblePasses = drillFilter === "today"
+    ? gatePasses.filter((gp) => isTodayISO(gp.date))
+    : drillFilter === "posted"
+      ? gatePasses.filter((gp) => gp.status === "posted")
+      : gatePasses
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
+      <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -218,7 +322,7 @@ export default function GatePassPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-emerald-500" />
-            Issued Gate Passes ({gatePasses.length})
+            Issued Gate Passes ({visiblePasses.length})
           </h2>
           <span className="text-xs text-muted-foreground">Authorized Premise Clearance Documents</span>
         </div>
@@ -239,7 +343,19 @@ export default function GatePassPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
-              {gatePasses.map((gp) => (
+              {visiblePasses.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="py-4">
+                    <EmptyState
+                      title={drillFilter ? "No gate passes match this filter" : "No gate passes issued yet"}
+                      hint={drillFilter ? "Clear the dashboard filter above to see the full register." : "Create your first authorized dispatch — stock is verified before the pass is issued."}
+                      actionLabel="Create & Authorize Gate Pass"
+                      onAction={() => setIsModalOpen(true)}
+                    />
+                  </td>
+                </tr>
+              )}
+              {visiblePasses.map((gp) => (
                 <tr key={gp.id} className="hover:bg-muted/30 transition-colors">
                   <td className="py-3 font-bold text-foreground">
                     <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">
@@ -263,19 +379,31 @@ export default function GatePassPage() {
                     {formatWeight(gp.total_weight_kg)}
                   </td>
                   <td className="py-3 text-center">
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20">
-                      Dispatched
+                    <span className={gp.status === "reversed" ? "px-2 py-0.5 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase border border-red-500/20" : "px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20"}>
+                      {gp.status === "reversed" ? "Reversed" : "Dispatched"}
                     </span>
                   </td>
                   <td className="py-3 text-center">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPassForPrint(gp)}
-                      className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                      title="Print A4 Gate Pass"
-                    >
-                      <Printer className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPassForPrint(gp)}
+                        className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                        title="Print A4 Gate Pass"
+                      >
+                        <Printer className="h-4 w-4" />
+                      </button>
+                      {gp.status === "posted" && (
+                        <button
+                          type="button"
+                          onClick={() => setReversalTarget(gp)}
+                          className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer"
+                          title="Reverse this dispatched pass (requires a reason)"
+                        >
+                          Reverse
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -308,6 +436,7 @@ export default function GatePassPage() {
             </div>
 
             <form onSubmit={handleIssueGatePass} className="space-y-4 text-xs">
+              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1">Customer / Consignee</label>
@@ -502,10 +631,11 @@ export default function GatePassPage() {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Authorize & Deduct Stock</span>
+                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+                  <span>{isPending ? "Authorizing…" : "Authorize & Deduct Stock"}</span>
                 </button>
               </div>
             </form>
@@ -622,6 +752,23 @@ export default function GatePassPage() {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={showPostConfirm}
+        title="Authorize this gate pass?"
+        description={draftPass ? `${draftPass.pass_no} will deduct ${formatWeight(draftPass.total_weight_kg)} (${formatBags(draftPass.total_bags)}) from ${draftPass.godown_name || "the dispatch godown"} for vehicle ${draftPass.vehicle_no}. A posted pass can only be changed by reversal.` : ""}
+        confirmLabel="Authorize & Deduct Stock"
+        pending={isPending}
+        onConfirm={handleConfirmPost}
+        onCancel={() => { setShowPostConfirm(false); setDraftPass(null) }}
+      />
+      <ReversalDialog
+        open={!!reversalTarget}
+        voucherLabel={reversalTarget?.pass_no ?? ""}
+        note="Compensating inward ledger rows will restore the dispatched stock. The pass number will never be reused."
+        pending={isReversing}
+        onConfirm={handleConfirmReversal}
+        onCancel={() => setReversalTarget(null)}
+      />
     </div>
   )
 }
