@@ -22,6 +22,7 @@ import {
 import { GodownStore } from "@/lib/services/godown-store"
 import { DashboardMetrics, StockLedgerEntry } from "@/lib/types/database"
 import { formatCurrency, formatWeight, formatBags, formatDateTime } from "@/lib/utils"
+import { PageSkeleton } from "@/components/erp-ui"
 
 export default function DashboardPage() {
   const [metrics, setMetrics] = React.useState<DashboardMetrics | null>(null)
@@ -41,11 +42,7 @@ export default function DashboardPage() {
   }, [loadData])
 
   if (!metrics) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <RefreshCw className="h-6 w-6 text-emerald-500 animate-spin" />
-      </div>
-    )
+    return <PageSkeleton />
   }
 
   return (
@@ -114,8 +111,8 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="pt-2 border-t border-border/50 flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>Arrivals: 1 Truck</span>
-            <Link href="/inward" className="text-primary hover:underline font-semibold flex items-center gap-0.5">
+            <span>Arrivals today: {GodownStore.getInwardVouchers().filter((v) => v.date.startsWith(new Date().toISOString().slice(0, 10)) && v.status === "posted").length} voucher{GodownStore.getInwardVouchers().filter((v) => v.date.startsWith(new Date().toISOString().slice(0, 10)) && v.status === "posted").length === 1 ? "" : "s"}</span>
+            <Link href="/inward?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">
               <span>View Bilty</span>
               <ArrowUpRight className="h-3 w-3" />
             </Link>
@@ -144,8 +141,8 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="pt-2 border-t border-border/50 flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>By-products: 550 kg</span>
-            <Link href="/production" className="text-primary hover:underline font-semibold flex items-center gap-0.5">
+            <span>By-products today: {formatWeight(GodownStore.getBatches().filter((b) => b.date.startsWith(new Date().toISOString().slice(0, 10)) && b.status === "posted").reduce((a, b) => a + (b.byproduct_kg || 0), 0))}</span>
+            <Link href="/production?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">
               <span>Batches</span>
               <ArrowUpRight className="h-3 w-3" />
             </Link>
@@ -174,8 +171,8 @@ export default function DashboardPage() {
             </div>
           </div>
           <div className="pt-2 border-t border-border/50 flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>Vehicle: LES-4419</span>
-            <Link href="/gatepass" className="text-primary hover:underline font-semibold flex items-center gap-0.5">
+            <span>Latest pass: {GodownStore.getGatePasses().find((g) => g.status === "posted")?.pass_no ?? "—"}</span>
+            <Link href="/gatepass?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">
               <span>Gate Register</span>
               <ArrowUpRight className="h-3 w-3" />
             </Link>
@@ -205,13 +202,30 @@ export default function DashboardPage() {
           </div>
           <div className="pt-2 border-t border-border/50 flex items-center justify-between text-[11px] text-muted-foreground">
             <span className="text-emerald-500 font-medium">Daybook Reconciled</span>
-            <Link href="/daybook" className="text-primary hover:underline font-semibold flex items-center gap-0.5">
+            <Link href="/daybook?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">
               <span>Daybook</span>
               <ArrowUpRight className="h-3 w-3" />
             </Link>
           </div>
         </div>
       </div>
+
+      {/* Stock-alert drill-down (spec §2.2): visible only when something is low */}
+      {metrics.lowStockItemsCount > 0 && (
+        <Link
+          href="/inventory?filter=low"
+          className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs font-medium text-amber-700 dark:text-amber-400 hover:bg-amber-500/15 transition-colors"
+        >
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>
+            <strong>{metrics.lowStockItemsCount} product{metrics.lowStockItemsCount === 1 ? "" : "s"} at or below minimum stock.</strong>{" "}
+            View the low-stock list in Stock &amp; Godowns.
+          </span>
+          <span className="ml-auto font-semibold flex items-center gap-0.5">
+            View low stock <ArrowUpRight className="h-3.5 w-3.5" />
+          </span>
+        </Link>
+      )}
 
       {/* Secondary Row: Godowns Overview & Quick Stats */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -250,6 +264,13 @@ export default function DashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/40">
+                  {stockSummary.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center text-muted-foreground">
+                        No products in master data yet. Add products in Master Data to see live stock here.
+                      </td>
+                    </tr>
+                  )}
                   {stockSummary.map((item) => (
                     <tr key={item.id} className="hover:bg-muted/30 transition-colors">
                       <td className="py-2.5 font-medium text-foreground">
@@ -300,6 +321,11 @@ export default function DashboardPage() {
             </div>
 
             <div className="space-y-3">
+              {metrics.recentMovements.length === 0 && (
+                <p className="text-xs text-muted-foreground py-4 text-center">
+                  No stock movements yet. Post an inward voucher to start the ledger trail.
+                </p>
+              )}
               {metrics.recentMovements.map((entry: StockLedgerEntry) => {
                 const isInward = entry.inward_qty > 0
                 return (
@@ -379,11 +405,21 @@ export default function DashboardPage() {
               </div>
             </div>
 
+            <Link
+              href="/payroll?filter=unpaid"
+              className="mt-3 flex items-center justify-between p-3 rounded-lg bg-card/60 border border-border/50 hover:bg-muted/40 transition-colors"
+            >
+              <span className="text-xs text-muted-foreground font-medium">Payroll due (unpaid periods)</span>
+              <span className="text-xs font-bold text-foreground flex items-center gap-1">
+                Open payroll <ArrowUpRight className="h-3.5 w-3.5 text-primary" />
+              </span>
+            </Link>
+
             <div className="mt-4 pt-3 border-t border-border/60 flex items-center justify-between text-xs">
-              <Link href="/billing" className="text-primary hover:underline font-semibold">
+              <Link href="/billing?filter=receivable" className="text-primary hover:underline font-semibold">
                 Customer Invoices
               </Link>
-              <Link href="/purchases" className="text-primary hover:underline font-semibold">
+              <Link href="/purchases?filter=payable" className="text-primary hover:underline font-semibold">
                 Vendor Bills
               </Link>
             </div>

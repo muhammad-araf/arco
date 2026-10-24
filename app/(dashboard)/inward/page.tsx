@@ -17,6 +17,18 @@ import {
 import { GodownStore } from "@/lib/services/godown-store"
 import { IncomingGoodsVoucher, IncomingGoodsItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatCurrency, formatDate } from "@/lib/utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  EmptyState,
+  FilterBanner,
+  PageSkeleton,
+  ReversalDialog,
+  SubmitSpinner,
+  getUrlFilter,
+  isPositive,
+  isTodayISO,
+} from "@/components/erp-ui"
 
 export default function InwardPage() {
   const [vouchers, setVouchers] = React.useState<IncomingGoodsVoucher[]>([])
@@ -27,6 +39,16 @@ export default function InwardPage() {
   // Modal / Form state
   const [isFormOpen, setIsFormOpen] = React.useState(false)
   const [selectedVoucherForPrint, setSelectedVoucherForPrint] = React.useState<IncomingGoodsVoucher | null>(null)
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [formError, setFormError] = React.useState("")
+  const [formNotice, setFormNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showPostConfirm, setShowPostConfirm] = React.useState(false)
+  const [draftVoucher, setDraftVoucher] = React.useState<IncomingGoodsVoucher | null>(null)
+  const [reversalTarget, setReversalTarget] = React.useState<IncomingGoodsVoucher | null>(null)
+  const [isReversing, setIsReversing] = React.useState(false)
+  const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
+  const postGuard = React.useRef(false)
 
   // Form Fields
   const [partyId, setPartyId] = React.useState("")
@@ -57,6 +79,8 @@ export default function InwardPage() {
 
   React.useEffect(() => {
     loadData()
+    setDrillFilter(getUrlFilter())
+    setIsLoading(false)
     window.addEventListener("arco-godown-data-updated", loadData)
     return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
@@ -107,12 +131,25 @@ export default function InwardPage() {
 
   const handleSubmitVoucher = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!partyId || !godownId) return
+    if (isPending) return
+    // Spec §4.3: required fields + positive quantities blocked with an
+    // actionable message — never a silent return.
+    if (!partyId) return setFormError("Select a supplier / source before posting. Add one in Master Data if the list is empty.")
+    if (!godownId) return setFormError("Select the target godown that will receive this stock.")
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (!item.productId) return setFormError(`Line ${i + 1}: select a product.`)
+      if (!isPositive(Number(item.bags))) return setFormError(`Line ${i + 1}: bags must be greater than zero.`)
+      if (!isPositive(Number(item.grossWeight))) return setFormError(`Line ${i + 1}: gross weight must be greater than zero.`)
+      if (Number(item.tareWeight) < 0) return setFormError(`Line ${i + 1}: tare weight cannot be negative.`)
+      if (Number(item.tareWeight) >= Number(item.grossWeight)) return setFormError(`Line ${i + 1}: tare weight must be less than gross weight, otherwise net weight is zero.`)
+      if (Number(item.rate) < 0) return setFormError(`Line ${i + 1}: rate cannot be negative.`)
+    }
+    setFormError("")
 
     const selectedParty = parties.find((p) => p.id === partyId)
     const selectedGodown = godowns.find((g) => g.id === godownId)
     const voucherNo = `INW-2026-${String(vouchers.length + 1).padStart(3, "0")}`
-
     const voucherItems: IncomingGoodsItem[] = items.map((item, idx) => {
       const prod = products.find((p) => p.id === item.productId)
       const netWeight = Math.max(0, item.grossWeight - item.tareWeight)
@@ -129,8 +166,7 @@ export default function InwardPage() {
         total_value: netWeight * Number(item.rate),
       }
     })
-
-    const newVoucher: IncomingGoodsVoucher = {
+    setDraftVoucher({
       id: `inw-${Date.now()}`,
       voucher_no: voucherNo,
       date: new Date().toISOString(),
@@ -150,15 +186,92 @@ export default function InwardPage() {
       items: voucherItems,
       created_at: new Date().toISOString(),
       posted_at: new Date().toISOString(),
-    }
-
-    GodownStore.postInwardVoucher(newVoucher)
-    setIsFormOpen(false)
-    setSelectedVoucherForPrint(newVoucher)
+    })
+    setShowPostConfirm(true)
   }
+
+  const handleConfirmPost = () => {
+    if (!draftVoucher || postGuard.current) return
+    postGuard.current = true
+    setIsPending(true)
+    try {
+      GodownStore.postInwardVoucher(draftVoucher)
+      setFormNotice(`${draftVoucher.voucher_no} posted — ${formatWeight(draftVoucher.total_net_weight_kg)} added to ${draftVoucher.godown_name || "the godown"}.`)
+      setSelectedVoucherForPrint(draftVoucher)
+    } finally {
+      setIsPending(false)
+      postGuard.current = false
+      setShowPostConfirm(false)
+      setIsFormOpen(false)
+      setDraftVoucher(null)
+    }
+  }
+
+  // Spec §1.1: a posted voucher is never silently deleted. Reversal keeps
+  // the voucher visible as "reversed" and writes compensating outward
+  // ledger rows so the stock position is restored, with reason on record.
+  const handleConfirmReversal = (reasonCode: string, reason: string) => {
+    if (!reversalTarget || isReversing) return
+    setIsReversing(true)
+    try {
+      const state = (GodownStore as any).getState()
+      const now = new Date().toISOString()
+      // Track a running balance per product so multi-line reversals of
+      // the same product still show correct sequential balances.
+      const runningByProduct: Record<string, number> = {}
+      const rows = reversalTarget.items.map((item, idx) => {
+        if (runningByProduct[item.product_id] === undefined) {
+          runningByProduct[item.product_id] = GodownStore.getProductStock(item.product_id, reversalTarget.godown_id)
+        }
+        runningByProduct[item.product_id] -= item.net_weight_kg
+        const current = runningByProduct[item.product_id]
+        return {
+          id: `stk-rev-${Date.now()}-${idx}`,
+          date: now,
+          voucher_type: "adjustment",
+          voucher_id: reversalTarget.id,
+          voucher_no: reversalTarget.voucher_no,
+          godown_id: reversalTarget.godown_id,
+          godown_name: reversalTarget.godown_name,
+          product_id: item.product_id,
+          product_name: item.product_name,
+          party_id: reversalTarget.party_id,
+          party_name: reversalTarget.party_name,
+          inward_qty: 0,
+          outward_qty: item.net_weight_kg,
+          unit: "kg",
+          running_balance: current,
+          notes: `Reversal of ${reversalTarget.voucher_no} [${reasonCode}]: ${reason}`,
+          created_at: now,
+        }
+      })
+      state.stockLedger = [...rows, ...state.stockLedger]
+      state.inwardVouchers = state.inwardVouchers.map((v: IncomingGoodsVoucher) =>
+        v.id === reversalTarget.id
+          ? { ...v, status: "reversed" as const, notes: `${v.notes ? v.notes + " | " : ""}Reversed [${reasonCode}]: ${reason}` }
+          : v
+      )
+      ;(GodownStore as any).saveState(state)
+      setFormNotice(`${reversalTarget.voucher_no} reversed — stock restored. Reason recorded: ${reasonCode}.`)
+      setReversalTarget(null)
+    } finally {
+      setIsReversing(false)
+    }
+  }
+
+  const visibleVouchers = drillFilter === "today"
+    ? vouchers.filter((v) => isTodayISO(v.date))
+    : drillFilter === "posted"
+      ? vouchers.filter((v) => v.status === "posted")
+      : vouchers
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
+      <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -186,7 +299,7 @@ export default function InwardPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <FileText className="h-4 w-4 text-emerald-500" />
-            Posted Inward Vouchers ({vouchers.length})
+            Posted Inward Vouchers ({visibleVouchers.length})
           </h2>
           <span className="text-xs text-muted-foreground">Immutable Stock Ledger Receipts</span>
         </div>
@@ -207,13 +320,25 @@ export default function InwardPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
-              {vouchers.map((v) => (
+              {visibleVouchers.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="py-4">
+                    <EmptyState
+                      title={drillFilter ? "No vouchers match this filter" : "No inward vouchers yet"}
+                      hint={drillFilter ? "Clear the dashboard filter above, or record a new arrival." : "Record your first truck arrival — it posts straight to the stock ledger."}
+                      actionLabel="New Receiving Voucher"
+                      onAction={() => setIsFormOpen(true)}
+                    />
+                  </td>
+                </tr>
+              )}
+              {visibleVouchers.map((v) => (
                 <tr key={v.id} className="hover:bg-muted/30 transition-colors">
                   <td className="py-3 font-bold text-foreground">
                     <div className="flex items-center gap-1.5">
                       <span>{v.voucher_no}</span>
-                      <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase">
-                        Posted
+                      <span className={v.status === "reversed" ? "px-1.5 py-0.2 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase" : "px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase"}>
+                        {v.status === "reversed" ? "Reversed" : "Posted"}
                       </span>
                     </div>
                   </td>
@@ -234,14 +359,26 @@ export default function InwardPage() {
                     {formatCurrency(v.total_value || 0)}
                   </td>
                   <td className="py-3 text-center">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedVoucherForPrint(v)}
-                      className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                      title="Print Inward Receiving Slip"
-                    >
-                      <Printer className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedVoucherForPrint(v)}
+                        className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                        title="Print Inward Receiving Slip"
+                      >
+                        <Printer className="h-4 w-4" />
+                      </button>
+                      {v.status === "posted" && (
+                        <button
+                          type="button"
+                          onClick={() => setReversalTarget(v)}
+                          className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer"
+                          title="Reverse this posted voucher (requires a reason)"
+                        >
+                          Reverse
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -274,6 +411,7 @@ export default function InwardPage() {
             </div>
 
             <form onSubmit={handleSubmitVoucher} className="space-y-5 pt-4">
+              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               {/* Header Details Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
                 <div>
@@ -491,10 +629,11 @@ export default function InwardPage() {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Post & Update Stock Ledger</span>
+                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+                  <span>{isPending ? "Posting…" : "Post & Update Stock Ledger"}</span>
                 </button>
               </div>
             </form>
@@ -595,6 +734,23 @@ export default function InwardPage() {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={showPostConfirm}
+        title="Post this inward voucher?"
+        description={draftVoucher ? `${draftVoucher.voucher_no} will add ${formatWeight(draftVoucher.total_net_weight_kg)} (${formatBags(draftVoucher.total_bags)}) to ${draftVoucher.godown_name || "the selected godown"} and write one stock-ledger row per line. Posted vouchers can only be changed by reversal.` : ""}
+        confirmLabel="Post & Update Stock Ledger"
+        pending={isPending}
+        onConfirm={handleConfirmPost}
+        onCancel={() => { setShowPostConfirm(false); setDraftVoucher(null) }}
+      />
+      <ReversalDialog
+        open={!!reversalTarget}
+        voucherLabel={reversalTarget?.voucher_no ?? ""}
+        note="Compensating outward ledger rows will restore the stock position."
+        pending={isReversing}
+        onConfirm={handleConfirmReversal}
+        onCancel={() => setReversalTarget(null)}
+      />
     </div>
   )
 }
