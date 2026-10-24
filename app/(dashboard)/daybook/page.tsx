@@ -13,7 +13,8 @@ import {
   CheckCircle2,
   CreditCard,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { getDaybook, listExpenses, createExpense, postExpense, reverseExpense, listCashAccounts } from "@/app/actions/finance"
+import { DaybookPrint, PrintButton } from "@/components/print"
 import { ExpenseVoucher, CashLedgerEntry } from "@/lib/types/database"
 import { formatCurrency, formatDateTime, formatDate } from "@/lib/utils"
 import {
@@ -22,6 +23,7 @@ import {
   EmptyState,
   FilterBanner,
   PageSkeleton,
+  ReversalDialog,
   SubmitSpinner,
   getUrlFilter,
   isPositive,
@@ -31,6 +33,13 @@ import {
 export default function DaybookPage() {
   const [cashLedger, setCashLedger] = React.useState<CashLedgerEntry[]>([])
   const [expenses, setExpenses] = React.useState<ExpenseVoucher[]>([])
+  const [daybook, setDaybook] = React.useState<any | null>(null)
+  const [cashClosing, setCashClosing] = React.useState(0)
+  const [bankClosing, setBankClosing] = React.useState(0)
+  const [fromDate, setFromDate] = React.useState(() => new Date().toISOString().slice(0, 8) + "01")
+  const [toDate, setToDate] = React.useState(() => new Date().toISOString().slice(0, 10))
+  const [expReverseTarget, setExpReverseTarget] = React.useState<any | null>(null)
+  const [expReversing, setExpReversing] = React.useState(false)
 
   // Expense Modal
   const [isExpenseModalOpen, setIsExpenseModalOpen] = React.useState(false)
@@ -48,23 +57,34 @@ export default function DaybookPage() {
   const [paymentMethod, setPaymentMethod] = React.useState<"cash" | "bank">("cash")
   const [description, setDescription] = React.useState("")
 
-  const loadData = React.useCallback(() => {
-    setCashLedger(GodownStore.getCashLedger())
-    setExpenses(GodownStore.getExpenses())
-  }, [])
+  const loadData = React.useCallback(async () => {
+    setIsLoading(true)
+    const [cash, bank, ex] = await Promise.all([
+      getDaybook({ accountKind: "cash", from: fromDate, to: toDate }),
+      getDaybook({ accountKind: "bank", from: fromDate, to: toDate }),
+      listExpenses({}),
+    ])
+    const failed = [cash, bank, ex].find((x) => !x.success)
+    if (failed) setFormError(failed.error ?? "Could not load daybook data.")
+    setCashClosing(Number((cash.data as any)?.closing || 0))
+    setBankClosing(Number((bank.data as any)?.closing || 0))
+    const entries = [
+      ...((cash.data as any)?.entries ?? []).map((e: any) => ({ ...e, account: "cash", description: e.description ?? e.voucher_no })),
+      ...((bank.data as any)?.entries ?? []).map((e: any) => ({ ...e, account: "bank", description: e.description ?? e.voucher_no })),
+    ].sort((a, b) => String(b.date).localeCompare(String(a.date)))
+    setCashLedger(entries as any)
+    setDaybook({ cash: cash.data, bank: bank.data, opening: Number((cash.data as any)?.opening || 0) + Number((bank.data as any)?.opening || 0), closing: Number((cash.data as any)?.closing || 0) + Number((bank.data as any)?.closing || 0) })
+    setExpenses(Array.isArray(ex.data) ? ex.data : [])
+    setIsLoading(false)
+  }, [fromDate, toDate])
 
   React.useEffect(() => {
     loadData()
     setDrillFilter(getUrlFilter())
-    setIsLoading(false)
-    window.addEventListener("arco-godown-data-updated", loadData)
-    return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
 
-  const cashRows = cashLedger.filter((c) => c.account === "cash")
-  const bankRows = cashLedger.filter((c) => c.account === "bank")
-  const currentCashBalance = cashRows.length > 0 ? cashRows[cashRows.length - 1].running_balance : 455000
-  const currentBankBalance = bankRows.length > 0 ? bankRows[bankRows.length - 1].running_balance : 2450000
+  const currentCashBalance = cashClosing
+  const currentBankBalance = bankClosing
 
   const handleAddExpense = (e: React.FormEvent) => {
     e.preventDefault()
@@ -92,20 +112,46 @@ export default function DaybookPage() {
     setShowConfirm(true)
   }
 
-  const handleConfirmExpense = () => {
+  const handleConfirmExpense = async () => {
     if (!draftExpense || expenseGuard.current) return
     expenseGuard.current = true
     setIsPending(true)
     try {
-      GodownStore.addExpense(draftExpense)
-      setFormNotice(`${draftExpense.expense_no} posted — ${formatCurrency(draftExpense.amount)} for ${draftExpense.category_name} (${draftExpense.payment_method}).`)
-    } finally {
-      setIsPending(false)
-      expenseGuard.current = false
+      const created = await createExpense({
+        categoryName, payee: payee.trim(), amount, paymentMethod,
+        description: description.trim(), settlement: "paid", clientToken: `expense-${Date.now()}`,
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not create the expense.")
+        return
+      }
+      const posted = await postExpense((created.data as any).id)
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the expense.")
+        return
+      }
+      const row: any = posted.data ?? created.data
+      setFormNotice(`${row.expense_no ?? draftExpense.expense_no} posted — ${formatCurrency(amount)} for ${categoryName} (${paymentMethod}).`)
       setShowConfirm(false)
       setIsExpenseModalOpen(false)
       setDraftExpense(null)
+      await loadData()
+    } finally {
+      setIsPending(false)
+      expenseGuard.current = false
     }
+  }
+
+  const handleExpenseReverse = async (reasonCode: string, reason: string) => {
+    if (!expReverseTarget || expReversing) return
+    setExpReversing(true)
+    try {
+      const res = await reverseExpense(expReverseTarget.id, `${reasonCode}: ${reason}`)
+      if (!res.success) { setFormError(res.error ?? "Could not reverse the expense."); return }
+      setFormNotice(`Expense ${expReverseTarget.expense_no} reversed.`)
+      setExpReverseTarget(null)
+      await loadData()
+    } finally { setExpReversing(false) }
   }
 
   const visibleLedger = drillFilter === "today"
@@ -367,6 +413,36 @@ export default function DaybookPage() {
           </div>
         </div>
       )}
+      <div className="expensive-card p-4 flex flex-wrap items-end gap-3 text-xs">
+        <div><label className="block font-medium text-foreground mb-1">From</label><input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+        <div><label className="block font-medium text-foreground mb-1">To</label><input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+        <button type="button" onClick={loadData} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer">Load daybook</button>
+        <span className="text-muted-foreground">Daybook is per account and date range (getDaybook). Cash + bank closings above come from those two calls; transfers are included in the entries.</span>
+      </div>
+      <div className="expensive-card p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold text-foreground">Expenses in range</h2>
+          <PrintButton label="Print daybook" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
+        </div>
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Expense</th><th className="pb-2">Category</th><th className="pb-2">Payee</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
+          <tbody className="divide-y divide-border/40">
+            {expenses.length === 0 && <tr><td colSpan={5} className="py-4 text-muted-foreground">No expenses recorded yet.</td></tr>}
+            {expenses.map((e: any) => (<tr key={e.id}><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.status === "posted" && (<button type="button" onClick={() => setExpReverseTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
+          </tbody></table></div>
+        {daybook && (
+          <div className="hidden print:block mt-2">
+            <DaybookPrint
+              accountName="Cash + Bank"
+              dateFrom={fromDate}
+              dateTo={toDate}
+              openingBalance={daybook.opening}
+              closingBalance={daybook.closing}
+              rows={visibleLedger.map((r: any) => ({ date: r.date, voucherNo: r.voucher_no, voucherType: r.voucher_type, description: r.description, receipt: r.debit, payment: r.credit, balance: r.running_balance }))}
+            />
+          </div>
+        )}
+      </div>
+      <ReversalDialog open={!!expReverseTarget} voucherLabel={expReverseTarget?.expense_no ?? ""} pending={expReversing} onConfirm={handleExpenseReverse} onCancel={() => setExpReverseTarget(null)} />
       <ConfirmDialog
         open={showConfirm}
         title="Post this expense?"
