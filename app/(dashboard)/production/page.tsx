@@ -17,6 +17,18 @@ import {
 import { GodownStore } from "@/lib/services/godown-store"
 import { ProductionBatch, Godown, Product, Machine, Recipe } from "@/lib/types/database"
 import { formatWeight, formatDate } from "@/lib/utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  EmptyState,
+  FilterBanner,
+  PageSkeleton,
+  ReversalDialog,
+  SubmitSpinner,
+  getUrlFilter,
+  isPositive,
+  isTodayISO,
+} from "@/components/erp-ui"
 
 export default function ProductionPage() {
   const [batches, setBatches] = React.useState<ProductionBatch[]>([])
@@ -27,6 +39,16 @@ export default function ProductionPage() {
   // Modal State
   const [isBatchModalOpen, setIsBatchModalOpen] = React.useState(false)
   const [selectedBatchForPrint, setSelectedBatchForPrint] = React.useState<ProductionBatch | null>(null)
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [formError, setFormError] = React.useState("")
+  const [formNotice, setFormNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showPostConfirm, setShowPostConfirm] = React.useState(false)
+  const [draftBatch, setDraftBatch] = React.useState<ProductionBatch | null>(null)
+  const [reversalTarget, setReversalTarget] = React.useState<ProductionBatch | null>(null)
+  const [isReversing, setIsReversing] = React.useState(false)
+  const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
+  const postGuard = React.useRef(false)
 
   // Batch Form State
   const [machineId, setMachineId] = React.useState("")
@@ -49,6 +71,8 @@ export default function ProductionPage() {
 
   React.useEffect(() => {
     loadData()
+    setDrillFilter(getUrlFilter())
+    setIsLoading(false)
     window.addEventListener("arco-godown-data-updated", loadData)
     return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
@@ -70,18 +94,22 @@ export default function ProductionPage() {
 
   const handlePostBatch = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!machineId || !godownId || !inputProductId || !outputProductId) return
-
-    if (inputWeightKg > availableInputStock) {
-      alert(`Insufficient input stock in godown. Available: ${availableInputStock} kg`)
-      return
-    }
-
+    if (isPending) return
+    // Spec §6.2/§6.4: required fields, positive input, mass balance, and
+    // the stock guard — each failure names the fix, never a silent return.
+    if (!machineId) return setFormError("Select the machine / cleaning plant for this batch.")
+    if (!godownId) return setFormError("Select the target godown for this batch.")
+    if (!inputProductId) return setFormError("Select the raw seed input product.")
+    if (!outputProductId) return setFormError("Select the finished output product.")
+    if (!isPositive(inputWeightKg)) return setFormError("Input weight must be greater than zero.")
+    if (outputWeightKg < 0 || byProductKg < 0 || wasteKg < 0) return setFormError("Output, by-product and waste weights cannot be negative.")
+    if (outputWeightKg + byProductKg + wasteKg > inputWeightKg) return setFormError(`Mass balance check failed: output (${outputWeightKg} kg) + by-product (${byProductKg} kg) + waste (${wasteKg} kg) exceeds input (${inputWeightKg} kg). Correct the weights before posting.`)
+    if (inputWeightKg > availableInputStock) return setFormError(`Insufficient input stock in this godown: ${availableInputStock} kg available, but ${inputWeightKg} kg requested. Reduce the batch size or choose another godown.`)
+    setFormError("")
     const selectedMachine = machines.find((m) => m.id === machineId)
     const selectedGodown = godowns.find((g) => g.id === godownId)
     const batchNo = `BAT-2026-${String(batches.length + 1).padStart(3, "0")}`
-
-    const newBatch: ProductionBatch = {
+    setDraftBatch({
       id: `bat-${Date.now()}`,
       batch_no: batchNo,
       date: new Date().toISOString(),
@@ -99,15 +127,91 @@ export default function ProductionPage() {
       notes: batchNotes || undefined,
       created_at: new Date().toISOString(),
       posted_at: new Date().toISOString(),
-    }
-
-    GodownStore.postProductionBatch(newBatch, inputProductId, outputProductId, byProductId)
-    setIsBatchModalOpen(false)
-    setSelectedBatchForPrint(newBatch)
+    })
+    setShowPostConfirm(true)
   }
+
+  const handleConfirmPost = () => {
+    if (!draftBatch || postGuard.current) return
+    postGuard.current = true
+    setIsPending(true)
+    try {
+      GodownStore.postProductionBatch(draftBatch, inputProductId, outputProductId, byProductId)
+      setFormNotice(`${draftBatch.batch_no} posted — ${formatWeight(draftBatch.actual_input_kg)} input deducted, ${formatWeight(draftBatch.actual_output_kg)} output added at ${draftBatch.yield_pct}% yield.`)
+      setSelectedBatchForPrint(draftBatch)
+    } finally {
+      setIsPending(false)
+      postGuard.current = false
+      setShowPostConfirm(false)
+      setIsBatchModalOpen(false)
+      setDraftBatch(null)
+    }
+  }
+
+  // Spec §1.1: reversal never deletes. The batch keeps its row as
+  // "reversed" and every ledger row it posted is inverted (consumed
+  // input is restored, produced output is removed), with reason recorded.
+  // Ledger rows are the source of truth here because the batch record
+  // itself does not store input/output product ids.
+  const handleConfirmReversal = (reasonCode: string, reason: string) => {
+    if (!reversalTarget || isReversing) return
+    setIsReversing(true)
+    try {
+      const state = (GodownStore as any).getState()
+      const now = new Date().toISOString()
+      const postedRows = state.stockLedger.filter((e: any) => e.voucher_id === reversalTarget.id)
+      const runningByProduct: Record<string, number> = {}
+      const rows = postedRows.map((e: any, idx: number) => {
+        if (runningByProduct[e.product_id] === undefined) {
+          runningByProduct[e.product_id] = GodownStore.getProductStock(e.product_id, reversalTarget.godown_id)
+        }
+        const net = (e.inward_qty || 0) - (e.outward_qty || 0)
+        runningByProduct[e.product_id] -= net
+        return {
+          id: `stk-batrev-${Date.now()}-${idx}`,
+          date: now,
+          voucher_type: "adjustment",
+          voucher_id: reversalTarget.id,
+          voucher_no: reversalTarget.batch_no,
+          godown_id: reversalTarget.godown_id,
+          godown_name: reversalTarget.godown_name,
+          product_id: e.product_id,
+          product_name: e.product_name,
+          inward_qty: e.outward_qty || 0,
+          outward_qty: e.inward_qty || 0,
+          unit: "kg",
+          running_balance: runningByProduct[e.product_id],
+          notes: `Reversal of ${reversalTarget.batch_no} [${reasonCode}]: ${reason}`,
+          created_at: now,
+        }
+      })
+      state.stockLedger = [...rows, ...state.stockLedger]
+      state.batches = state.batches.map((b: ProductionBatch) =>
+        b.id === reversalTarget.id
+          ? { ...b, status: "reversed" as const, notes: `${b.notes ? b.notes + " | " : ""}Reversed [${reasonCode}]: ${reason}` }
+          : b
+      )
+      ;(GodownStore as any).saveState(state)
+      setFormNotice(`${reversalTarget.batch_no} reversed — posted stock movements inverted. Reason recorded: ${reasonCode}.`)
+      setReversalTarget(null)
+    } finally {
+      setIsReversing(false)
+    }
+  }
+
+  const visibleBatches = drillFilter === "today"
+    ? batches.filter((b) => isTodayISO(b.date))
+    : drillFilter === "posted"
+      ? batches.filter((b) => b.status === "posted")
+      : batches
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
+      <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -135,7 +239,7 @@ export default function ProductionPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <Boxes className="h-4 w-4 text-emerald-500" />
-            Executed Processing Batches ({batches.length})
+            Executed Processing Batches ({visibleBatches.length})
           </h2>
           <span className="text-xs text-muted-foreground">Immutable Ledger Stock Deductions & Output Additions</span>
         </div>
@@ -156,13 +260,25 @@ export default function ProductionPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/40">
-              {batches.map((b) => (
+              {visibleBatches.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="py-4">
+                    <EmptyState
+                      title={drillFilter ? "No batches match this filter" : "No production batches yet"}
+                      hint={drillFilter ? "Clear the dashboard filter above to see the full run history." : "Execute your first batch — input is deducted and graded output is added to stock on posting."}
+                      actionLabel="Execute Production Batch"
+                      onAction={() => setIsBatchModalOpen(true)}
+                    />
+                  </td>
+                </tr>
+              )}
+              {visibleBatches.map((b) => (
                 <tr key={b.id} className="hover:bg-muted/30 transition-colors">
                   <td className="py-3 font-bold text-foreground">
                     <div className="flex items-center gap-1.5">
                       <span>{b.batch_no}</span>
-                      <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase">
-                        Posted
+                      <span className={b.status === "reversed" ? "px-1.5 py-0.2 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase" : "px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase"}>
+                        {b.status === "reversed" ? "Reversed" : "Posted"}
                       </span>
                     </div>
                   </td>
@@ -185,14 +301,26 @@ export default function ProductionPage() {
                     </span>
                   </td>
                   <td className="py-3 text-center">
-                    <button
-                      type="button"
-                      onClick={() => setSelectedBatchForPrint(b)}
-                      className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                      title="Print Production Batch Sheet"
-                    >
-                      <Printer className="h-4 w-4" />
-                    </button>
+                    <div className="flex items-center justify-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedBatchForPrint(b)}
+                        className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                        title="Print Production Batch Sheet"
+                      >
+                        <Printer className="h-4 w-4" />
+                      </button>
+                      {b.status === "posted" && (
+                        <button
+                          type="button"
+                          onClick={() => setReversalTarget(b)}
+                          className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer"
+                          title="Reverse this posted batch (requires a reason)"
+                        >
+                          Reverse
+                        </button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -225,6 +353,7 @@ export default function ProductionPage() {
             </div>
 
             <form onSubmit={handlePostBatch} className="space-y-4 text-xs">
+              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1">Machine / Cleaning Plant</label>
@@ -408,10 +537,11 @@ export default function ProductionPage() {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Post Batch Run & Update Ledgers</span>
+                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+                  <span>{isPending ? "Posting…" : "Post Batch Run & Update Ledgers"}</span>
                 </button>
               </div>
             </form>
@@ -516,6 +646,23 @@ export default function ProductionPage() {
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={showPostConfirm}
+        title="Post this production batch?"
+        description={draftBatch ? `${draftBatch.batch_no} will deduct ${formatWeight(draftBatch.actual_input_kg)} of input, add ${formatWeight(draftBatch.actual_output_kg)} of graded output (${draftBatch.yield_pct}% yield) and ${formatWeight(draftBatch.byproduct_kg)} of by-product. A posted batch can only be changed by reversal.` : ""}
+        confirmLabel="Post Batch Run & Update Ledgers"
+        pending={isPending}
+        onConfirm={handleConfirmPost}
+        onCancel={() => { setShowPostConfirm(false); setDraftBatch(null) }}
+      />
+      <ReversalDialog
+        open={!!reversalTarget}
+        voucherLabel={reversalTarget?.batch_no ?? ""}
+        note="Every stock movement this batch posted will be inverted."
+        pending={isReversing}
+        onConfirm={handleConfirmReversal}
+        onCancel={() => setReversalTarget(null)}
+      />
     </div>
   )
 }
