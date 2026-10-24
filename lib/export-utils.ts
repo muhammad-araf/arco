@@ -42,3 +42,130 @@ export function exportToCSV<T extends Record<string, any>>(
   document.body.removeChild(link)
   URL.revokeObjectURL(url)
 }
+
+/* ------------------------------------------------------------------ */
+/* Report exports (spec §16): every report exports with its title,    */
+/* date range, filter labels, header row and a totals row, in an      */
+/* Excel-compatible CSV (UTF-8 BOM + CRLF + RFC 4180 quoting).        */
+/* exportToCSV above is intentionally left untouched so existing      */
+/* callers keep their exact behaviour.                                */
+/* ------------------------------------------------------------------ */
+
+export interface ExportColumn<T extends Record<string, any>> {
+  key: keyof T
+  label: string
+  /** Convert a raw cell value before quoting (e.g. format a number). */
+  format?: (value: T[keyof T], row: T) => string | number | null | undefined
+}
+
+export interface ReportExportOptions<T extends Record<string, any>> {
+  /** Report title printed as the first line of the file. */
+  title?: string
+  /** e.g. "2026-10-01 to 2026-10-24" — printed as a label line. */
+  dateRange?: string
+  /** Filter labels, as strings ("Godown: Main") or a key/value map. */
+  filters?: string[] | Record<string, string>
+  /** Totals row, keyed by column key; other columns stay blank. */
+  totals?: Partial<Record<keyof T, string | number>>
+  totalsLabel?: string
+  /** Excel needs the BOM to read UTF-8 correctly. Defaults to true. */
+  includeBom?: boolean
+}
+
+/** RFC 4180 quoting: wrap in quotes when needed, double inner quotes. */
+export function escapeCsvValue(value: unknown): string {
+  if (value === null || value === undefined) return ""
+  if (typeof value === "object") return escapeCsvValue(JSON.stringify(value))
+  const s = String(value)
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`
+  return s
+}
+
+function cellValue<T extends Record<string, any>>(
+  row: T,
+  column: ExportColumn<T>
+): string | number | null | undefined {
+  const raw = row[column.key]
+  return column.format ? column.format(raw, row) : raw
+}
+
+/**
+ * Pure CSV builder (no DOM): title, date-range and filter label lines,
+ * then the header row, data rows, and a totals row when totals are
+ * given. Safe to call with empty data — headers and totals still emit
+ * when columns are supplied.
+ */
+export function buildCsvString<T extends Record<string, any>>(
+  data: T[],
+  columns?: ExportColumn<T>[],
+  options?: ReportExportOptions<T>
+): string {
+  const rows = Array.isArray(data) ? data : []
+  const cols = columns ?? (rows[0] ? (Object.keys(rows[0]) as (keyof T)[]).map((key) => ({ key, label: String(key) })) : [])
+  if (cols.length === 0) return ""
+
+  const lines: string[] = []
+  if (options?.title) lines.push(escapeCsvValue(options.title))
+  if (options?.dateRange) lines.push(escapeCsvValue(`Date range: ${options.dateRange}`))
+  if (options?.filters) {
+    const filters = Array.isArray(options.filters)
+      ? options.filters
+      : Object.entries(options.filters).map(([k, v]) => `${k}: ${v}`)
+    filters.forEach((f) => lines.push(escapeCsvValue(f)))
+  }
+  if (lines.length > 0) lines.push("")
+
+  lines.push(cols.map((c) => escapeCsvValue(c.label)).join(","))
+  rows.forEach((row) => {
+    lines.push(cols.map((c) => escapeCsvValue(cellValue(row, c))).join(","))
+  })
+
+  if (options?.totals) {
+    const totals = options.totals
+    lines.push(
+      cols
+        .map((c, i) => {
+          if (i === 0) return escapeCsvValue(options.totalsLabel ?? "Total")
+          const v = totals[c.key]
+          return escapeCsvValue(v === undefined ? "" : v)
+        })
+        .join(",")
+    )
+  }
+
+  const bom = options?.includeBom === false ? "" : "\uFEFF"
+  return bom + lines.join("\r\n")
+}
+
+function downloadCsv(csvString: string, filename: string) {
+  const safeName = filename.replace(/[\\/:*?"<>|]/g, "_")
+  const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.setAttribute("href", url)
+  link.setAttribute("download", `${safeName}_${new Date().toISOString().slice(0, 10)}.csv`)
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+/**
+ * Download a report as an Excel-compatible CSV. Returns false (and
+ * alerts, matching exportToCSV) when there is nothing to export —
+ * i.e. no rows and no columns to build headers from.
+ */
+export function exportReportToCsv<T extends Record<string, any>>(
+  data: T[],
+  filename: string,
+  columns?: ExportColumn<T>[],
+  options?: ReportExportOptions<T>
+): boolean {
+  const csvString = buildCsvString(data, columns, options)
+  if (!csvString) {
+    alert("No data available to export.")
+    return false
+  }
+  downloadCsv(csvString, filename)
+  return true
+}
