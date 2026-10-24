@@ -26,6 +26,17 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ThemeToggle } from "./theme-toggle"
+import { getMyProfile, type AppRole } from "@/app/actions/auth"
+
+const ROLE_LABELS: Record<AppRole, string> = {
+  owner_admin: "Owner / Admin",
+  storekeeper: "Storekeeper",
+  production_operator: "Production Operator",
+  gate_operator: "Gate Operator",
+  accountant: "Accountant",
+  hr_payroll: "HR / Payroll",
+  read_only_manager: "Read-only Manager",
+}
 
 interface NavItem {
   title: string
@@ -81,6 +92,17 @@ const navSections: NavSection[] = [
 export function AppSidebar() {
   const pathname = usePathname()
   const [isOpenMobile, setIsOpenMobile] = React.useState(false)
+  const [actorLabel, setActorLabel] = React.useState("Operator")
+  const [actorRole, setActorRole] = React.useState("Not signed in")
+
+  React.useEffect(() => {
+    getMyProfile().then((res) => {
+      if (res.success && res.data) {
+        setActorLabel(res.data.displayName ?? res.data.email ?? "Operator")
+        setActorRole(ROLE_LABELS[res.data.role] ?? res.data.role)
+      }
+    }).catch(() => {})
+  }, [])
 
   React.useEffect(() => {
     if (!isOpenMobile) return
@@ -219,8 +241,8 @@ export function AppSidebar() {
                 <ShieldCheck className="h-4 w-4" />
               </div>
               <div className="min-w-0">
-                <div className="text-xs font-semibold text-foreground truncate">Operator Admin</div>
-                <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Single Role Mode</div>
+                <div className="text-xs font-semibold text-foreground truncate">{actorLabel}</div>
+                <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">{actorRole}</div>
               </div>
             </div>
             <ThemeToggle className="h-8 w-8 shrink-0" />
