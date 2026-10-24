@@ -11,7 +11,8 @@ import {
   Clock,
   UserCheck,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { markAttendance, correctAttendance, listAttendance, listPayroll, runPayroll, approvePayroll, payPayroll, getUnpaidSalaries, getPayrollRegister } from "@/app/actions/payroll"
+import { listEmployees } from "@/app/actions/masters"
 import { Employee, AttendanceRecord, AttendanceStatus } from "@/lib/types/database"
 import { formatCurrency, formatDate } from "@/lib/utils"
 import {
@@ -34,22 +35,42 @@ export default function PayrollPage() {
   const [isPending, setIsPending] = React.useState(false)
   const [showConfirm, setShowConfirm] = React.useState(false)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
+  const [periods, setPeriods] = React.useState<any[]>([])
+  const [unpaid, setUnpaid] = React.useState<any[]>([])
+  const [unpaidTotal, setUnpaidTotal] = React.useState(0)
+  const [runEmployeeId, setRunEmployeeId] = React.useState("")
+  const [runMonth, setRunMonth] = React.useState(() => new Date().getMonth() + 1)
+  const [runYear, setRunYear] = React.useState(() => new Date().getFullYear())
+  const [runPending, setRunPending] = React.useState(false)
   const saveGuard = React.useRef(false)
 
-  const loadData = React.useCallback(() => {
-    const emps = GodownStore.getEmployees()
+  const loadData = React.useCallback(async () => {
+    setIsLoading(true)
+    const now = new Date()
+    const [em, att, per, un] = await Promise.all([
+      listEmployees(), listAttendance({ from: attendanceDate, to: attendanceDate }),
+      listPayroll({ month: now.getMonth() + 1, year: now.getFullYear() }), getUnpaidSalaries(),
+    ])
+    const failed = [em, att, per, un].find((x) => !x.success)
+    if (failed) setFormError(failed.error ?? "Could not load payroll data.")
+    const emps = (Array.isArray(em.data) ? em.data : []) as Employee[]
     setEmployees(emps)
     const initialAtt: { [empId: string]: AttendanceStatus } = {}
-    emps.forEach((emp) => {
-      initialAtt[emp.id] = "present"
-    })
+    emps.forEach((emp) => { initialAtt[emp.id] = "present" })
+    for (const row of (Array.isArray(att.data) ? att.data : []) as any[]) {
+      if (row.employee_id && row.status) initialAtt[row.employee_id] = row.status
+    }
     setAttendanceState(initialAtt)
-  }, [])
+    setPeriods(Array.isArray(per.data) ? per.data : [])
+    const unData: any = un.data ?? {}
+    setUnpaid(Array.isArray(unData.rows) ? unData.rows : [])
+    setUnpaidTotal(Number(unData.totalUnpaid || 0))
+    setIsLoading(false)
+  }, [attendanceDate])
 
   React.useEffect(() => {
     loadData()
     setDrillFilter(getUrlFilter())
-    setIsLoading(false)
   }, [loadData])
 
   const handleStatusChange = (empId: string, status: AttendanceStatus) => {
@@ -66,34 +87,61 @@ export default function PayrollPage() {
     setShowConfirm(true)
   }
 
-  const handleConfirmSave = () => {
+  const handleConfirmSave = async () => {
     if (saveGuard.current) return
     saveGuard.current = true
     setIsPending(true)
     try {
-      const state = (GodownStore as any).getState()
-      const existing = (state.attendance || []).filter(
-        (a: AttendanceRecord) => !(a.date.slice(0, 10) === attendanceDate && employees.some((e) => e.id === a.employee_id))
-      )
-      const fresh: AttendanceRecord[] = employees.map((emp) => ({
-        id: `att-${attendanceDate}-${emp.id}`,
-        date: new Date(`${attendanceDate}T00:00:00`).toISOString(),
-        employee_id: emp.id,
-        employee_name: emp.full_name,
-        status: attendanceState[emp.id] || "present",
-        overtime_hours: 0,
-        created_at: new Date().toISOString(),
-      }))
-      state.attendance = [...fresh, ...existing]
-      ;(GodownStore as any).saveState(state)
-      const presentCount = fresh.filter((a) => a.status === "present").length
-      const halfCount = fresh.filter((a) => a.status === "half_day").length
-      setFormNotice(`Attendance saved for ${attendanceDate}: ${presentCount} present, ${halfCount} half-day, ${fresh.length - presentCount - halfCount} leave/absent. Re-saving this date updates the same records instead of duplicating them.`)
+      let saved = 0
+      const errors: string[] = []
+      for (const emp of employees) {
+        const status = attendanceState[emp.id] || "present"
+        const marked = await markAttendance({ employeeId: emp.id, date: attendanceDate, status })
+        if (marked.success) { saved++; continue }
+        const corrected = await correctAttendance({ employeeId: emp.id, date: attendanceDate, status, reason: "Re-marking attendance for this date" })
+        if (corrected.success) saved++
+        else errors.push(`${emp.full_name}: ${corrected.error ?? marked.error ?? "failed"}`)
+      }
+      if (errors.length) setFormError(errors.join(" | "))
+      else {
+        const presentCount = employees.filter((e) => (attendanceState[e.id] || "present") === "present").length
+        const halfCount = employees.filter((e) => attendanceState[e.id] === "half_day").length
+        setFormNotice(`Attendance saved for ${attendanceDate}: ${saved} record(s) (${presentCount} present, ${halfCount} half-day). Re-saving this date corrects the same records instead of duplicating them.`)
+      }
+      setShowConfirm(false)
+      await loadData()
     } finally {
       setIsPending(false)
       saveGuard.current = false
-      setShowConfirm(false)
     }
+  }
+
+  const handleRunPayroll = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (runPending || !runEmployeeId) return
+    setRunPending(true)
+    try {
+      const res = await runPayroll({ employeeId: runEmployeeId, month: runMonth, year: runYear })
+      if (!res.success) { setFormError(res.error ?? "Could not run payroll."); return }
+      setFormNotice("Payroll period created (draft). Approve it, then pay it from the register below.")
+      await loadData()
+    } finally { setRunPending(false) }
+  }
+
+  const handleApprove = async (id: string) => {
+    const res = await approvePayroll(id)
+    if (!res.success) { setFormError(res.error ?? "Could not approve payroll."); return }
+    setFormNotice("Payroll period approved.")
+    await loadData()
+  }
+
+  const handlePay = async (period: any) => {
+    const amount = Number(period.balance_amount || 0)
+    if (!(amount > 0)) return setFormError("Nothing outstanding on this period.")
+    const res = await payPayroll({ payrollId: period.id, amount, account: "cash" })
+    if (!res.success) { setFormError(res.error ?? "Could not pay payroll."); return }
+    setFormNotice(`Payroll payment of ${formatCurrency(amount)} recorded.`)
+    await loadData()
   }
 
   const registerTotals = employees.reduce(
@@ -110,7 +158,7 @@ export default function PayrollPage() {
     <div className="space-y-6">
       <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
       {drillFilter === "unpaid" && (
-        <AlertBanner tone="warning" message="No finalized payroll periods exist yet in this prototype — the register below is an estimate for the current period, not a finalized payable. Finalize and pay periods in Phase 2 payroll." />
+        <AlertBanner tone="warning" message={periods.length === 0 ? "No finalized payroll periods exist yet — the register below is an estimate for the current period, not a finalized payable. Run, approve and pay periods in the finalized register below." : "Finalized payroll periods for the current month are listed below; the estimate register is still only an estimate."} />
       )}
       <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
       <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
@@ -315,6 +363,21 @@ export default function PayrollPage() {
         <p className="text-[11px] text-muted-foreground mt-3">
           Estimate only: 26 standard business days; daily staff at base rate × 26, monthly staff at base rate. Advance recovery is 0 until the employee advance ledger lands (Phase 2) — payroll rules (paid leave, half-day conversion, denominator) still need client approval per spec §13.4.
         </p>
+      </div>
+      <div className="expensive-card p-5">
+        <h2 className="text-sm font-bold text-foreground mb-1">Finalized Payroll Register &amp; Unpaid Salaries</h2>
+        <p className="text-xs text-muted-foreground mb-4">From listPayroll (current month) and getUnpaidSalaries. Draft periods are approved, then paid; only approved / partially-paid periods with a balance appear as unpaid. Total unpaid: {formatCurrency(unpaidTotal)}.</p>
+        <form onSubmit={handleRunPayroll} className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs mb-4">
+          <div><label className="block font-medium text-foreground mb-1">Employee *</label><select value={runEmployeeId} onChange={(e) => setRunEmployeeId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select employee</option>{employees.map((e) => (<option key={e.id} value={e.id}>{e.full_name}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1">Month</label><input type="number" value={runMonth} onChange={(e) => setRunMonth(Number(e.target.value))} min="1" max="12" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+          <div><label className="block font-medium text-foreground mb-1">Year</label><input type="number" value={runYear} onChange={(e) => setRunYear(Number(e.target.value))} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+          <div className="flex items-end"><button type="submit" disabled={runPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{runPending ? "Running…" : "Run payroll (draft)"}</button></div>
+        </form>
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Gross</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
+          <tbody className="divide-y divide-border/40">
+            {periods.length === 0 && unpaid.length === 0 && <tr><td colSpan={7} className="py-4 text-muted-foreground">No payroll periods yet — run the first draft above. Until then, only the estimate register above applies.</td></tr>}
+            {[...periods, ...unpaid.filter((u) => !periods.some((p) => p.id === u.id))].map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? p.employee_id}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}{p.status === "draft" && (<button type="button" onClick={() => handleApprove(p.id)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button>)}{(p.status === "approved" || p.status === "partially_paid") && Number(p.balance_amount || 0) > 0 && (<button type="button" onClick={() => handlePay(p)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Pay balance</button>)}</td></tr>))}
+          </tbody></table></div>
       </div>
       <ConfirmDialog
         open={showConfirm}

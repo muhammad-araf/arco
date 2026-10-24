@@ -12,9 +12,11 @@ import {
   Layers,
   ArrowUpRight,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { getPL, getBardanaLedger, getPartyStatement, getVendorStatement } from "@/app/actions/finance"
+import { getStockSummary, getStockLedger } from "@/app/actions/inventory"
+import { listPackagingTypes, listParties, listProducts } from "@/app/actions/masters"
 import { formatCurrency, formatWeight, formatBags } from "@/lib/utils"
-import { exportToCSV } from "@/lib/export-utils"
+import { exportReportToCsv } from "@/lib/export-utils"
 import {
   AlertBanner,
   EmptyState,
@@ -22,7 +24,15 @@ import {
 } from "@/components/erp-ui"
 
 export default function ReportsPage() {
-  const [selectedReport, setSelectedReport] = React.useState<"pnl" | "stock" | "bardana">("pnl")
+  const [selectedReport, setSelectedReport] = React.useState<"pnl" | "stock" | "ledger" | "bardana" | "party" | "vendor">("pnl")
+  const [reportError, setReportError] = React.useState("")
+  const [pl, setPl] = React.useState<any | null>(null)
+  const [ledgerRows, setLedgerRows] = React.useState<any[]>([])
+  const [bardanaTotals, setBardanaTotals] = React.useState<any | null>(null)
+  const [parties, setParties] = React.useState<any[]>([])
+  const [stmtPartyId, setStmtPartyId] = React.useState("")
+  const [stmt, setStmt] = React.useState<any | null>(null)
+  const [stmtError, setStmtError] = React.useState("")
   const [stockSummary, setStockSummary] = React.useState<any[]>([])
   const [packaging, setPackaging] = React.useState<any[]>([])
   const [jobs, setJobs] = React.useState<any[]>([])
@@ -32,21 +42,55 @@ export default function ReportsPage() {
   const [dateFrom, setDateFrom] = React.useState("")
   const [dateTo, setDateTo] = React.useState("")
 
-  const loadData = React.useCallback(() => {
-    const state = (GodownStore as any).getState()
-    setStockSummary(GodownStore.getAllStockSummary())
-    setPackaging(GodownStore.getPackaging())
-    setJobs(state.machineryJobs || [])
-    setPackingRecords(state.packingRecords || [])
-    setExpenses(GodownStore.getExpenses())
-  }, [])
+  const effFrom = dateFrom || new Date().toISOString().slice(0, 8) + "01"
+  const effTo = dateTo || new Date().toISOString().slice(0, 10)
+  const loadData = React.useCallback(async () => {
+    setIsLoading(true)
+    setReportError("")
+    const [plRes, sm, le, ba, pk, pa, pr] = await Promise.all([
+      getPL({ from: effFrom, to: effTo }),
+      getStockSummary(), getStockLedger({ from: effFrom, to: effTo }),
+      getBardanaLedger({ from: effFrom, to: effTo }),
+      listPackagingTypes(), listParties(), listProducts(),
+    ])
+    const failed = [plRes, sm, le, ba, pk, pa, pr].find((x) => !x.success)
+    if (failed) setReportError(failed.error ?? "Could not load report data.")
+    setPl(plRes.success ? plRes.data : null)
+    const productList = Array.isArray(pr.data) ? pr.data : []
+    const grouped = new Map<string, any>()
+    for (const r of (Array.isArray(sm.data) ? sm.data : []) as any[]) {
+      const prod = productList.find((x: any) => x.id === r.product_id)
+      const cur = grouped.get(r.product_id) ?? { id: r.product_id, code: prod?.code ?? "", name: r.product_name, category: prod?.category ?? "", totalStock: 0, bagsCount: 0, min_stock: prod?.min_stock ?? 0 }
+      cur.totalStock += Number(r.balance_kg) || 0
+      grouped.set(r.product_id, cur)
+    }
+    for (const cur of grouped.values()) {
+      const prod = productList.find((x: any) => x.id === cur.id)
+      cur.bagsCount = prod?.weight_per_bag ? Math.round(cur.totalStock / prod.weight_per_bag) : 0
+    }
+    setStockSummary([...grouped.values()])
+    setLedgerRows(Array.isArray(le.data) ? le.data : [])
+    setBardanaTotals(ba.success ? ba.data : null)
+    setPackaging(Array.isArray(pk.data) ? pk.data : [])
+    setParties(Array.isArray(pa.data) ? pa.data : [])
+    setJobs([])
+    setPackingRecords([])
+    setExpenses([])
+    setIsLoading(false)
+  }, [effFrom, effTo])
 
   React.useEffect(() => {
     loadData()
-    setIsLoading(false)
-    window.addEventListener("arco-godown-data-updated", loadData)
-    return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
+
+  React.useEffect(() => {
+    if (!stmtPartyId) { setStmt(null); return }
+    const fn = selectedReport === "vendor" ? getVendorStatement : getPartyStatement
+    fn({ partyId: stmtPartyId, from: effFrom, to: effTo }).then((res) => {
+      if (!res.success) setStmtError(res.error ?? "Could not load the statement.")
+      else { setStmtError(""); setStmt(res.data) }
+    })
+  }, [stmtPartyId, selectedReport, effFrom, effTo])
 
   const inPeriod = (iso: string) => {
     if (dateFrom && iso.slice(0, 10) < dateFrom) return false
@@ -57,32 +101,35 @@ export default function ReportsPage() {
     ? `${dateFrom || "…"} to ${dateTo || "…"}`
     : "All posted records to date"
 
-  // Provisional P&L derived ONLY from posted prototype ledgers (spec §15:
-  // no unverified spreadsheet formula is treated as accounting truth).
-  // Product-sale revenue and COGS are 0 here because this prototype has
-  // no product-sale invoices and no approved valuation method — both need
-  // client/accountant approval before they appear in a P&L.
-  const machineryRevenue = jobs.filter((j) => j.status === "posted" && inPeriod(j.date)).reduce((a, j) => a + (j.service_charge || 0), 0)
-  const packingRevenue = packingRecords.filter((r) => r.status === "posted" && inPeriod(r.date)).reduce((a, r) => a + (r.packing_charge || 0), 0)
-  const seedSalesRevenue = 0
-  const totalRevenue = machineryRevenue + packingRevenue + seedSalesRevenue
-  const operationalExpenses = expenses.filter((e) => e.status === "posted" && inPeriod(e.date)).reduce((a, e) => a + (e.amount || 0), 0)
-  const bardanaCost = packingRecords.filter((r) => r.status === "posted" && inPeriod(r.date)).reduce((a, r) => {
-    const pkg = packaging.find((p) => p.id === r.packaging_type_id)
-    return a + (r.bags_packed + (r.damaged_bags || 0)) * (pkg?.cost_per_bag || 0)
-  }, 0)
-  const laborPayroll = 0 // No finalized payroll periods exist yet
-  const totalCosts = operationalExpenses + bardanaCost + laborPayroll
-  const netProfit = totalRevenue - totalCosts
+  // P&L straight from getPL (spec §15): posted invoices only for revenue,
+  // receipts never counted as revenue, COGS 0 with a warning unless the
+  // accountant supplies an approved valuation. Warnings are shown verbatim.
+  const machineryRevenue = Number(pl?.serviceRevenue || 0)
+  const packingRevenue = 0 // packing-source invoices are inside serviceRevenue above
+  const seedSalesRevenue = Number(pl?.productSalesRevenue || 0)
+  const otherRevenue = Number(pl?.otherRevenue || 0)
+  const totalRevenue = Number(pl?.revenue ?? machineryRevenue + seedSalesRevenue + otherRevenue)
+  const operationalExpenses = Number(pl?.operatingExpenses || 0)
+  const bardanaCost = Number(pl?.packagingCost || 0)
+  const laborPayroll = Number(pl?.payrollCost || 0)
+  const cogsAmount = Number(pl?.cogs || 0)
+  const totalCosts = Number(pl?.totalCost ?? operationalExpenses + bardanaCost + laborPayroll + cogsAmount)
+  const netProfit = Number(pl?.netProfit ?? totalRevenue - totalCosts)
   const netMargin = totalRevenue > 0 ? Math.round((netProfit / totalRevenue) * 100) : 0
+  const plWarnings: string[] = Array.isArray(pl?.warnings) ? pl.warnings : []
 
   const stockTotals = stockSummary.reduce((acc, item) => ({ kg: acc.kg + item.totalStock, bags: acc.bags + item.bagsCount }), { kg: 0, bags: 0 })
+  const bardanaEntries: any[] = bardanaTotals?.entries ?? []
   const bardanaRows = packaging.map((pkg) => {
-    const recs = packingRecords.filter((r) => r.packaging_type_id === pkg.id && inPeriod(r.date))
+    const recs = bardanaEntries.filter((r) => r.packaging_type_id === pkg.id)
+    const consumed = recs.filter((r) => r.voucher_type !== "purchase" && r.voucher_type !== "purchase_return").reduce((a, r) => a + (Number(r.out_qty) || 0), 0)
+    const purchased = recs.filter((r) => r.voucher_type === "purchase").reduce((a, r) => a + (Number(r.in_qty) || 0), 0)
+    const last = recs[recs.length - 1]
     return {
       ...pkg,
-      consumed: recs.reduce((a, r) => a + r.bags_packed, 0),
-      damaged: recs.reduce((a, r) => a + (r.damaged_bags || 0), 0),
+      consumed, purchased,
+      damaged: 0, // damaged bags are tracked on packing records, not the bardana ledger
+      current_stock: last ? Number(last.running_balance) || 0 : Number(pkg.current_stock || 0),
     }
   })
 
@@ -90,7 +137,9 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-6">
-      <AlertBanner tone="warning" message="Provisional report from posted prototype ledgers only (spec §15). Product-sale revenue and cost of goods sold are excluded until the client/accountant approves the costing and valuation method — do not treat this P&L as audited accounts." />
+      <AlertBanner tone="warning" message="P&L from getPL (spec §15): posted invoices only; receipts are never revenue. Anything the backend excludes or cannot value is shown below exactly as the backend reports it — do not treat this P&L as audited accounts." />
+      {reportError && <AlertBanner tone="error" message={/not configured|Authentication required/i.test(reportError) ? "Supabase is not configured / sign in required: set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then sign in. No local demo data is shown." : reportError} onDismiss={() => setReportError("")} />}
+      {plWarnings.map((w, i) => (<AlertBanner key={i} tone="warning" message={w} />))}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
@@ -114,9 +163,12 @@ export default function ReportsPage() {
           <button
             type="button"
             onClick={() => {
-              if (selectedReport === "stock") exportToCSV(stockSummary.map((p) => ({ code: p.code, name: p.name, category: p.category, stock_kg: p.totalStock, bags: p.bagsCount, min_stock: p.min_stock || 0 })), "stock_summary_report")
-              else if (selectedReport === "bardana") exportToCSV(bardanaRows.map((p) => ({ bag_type: p.name, capacity_kg: p.capacity_kg, consumed: p.consumed, damaged: p.damaged, closing: p.current_stock, unit_cost: p.cost_per_bag })), "bardana_ledger_report")
-              else exportToCSV([{ period: periodLabel, machinery_revenue: machineryRevenue, packing_revenue: packingRevenue, operating_expenses: operationalExpenses, bardana_cost: bardanaCost, net_profit: netProfit }], "provisional_pnl_report")
+              const range = `${effFrom} to ${effTo}`
+              if (selectedReport === "stock") exportReportToCsv(stockSummary.map((p) => ({ code: p.code, name: p.name, category: p.category, stock_kg: p.totalStock, bags: p.bagsCount, min_stock: p.min_stock || 0 })), "stock_summary_report", [{ key: "code", label: "Code" }, { key: "name", label: "Product" }, { key: "category", label: "Category" }, { key: "stock_kg", label: "Stock (kg)" }, { key: "bags", label: "Bags" }, { key: "min_stock", label: "Min stock" }], { title: "Stock Summary", dateRange: range, totals: { stock_kg: stockTotals.kg, bags: stockTotals.bags } })
+              else if (selectedReport === "bardana") exportReportToCsv(bardanaRows.map((p) => ({ bag_type: p.name, capacity_kg: p.capacity_kg, consumed: p.consumed, purchased: p.purchased, closing: p.current_stock, unit_cost: p.cost_per_bag })), "bardana_ledger_report", [{ key: "bag_type", label: "Bag type" }, { key: "capacity_kg", label: "Capacity (kg)" }, { key: "consumed", label: "Consumed" }, { key: "purchased", label: "Purchased" }, { key: "closing", label: "Closing" }, { key: "unit_cost", label: "Unit cost" }], { title: "Bardana Ledger", dateRange: range, totals: { consumed: Number(bardanaTotals?.consumed || 0), purchased: Number(bardanaTotals?.purchased || 0) } })
+              else if (selectedReport === "ledger") exportReportToCsv(ledgerRows.map((e: any) => ({ date: e.date, voucher_no: e.voucher_no, type: e.voucher_type, godown_id: e.godown_id, product_id: e.product_id, inward_kg: e.inward_qty, outward_kg: e.outward_qty, balance_kg: e.running_balance })), "stock_ledger_report", [{ key: "date", label: "Date" }, { key: "voucher_no", label: "Voucher" }, { key: "type", label: "Type" }, { key: "inward_kg", label: "Inward (kg)" }, { key: "outward_kg", label: "Outward (kg)" }, { key: "balance_kg", label: "Balance (kg)" }], { title: "Stock Ledger", dateRange: range })
+              else if (selectedReport === "party" || selectedReport === "vendor") exportReportToCsv<Record<string, any>>((stmt?.entries ?? []).map((e: any) => ({ date: e.date, voucher_no: e.voucher_no, debit: e.debit, credit: e.credit, balance: e.running_balance })), `${selectedReport}_statement`, [{ key: "date", label: "Date" }, { key: "voucher_no", label: "Voucher" }, { key: "debit", label: "Debit" }, { key: "credit", label: "Credit" }, { key: "balance", label: "Balance" }], { title: `${selectedReport === "vendor" ? "Vendor" : "Party"} Statement`, dateRange: range, totals: { debit: Number(stmt?.charges || 0), credit: Number(stmt?.settlements || 0) } })
+              else exportReportToCsv([{ period: periodLabel, service_revenue: machineryRevenue, product_sales: seedSalesRevenue, other_revenue: otherRevenue, operating_expenses: operationalExpenses, packaging_cost: bardanaCost, payroll_cost: laborPayroll, cogs: cogsAmount, net_profit: netProfit }], "pnl_report", [{ key: "period", label: "Period" }, { key: "service_revenue", label: "Service revenue" }, { key: "product_sales", label: "Product sales" }, { key: "other_revenue", label: "Other revenue" }, { key: "operating_expenses", label: "Operating expenses" }, { key: "packaging_cost", label: "Packaging cost" }, { key: "payroll_cost", label: "Payroll cost" }, { key: "cogs", label: "COGS" }, { key: "net_profit", label: "Net profit" }], { title: "Profit & Loss", dateRange: range })
             }}
             className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
           >
@@ -169,6 +221,9 @@ export default function ReportsPage() {
         >
           Bardana & Packaging Ledger
         </button>
+        <button type="button" onClick={() => setSelectedReport("ledger")} className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${selectedReport === "ledger" ? "bg-primary text-primary-foreground shadow-xs font-bold" : "text-muted-foreground hover:text-foreground"}`}>Stock Ledger</button>
+        <button type="button" onClick={() => setSelectedReport("party")} className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${selectedReport === "party" ? "bg-primary text-primary-foreground shadow-xs font-bold" : "text-muted-foreground hover:text-foreground"}`}>Party Statement</button>
+        <button type="button" onClick={() => setSelectedReport("vendor")} className={`px-3 py-1.5 rounded-md transition-all cursor-pointer ${selectedReport === "vendor" ? "bg-primary text-primary-foreground shadow-xs font-bold" : "text-muted-foreground hover:text-foreground"}`}>Vendor Statement</button>
       </div>
 
       {/* P&L Statement View */}
@@ -347,6 +402,34 @@ export default function ReportsPage() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+      {selectedReport === "ledger" && (
+        <div className="expensive-card p-5">
+          <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3">Type</th><th className="pb-3 text-right">Inward</th><th className="pb-3 text-right">Outward</th><th className="pb-3 text-right">Balance</th></tr></thead>
+            <tbody className="divide-y divide-border/40">
+              {ledgerRows.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No ledger rows in this period.</td></tr>}
+              {ledgerRows.map((e: any) => (<tr key={e.id}><td className="py-2">{e.date?.slice(0, 10)}</td><td className="py-2 font-mono font-bold">{e.voucher_no}</td><td className="py-2">{e.voucher_type}</td><td className="py-2 text-right">{formatWeight(Number(e.inward_qty || 0))}</td><td className="py-2 text-right">{formatWeight(Number(e.outward_qty || 0))}</td><td className="py-2 text-right font-bold">{formatWeight(Number(e.running_balance || 0))}</td></tr>))}
+            </tbody></table></div>
+        </div>
+      )}
+      {(selectedReport === "party" || selectedReport === "vendor") && (
+        <div className="expensive-card p-5">
+          <div className="flex flex-wrap items-center gap-3 mb-4 text-xs">
+            <label className="font-medium text-foreground">{selectedReport === "vendor" ? "Vendor" : "Party"}</label>
+            <select value={stmtPartyId} onChange={(e) => setStmtPartyId(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select a party</option>{parties.filter((x) => selectedReport === "vendor" ? (x.type === "supplier" || x.type === "both") : (x.type === "customer" || x.type === "both")).map((x) => (<option key={x.id} value={x.id}>{x.name}</option>))}</select>
+            {stmtError && <span className="text-red-600 dark:text-red-400 font-medium">{stmtError}</span>}
+          </div>
+          {!stmt && <EmptyState title="Select a party to view its statement" hint="Statements come from getPartyStatement / getVendorStatement: opening balance, charges, settlements and closing, with a receivable-positive sign convention." />}
+          {stmt && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-3">Opening: {formatCurrency(Number(stmt.opening || 0))} · Charges: {formatCurrency(Number(stmt.charges || 0))} · Settlements: {formatCurrency(Number(stmt.settlements || 0))} · Closing: {formatCurrency(Number(stmt.closing || 0))} ({stmt.closingKind})</p>
+              <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3 text-right">Debit</th><th className="pb-3 text-right">Credit</th><th className="pb-3 text-right">Balance</th></tr></thead>
+                <tbody className="divide-y divide-border/40">
+                  {(stmt.entries ?? []).map((e: any) => (<tr key={e.id}><td className="py-2">{e.date?.slice(0, 10)}</td><td className="py-2 font-mono">{e.voucher_no}</td><td className="py-2 text-right">{formatCurrency(Number(e.debit || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(e.credit || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.running_balance || 0))}</td></tr>))}
+                </tbody></table></div>
+            </div>
+          )}
         </div>
       )}
     </div>
