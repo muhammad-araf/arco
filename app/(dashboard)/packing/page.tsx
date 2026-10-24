@@ -211,7 +211,7 @@ export default function PackingPage() {
       {/* Packing Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4">
+          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-border/60">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <PackageCheck className="h-4 w-4 text-emerald-500" />
@@ -257,7 +257,7 @@ export default function PackingPage() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1">Number of Bags</label>
                   <input

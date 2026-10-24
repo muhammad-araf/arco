@@ -186,7 +186,7 @@ export default function PurchasesPage() {
       {/* Creation Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="expensive-card w-full max-w-lg p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4">
+          <div className="expensive-card w-full max-w-lg p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-border/60">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <ShoppingCart className="h-4 w-4 text-emerald-500" />
@@ -202,7 +202,7 @@ export default function PurchasesPage() {
             </div>
 
             <form onSubmit={handleRecordPurchase} className="space-y-4 text-xs">
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1">Supplier / Grower</label>
                   <select
@@ -277,7 +277,7 @@ export default function PurchasesPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 p-3 rounded-lg bg-muted/40 border border-border">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-muted/40 border border-border">
                 <div>
                   <label className="block font-medium text-foreground mb-1">Vendor Bill / Ref No</label>
                   <input

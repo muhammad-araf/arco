@@ -253,7 +253,7 @@ export default function InwardPage() {
       {/* Creation Modal */}
       {isFormOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
-          <div className="expensive-card w-full max-w-3xl p-6 bg-card border border-border shadow-2xl rounded-xl my-8">
+          <div className="expensive-card w-full max-w-3xl p-6 bg-card border border-border shadow-2xl rounded-xl my-8 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-4 border-b border-border/60">
               <div>
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
@@ -505,7 +505,7 @@ export default function InwardPage() {
       {/* Printable Inward Slip View */}
       {selectedVoucherForPrint && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs overflow-y-auto">
-          <div className="expensive-card w-full max-w-2xl p-8 bg-white text-black shadow-2xl rounded-xl printable-document space-y-6">
+          <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-2xl rounded-xl printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-start justify-between border-b pb-4">
               <div>
                 <h2 className="text-xl font-extrabold tracking-tight">ARCO SEED GODOWN & PROCESSING</h2>
