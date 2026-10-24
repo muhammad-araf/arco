@@ -30,6 +30,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { errMsg } from "./auth-helpers";
 
 export type AppRole =
   | "owner_admin"
@@ -74,15 +75,6 @@ export async function getDb(): Promise<{ db: DbClient | null; error: string }> {
   } catch (err) {
     return { db: null, error: errMsg(err) };
   }
-}
-
-export function errMsg(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  if (err && typeof err === "object" && "message" in err) {
-    return String((err as { message: unknown }).message);
-  }
-  return "Unknown error";
 }
 
 /** Current signed-in user + profile, or null when not signed in. */

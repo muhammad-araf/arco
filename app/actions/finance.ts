@@ -38,11 +38,11 @@ import {
   requireSignedIn,
   FINANCE_WRITE,
   FINANCE_READ_SENSITIVE,
-  errMsg,
   type ActionResult,
   type Actor,
   type AppRole,
 } from "./auth";
+import { errMsg } from "./auth-helpers";
 import { logAudit } from "@/lib/audit";
 import {
   roundMoney,

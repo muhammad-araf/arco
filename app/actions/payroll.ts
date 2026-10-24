@@ -34,10 +34,10 @@ import {
   PAYROLL_WRITE,
   PAYROLL_PAY,
   PAYROLL_READ,
-  errMsg,
   type ActionResult,
   type Actor,
 } from "./auth";
+import { errMsg } from "./auth-helpers";
 import { logAudit } from "@/lib/audit";
 import {
   roundMoney,
