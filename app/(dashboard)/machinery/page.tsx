@@ -11,7 +11,8 @@ import {
   Building2,
   Boxes,
 } from "lucide-react"
-import { GodownStore } from "@/lib/services/godown-store"
+import { listJobs, createJobDraft, postJob, reverseJob } from "@/app/actions/machinery"
+import { listMachines, listParties, listProducts, listGodowns } from "@/app/actions/masters"
 import { MachineryJob, Machine, Party, Product, RateBasis } from "@/lib/types/database"
 import { formatCurrency, formatWeight, formatDate } from "@/lib/utils"
 import {
@@ -19,6 +20,7 @@ import {
   ConfirmDialog,
   EmptyState,
   PageSkeleton,
+  ReversalDialog,
   SubmitSpinner,
   isPositive,
 } from "@/components/erp-ui"
@@ -28,6 +30,10 @@ export default function MachineryJobsPage() {
   const [machines, setMachines] = React.useState<Machine[]>([])
   const [customers, setCustomers] = React.useState<Party[]>([])
   const [products, setProducts] = React.useState<Product[]>([])
+  const [godowns, setGodowns] = React.useState<any[]>([])
+  const [godownId, setGodownId] = React.useState("")
+  const [reversalTarget, setReversalTarget] = React.useState<any | null>(null)
+  const [isReversing, setIsReversing] = React.useState(false)
 
   // Modal State
   const [isModalOpen, setIsModalOpen] = React.useState(false)
@@ -50,25 +56,31 @@ export default function MachineryJobsPage() {
   const [isCustomerOwned, setIsCustomerOwned] = React.useState(true)
   const [notes, setNotes] = React.useState("")
 
-  const loadData = React.useCallback(() => {
-    setJobs(GodownStore.getMachineryJobs())
-    setMachines(GodownStore.getMachines())
-    setCustomers(GodownStore.getParties().filter((p) => p.type === "customer" || p.type === "both"))
-    setProducts(GodownStore.getProducts())
-  }, [])
-
-  React.useEffect(() => {
-    loadData()
+  const loadData = React.useCallback(async () => {
+    setIsLoading(true)
+    const [j, m, pa, pr, g] = await Promise.all([listJobs(), listMachines(), listParties(), listProducts(), listGodowns()])
+    const failed = [j, m, pa, pr, g].find((x) => !x.success)
+    if (failed) setFormError(failed.error ?? "Could not load machinery data.")
+    const machineList = (Array.isArray(m.data) ? m.data : []) as Machine[]
+    const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+    setMachines(machineList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both")); setProducts(productList)
+    setGodowns(Array.isArray(g.data) ? g.data : [])
+    setJobs((Array.isArray(j.data) ? j.data : []).map((row: any) => ({
+      ...row,
+      customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
+      machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? row.machine_id,
+      input_product_name: productList.find((x) => x.id === row.input_product_id)?.name ?? row.input_product_id,
+    })))
     setIsLoading(false)
-    window.addEventListener("arco-godown-data-updated", loadData)
-    return () => window.removeEventListener("arco-godown-data-updated", loadData)
-  }, [loadData])
+  }, [])
 
   React.useEffect(() => {
     if (machines.length > 0 && !machineId) setMachineId(machines[0].id)
     if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
     if (products.length > 0 && !inputProductId) setInputProductId(products[0].id)
-  }, [machines, customers, products, machineId, customerId, inputProductId])
+    if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
+  }, [machines, customers, products, godowns, machineId, customerId, inputProductId, godownId])
 
   // Calculation based on Rate Basis
   let calculatedUnits = 0
@@ -88,6 +100,7 @@ export default function MachineryJobsPage() {
     if (!customerId) return setFormError("Select the customer / grain owner for this job.")
     if (!machineId) return setFormError("Select the machine that will run this job.")
     if (!inputProductId) return setFormError("Select the input product.")
+    if (!godownId) return setFormError("Select the godown where this job runs.")
     if (!isPositive(inputWeight)) return setFormError("Input weight must be greater than zero.")
     if (outputWeight < 0 || wasteWeight < 0) return setFormError("Output and waste weights cannot be negative.")
     if (outputWeight + wasteWeight > inputWeight) return setFormError(`Output (${outputWeight} kg) + waste (${wasteWeight} kg) exceeds input (${inputWeight} kg). Correct the weights before saving.`)
@@ -123,21 +136,52 @@ export default function MachineryJobsPage() {
     setShowConfirm(true)
   }
 
-  const handleConfirmJob = () => {
+  const handleConfirmJob = async () => {
     if (!draftJob || jobGuard.current) return
     jobGuard.current = true
     setIsPending(true)
     try {
-      const state = (GodownStore as any).getState()
-      state.machineryJobs = [draftJob, ...state.machineryJobs]
-      ;(GodownStore as any).saveState(state)
-      setFormNotice(`${draftJob.job_no} recorded — service charge ${formatCurrency(draftJob.service_charge)} (${draftJob.rate_basis.replace("_", " ")}). Customer-owned stock is not counted as company inventory.`)
-    } finally {
-      setIsPending(false)
-      jobGuard.current = false
+      const created = await createJobDraft({
+        customerId, machineId, godownId, processingType,
+        inputProductId, inputWeightKg: inputWeight, outputWeightKg: outputWeight, wasteWeightKg: wasteWeight,
+        bags: rateBasis === "per_bag" ? Math.round(inputWeight / 50) : undefined,
+        rateBasis, rate, isCustomerOwned, notes: notes || undefined,
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not create the machinery job draft.")
+        return
+      }
+      const posted = await postJob((created.data as any).id, `job-${Date.now()}`)
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the machinery job.")
+        return
+      }
+      const row: any = posted.data ?? created.data
+      setFormNotice(`${row.job_no ?? draftJob.job_no} recorded — service charge ${formatCurrency(row.service_charge ?? draftJob.service_charge)} (${draftJob.rate_basis.replace("_", " ")}). Customer-owned stock is not counted as company inventory.`)
       setShowConfirm(false)
       setIsModalOpen(false)
       setDraftJob(null)
+      await loadData()
+    } finally {
+      setIsPending(false)
+      jobGuard.current = false
+    }
+  }
+
+  const handleConfirmReversal = async (reasonCode: string, reason: string) => {
+    if (!reversalTarget || isReversing) return
+    setIsReversing(true)
+    try {
+      const res = await reverseJob(reversalTarget.id, `${reasonCode}: ${reason}`, `job-rev-${Date.now()}`)
+      if (!res.success) {
+        setFormError(res.error ?? "Could not reverse the job.")
+        return
+      }
+      setFormNotice(`${reversalTarget.job_no} reversed. Reason recorded: ${reasonCode}.`)
+      setReversalTarget(null)
+      await loadData()
+    } finally {
+      setIsReversing(false)
     }
   }
 
@@ -209,8 +253,11 @@ export default function MachineryJobsPage() {
                   </td>
                   <td className="py-3 text-center">
                     <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
-                      Posted
+                      {j.status ?? "Posted"}
                     </span>
+                    {j.status === "posted" && (
+                      <button type="button" onClick={() => setReversalTarget(j)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -286,6 +333,12 @@ export default function MachineryJobsPage() {
               </div>
 
               <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-medium text-foreground mb-1">Godown</label>
+                  <select value={godownId} onChange={(e) => setGodownId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                    {godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}
+                  </select>
+                </div>
                 <div>
                   <label className="block font-medium text-foreground mb-1">Input Grain Type</label>
                   <select
@@ -392,6 +445,13 @@ export default function MachineryJobsPage() {
         pending={isPending}
         onConfirm={handleConfirmJob}
         onCancel={() => { setShowConfirm(false); setDraftJob(null) }}
+      />
+      <ReversalDialog
+        open={!!reversalTarget}
+        voucherLabel={reversalTarget?.job_no ?? ""}
+        pending={isReversing}
+        onConfirm={handleConfirmReversal}
+        onCancel={() => setReversalTarget(null)}
       />
     </div>
   )
