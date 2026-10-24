@@ -19,6 +19,16 @@ import { GodownStore } from "@/lib/services/godown-store"
 import { StockLedgerEntry, Godown, Product } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDateTime } from "@/lib/utils"
 import { exportToCSV } from "@/lib/export-utils"
+import {
+  AlertBanner,
+  ConfirmDialog,
+  EmptyState,
+  FilterBanner,
+  PageSkeleton,
+  SubmitSpinner,
+  getUrlFilter,
+  isPositive,
+} from "@/components/erp-ui"
 
 export default function InventoryPage() {
   const [activeTab, setActiveTab] = React.useState<"summary" | "ledger">("summary")
@@ -39,6 +49,13 @@ export default function InventoryPage() {
   const [transferProductId, setTransferProductId] = React.useState("")
   const [transferQty, setTransferQty] = React.useState<number>(1000)
   const [transferNotes, setTransferNotes] = React.useState("")
+  const [isLoading, setIsLoading] = React.useState(true)
+  const [transferError, setTransferError] = React.useState("")
+  const [transferNotice, setTransferNotice] = React.useState("")
+  const [isPending, setIsPending] = React.useState(false)
+  const [showTransferConfirm, setShowTransferConfirm] = React.useState(false)
+  const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
+  const transferGuard = React.useRef(false)
 
   const loadData = React.useCallback(() => {
     setStockSummary(GodownStore.getAllStockSummary())
@@ -49,6 +66,8 @@ export default function InventoryPage() {
 
   React.useEffect(() => {
     loadData()
+    setDrillFilter(getUrlFilter())
+    setIsLoading(false)
     window.addEventListener("arco-godown-data-updated", loadData)
     return () => window.removeEventListener("arco-godown-data-updated", loadData)
   }, [loadData])
@@ -66,7 +85,8 @@ export default function InventoryPage() {
   const filteredSummary = stockSummary.filter((p) => {
     const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || p.code.toLowerCase().includes(searchQuery.toLowerCase())
     const matchesCategory = selectedCategory === "all" || p.category === selectedCategory
-    return matchesSearch && matchesCategory
+    const matchesDrill = drillFilter === "low" ? p.isLowStock : true
+    return matchesSearch && matchesCategory && matchesDrill
   })
 
   const filteredLedger = ledgerEntries.filter((entry) => {
@@ -80,74 +100,86 @@ export default function InventoryPage() {
 
   const handleExecuteTransfer = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!transferFromGodown || !transferToGodown || !transferProductId || transferFromGodown === transferToGodown) {
-      alert("Please select distinct source and destination godowns.")
-      return
-    }
-
+    if (isPending) return
+    // Spec §5.3: a transfer needs distinct locations, a positive quantity,
+    // enough source stock, and a reason — each failure says what to fix.
+    if (!transferFromGodown || !transferToGodown || !transferProductId) return setTransferError("Select a product and both godowns for the transfer.")
+    if (transferFromGodown === transferToGodown) return setTransferError("Source and destination godowns must be different — a transfer moves stock between two locations.")
+    if (!isPositive(transferQty)) return setTransferError("Transfer quantity must be greater than zero.")
+    if (!transferNotes.trim()) return setTransferError("A transfer reason is required (spec §5.3). Write why this stock is moving.")
     const availableStock = GodownStore.getProductStock(transferProductId, transferFromGodown)
-    if (transferQty > availableStock) {
-      alert(`Insufficient stock in source godown. Available: ${availableStock} kg`)
-      return
-    }
-
-    const fromGodownObj = godowns.find((g) => g.id === transferFromGodown)
-    const toGodownObj = godowns.find((g) => g.id === transferToGodown)
-    const productObj = products.find((p) => p.id === transferProductId)
-    const transferNo = `TRF-2026-${Date.now().toString().slice(-4)}`
-    const now = new Date().toISOString()
-
-    // Single Ledger: 2 Atomic Rows (Outward from Source, Inward to Destination)
-    const outRow: StockLedgerEntry = {
-      id: `stk-trf-out-${Date.now()}`,
-      date: now,
-      voucher_type: "transfer",
-      voucher_id: transferNo,
-      voucher_no: transferNo,
-      godown_id: transferFromGodown,
-      godown_name: fromGodownObj?.name,
-      product_id: transferProductId,
-      product_name: productObj?.name,
-      inward_qty: 0,
-      outward_qty: transferQty,
-      unit: "kg",
-      running_balance: availableStock - transferQty,
-      notes: `Transfer to ${toGodownObj?.name}. ${transferNotes}`,
-      created_at: now,
-    }
-
-    const toAvailableStock = GodownStore.getProductStock(transferProductId, transferToGodown)
-    const inRow: StockLedgerEntry = {
-      id: `stk-trf-in-${Date.now()}`,
-      date: now,
-      voucher_type: "transfer",
-      voucher_id: transferNo,
-      voucher_no: transferNo,
-      godown_id: transferToGodown,
-      godown_name: toGodownObj?.name,
-      product_id: transferProductId,
-      product_name: productObj?.name,
-      inward_qty: transferQty,
-      outward_qty: 0,
-      unit: "kg",
-      running_balance: toAvailableStock + transferQty,
-      notes: `Transfer from ${fromGodownObj?.name}. ${transferNotes}`,
-      created_at: now,
-    }
-
-    // Persist to store
-    const currentLedger = GodownStore.getStockLedger()
-    const updatedState = {
-      ...((GodownStore as any).getState()),
-      stockLedger: [outRow, inRow, ...currentLedger],
-    }
-    ;(GodownStore as any).saveState(updatedState)
-
-    setIsTransferModalOpen(false)
+    if (transferQty > availableStock) return setTransferError(`Insufficient stock in the source godown: ${availableStock} kg available, but ${transferQty} kg requested. Reduce the quantity.`)
+    setTransferError("")
+    setShowTransferConfirm(true)
   }
+
+  const handleConfirmTransfer = () => {
+    if (transferGuard.current) return
+    transferGuard.current = true
+    setIsPending(true)
+    try {
+      const availableStock = GodownStore.getProductStock(transferProductId, transferFromGodown)
+      const fromGodownObj = godowns.find((g) => g.id === transferFromGodown)
+      const toGodownObj = godowns.find((g) => g.id === transferToGodown)
+      const productObj = products.find((p) => p.id === transferProductId)
+      const transferNo = `TRF-2026-${Date.now().toString().slice(-4)}`
+      const now = new Date().toISOString()
+      const outRow: StockLedgerEntry = {
+        id: `stk-trf-out-${Date.now()}`,
+        date: now,
+        voucher_type: "transfer",
+        voucher_id: transferNo,
+        voucher_no: transferNo,
+        godown_id: transferFromGodown,
+        godown_name: fromGodownObj?.name,
+        product_id: transferProductId,
+        product_name: productObj?.name,
+        inward_qty: 0,
+        outward_qty: transferQty,
+        unit: "kg",
+        running_balance: availableStock - transferQty,
+        notes: `Transfer to ${toGodownObj?.name}. ${transferNotes}`,
+        created_at: now,
+      }
+      const toAvailableStock = GodownStore.getProductStock(transferProductId, transferToGodown)
+      const inRow: StockLedgerEntry = {
+        id: `stk-trf-in-${Date.now()}`,
+        date: now,
+        voucher_type: "transfer",
+        voucher_id: transferNo,
+        voucher_no: transferNo,
+        godown_id: transferToGodown,
+        godown_name: toGodownObj?.name,
+        product_id: transferProductId,
+        product_name: productObj?.name,
+        inward_qty: transferQty,
+        outward_qty: 0,
+        unit: "kg",
+        running_balance: toAvailableStock + transferQty,
+        notes: `Transfer from ${fromGodownObj?.name}. ${transferNotes}`,
+        created_at: now,
+      }
+      const currentLedger = GodownStore.getStockLedger()
+      const updatedState = {
+        ...((GodownStore as any).getState()),
+        stockLedger: [outRow, inRow, ...currentLedger],
+      }
+      ;(GodownStore as any).saveState(updatedState)
+      setTransferNotice(`${transferNo} executed — ${transferQty} kg moved from ${fromGodownObj?.name} to ${toGodownObj?.name}. Enterprise total unchanged.`)
+    } finally {
+      setIsPending(false)
+      transferGuard.current = false
+      setShowTransferConfirm(false)
+      setIsTransferModalOpen(false)
+    }
+  }
+
+  if (isLoading) return <PageSkeleton />
 
   return (
     <div className="space-y-6">
+      <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
+      <AlertBanner tone="success" message={transferNotice} onDismiss={() => setTransferNotice("")} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -296,6 +328,16 @@ export default function InventoryPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40">
+                {filteredSummary.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="py-4">
+                      <EmptyState
+                        title={drillFilter === "low" ? "No low-stock items" : "No stock rows match these filters"}
+                        hint={drillFilter === "low" ? "Every product is above its minimum stock right now." : "Try a different search, godown or category — or post an inward voucher to create stock."}
+                      />
+                    </td>
+                  </tr>
+                )}
                 {filteredSummary.map((item) => (
                   <tr key={item.id} className="hover:bg-muted/30 transition-colors">
                     <td className="py-3 font-mono font-bold text-muted-foreground">{item.code}</td>
@@ -355,6 +397,16 @@ export default function InventoryPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/40 font-mono">
+                {filteredLedger.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="py-4 font-sans">
+                      <EmptyState
+                        title="No ledger movements match these filters"
+                        hint="Post an inward voucher, batch or gate pass and its movement will appear here with its voucher reference."
+                      />
+                    </td>
+                  </tr>
+                )}
                 {filteredLedger.map((entry) => (
                   <tr key={entry.id} className="hover:bg-muted/30 transition-colors">
                     <td className="py-3 text-muted-foreground font-sans">{formatDateTime(entry.date)}</td>
@@ -405,6 +457,7 @@ export default function InventoryPage() {
             </div>
 
             <form onSubmit={handleExecuteTransfer} className="space-y-4 text-xs">
+              <AlertBanner tone="error" message={transferError} onDismiss={() => setTransferError("")} />
               <div>
                 <label className="block font-medium text-foreground mb-1">Product</label>
                 <select
@@ -485,16 +538,26 @@ export default function InventoryPage() {
                 </button>
                 <button
                   type="submit"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="h-4 w-4" />
-                  <span>Execute Transfer</span>
+                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
+                  <span>{isPending ? "Executing…" : "Execute Transfer"}</span>
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
+      <ConfirmDialog
+        open={showTransferConfirm}
+        title="Execute this transfer?"
+        description={`Move ${transferQty} kg of ${products.find((p) => p.id === transferProductId)?.name || "the selected product"} from ${godowns.find((g) => g.id === transferFromGodown)?.name || "source"} to ${godowns.find((g) => g.id === transferToGodown)?.name || "destination"}. Two ledger rows are written (out of source, into destination); total enterprise stock does not change.`}
+        confirmLabel="Execute Transfer"
+        pending={isPending}
+        onConfirm={handleConfirmTransfer}
+        onCancel={() => setShowTransferConfirm(false)}
+      />
     </div>
   )
 }
