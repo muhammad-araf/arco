@@ -80,6 +80,15 @@ export function AppSidebar() {
   const pathname = usePathname()
   const [isOpenMobile, setIsOpenMobile] = React.useState(false)
 
+  React.useEffect(() => {
+    if (!isOpenMobile) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsOpenMobile(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [isOpenMobile])
+
   const isRouteActive = (href: string) => {
     if (href === "/dashboard") return pathname === "/dashboard" || pathname === "/"
     return pathname.startsWith(href)
@@ -105,6 +114,7 @@ export function AppSidebar() {
             onClick={() => setIsOpenMobile(!isOpenMobile)}
             className="p-2 rounded-lg border border-border/60 bg-muted/30 text-foreground"
             aria-label="Toggle Navigation"
+            aria-expanded={isOpenMobile}
           >
             {isOpenMobile ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
           </button>
@@ -165,6 +175,7 @@ export function AppSidebar() {
                     <Link
                       key={item.href}
                       href={item.href}
+                      aria-current={active ? "page" : undefined}
                       onClick={() => setIsOpenMobile(false)}
                       className={cn(
                         "flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium transition-all group relative",
