@@ -1,20 +1,28 @@
 import * as React from "react"
+import { redirect } from "next/navigation"
 import { AppSidebar } from "@/components/app-sidebar"
 import { ExpensiveAmbientMesh } from "@/components/expensive-ambient-mesh"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { ShieldCheck, Warehouse, Calendar } from "lucide-react"
+import { TodayBadge } from "@/components/today-badge"
+import { createClient } from "@/lib/supabase/server"
+import { ShieldCheck, Warehouse } from "lucide-react"
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const todayFormatted = new Intl.DateTimeFormat("en-US", {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(new Date())
+  // Session guard: no authenticated Supabase session -> /login.
+  // Fail closed on any auth lookup error, the same as no session.
+  let session = null
+  try {
+    const supabase = await createClient()
+    const { data } = await supabase.auth.getSession()
+    session = data.session
+  } catch {
+    session = null
+  }
+  if (!session) redirect("/login")
 
   return (
     <div className="flex min-h-screen bg-background relative overflow-hidden">
@@ -34,10 +42,7 @@ export default function DashboardLayout({
               <span className="font-semibold">Main Seed Godown</span>
               <span className="text-[10px] text-muted-foreground font-mono">(GDN-01)</span>
             </div>
-            <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
-              <Calendar className="h-3.5 w-3.5" />
-              <span>{todayFormatted}</span>
-            </div>
+            <TodayBadge />
           </div>
 
           <div className="flex items-center gap-2.5">
