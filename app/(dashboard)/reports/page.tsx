@@ -343,7 +343,7 @@ export default function ReportsPage() {
                       <EmptyState title="No packaging types yet" hint="Add bag / bardana types in Master Data to see the ledger here." />
                     </td>
                   </tr>
-                )}}
+                )}
               </tbody>
             </table>
           </div>
