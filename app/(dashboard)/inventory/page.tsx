@@ -71,38 +71,47 @@ export default function InventoryPage() {
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const [sm, le, g, pr] = await Promise.all([getStockSummary(), getStockLedger(), listGodowns(), listProducts()])
-    const failed = [sm, le, g, pr].find((r) => !r.success)
-    if (failed) setTransferError(failed.error ?? "Could not load inventory data.")
-    const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
-    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-    const rows = Array.isArray(sm.data) ? sm.data : []
-    setRawSummary(rows)
-    setGodowns(godownList)
-    setProducts(productList)
-    const grouped = new Map<string, any>()
-    for (const r of rows) {
-      const prod = productList.find((x) => x.id === r.product_id)
-      const cur = grouped.get(r.product_id) ?? {
-        id: r.product_id, code: prod?.code ?? "", name: r.product_name, category: prod?.category ?? "",
-        totalStock: 0, bagsCount: 0, min_stock: prod?.min_stock ?? r.min_stock_kg ?? 0, isLowStock: false,
+    try {
+      const [sm, le, g, pr] = await Promise.all([getStockSummary(), getStockLedger(), listGodowns(), listProducts()])
+      const failed = [sm, le, g, pr].find((r) => !r.success)
+      if (failed) setTransferError(failed.error ?? "Could not load inventory data.")
+      const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
+      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+      const rows = Array.isArray(sm.data) ? sm.data : []
+      setRawSummary(rows)
+      setGodowns(godownList)
+      setProducts(productList)
+      const grouped = new Map<string, any>()
+      for (const r of rows) {
+        const prod = productList.find((x) => x.id === r.product_id)
+        const cur = grouped.get(r.product_id) ?? {
+          id: r.product_id, code: prod?.code ?? "", name: r.product_name, category: prod?.category ?? "",
+          totalStock: 0, bagsCount: 0, min_stock: prod?.min_stock ?? r.min_stock_kg ?? 0, isLowStock: false,
+        }
+        cur.totalStock += Number(r.balance_kg) || 0
+        cur.isLowStock = cur.isLowStock || !!r.below_min_stock
+        grouped.set(r.product_id, cur)
       }
-      cur.totalStock += Number(r.balance_kg) || 0
-      cur.isLowStock = cur.isLowStock || !!r.below_min_stock
-      grouped.set(r.product_id, cur)
+      for (const cur of grouped.values()) {
+        const prod = productList.find((x) => x.id === cur.id)
+        cur.bagsCount = prod?.weight_per_bag ? Math.round(cur.totalStock / prod.weight_per_bag) : 0
+      }
+      setStockSummary([...grouped.values()])
+      setLedgerEntries((Array.isArray(le.data) ? le.data : []).map((e: any) => ({
+        ...e,
+        godown_name: godownList.find((x) => x.id === e.godown_id)?.name ?? e.godown_id,
+        product_name: productList.find((x) => x.id === e.product_id)?.name ?? e.product_id,
+      })))
+    } catch (err) {
+      setTransferError(err instanceof Error ? err.message : "Could not load inventory data.")
+    } finally {
+      setIsLoading(false)
     }
-    for (const cur of grouped.values()) {
-      const prod = productList.find((x) => x.id === cur.id)
-      cur.bagsCount = prod?.weight_per_bag ? Math.round(cur.totalStock / prod.weight_per_bag) : 0
-    }
-    setStockSummary([...grouped.values()])
-    setLedgerEntries((Array.isArray(le.data) ? le.data : []).map((e: any) => ({
-      ...e,
-      godown_name: godownList.find((x) => x.id === e.godown_id)?.name ?? e.godown_id,
-      product_name: productList.find((x) => x.id === e.product_id)?.name ?? e.product_id,
-    })))
-    setIsLoading(false)
   }, [])
+
+  // Mount load: without this the page never leaves its skeleton —
+  // isLoading starts true and only post-action handlers reloaded before.
+  React.useEffect(() => { loadData() }, [loadData])
 
   React.useEffect(() => {
     if (godowns.length >= 2) {

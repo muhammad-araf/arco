@@ -51,40 +51,49 @@ export default function PackingPage() {
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const [pk, pr, ba, bat] = await Promise.all([listPackagingTypes(), listProducts(), getBardanaLedger({}), listBatches()])
-    const failed = [pk, pr, ba, bat].find((x) => !x.success)
-    if (failed) setFormError(failed.error ?? "Could not load packing data.")
-    const packagingList = (Array.isArray(pk.data) ? pk.data : []) as PackagingType[]
-    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-    setPackaging(packagingList)
-    setProducts(productList.filter((x) => x.category === "finished_seed" || x.category === "intermediate"))
-    const entries = ba.success ? ((ba.data as any)?.entries ?? []) : []
-    setBardanaEntries(entries)
-    setBardanaTotals(ba.success ? ba.data : null)
-    // Packing records are written by postBatch (production.ts) when a batch
-    // is posted with a packing rate / bag count — there is no standalone
-    // packing-record action. Batches with bags_consumed are the records.
-    setPackingRecords((Array.isArray(bat.data) ? bat.data : []).filter((b: any) => Number(b.bags_consumed || 0) > 0).map((b: any) => ({
-      id: b.id,
-      packing_no: b.batch_no,
-      date: b.date,
-      reference_type: "batch",
-      output_product_id: b.output_product_id,
-      output_product_name: productList.find((x) => x.id === b.output_product_id)?.name ?? b.output_product_id,
-      packaging_type_id: b.packaging_type_id,
-      packaging_name: packagingList.find((x) => x.id === b.packaging_type_id)?.name ?? b.packaging_type_id,
-      bags_packed: Number(b.bags_consumed || 0),
-      bag_capacity_kg: packagingList.find((x) => x.id === b.packaging_type_id)?.capacity_kg ?? 50,
-      total_packed_kg: Number(b.bags_consumed || 0) * (packagingList.find((x) => x.id === b.packaging_type_id)?.capacity_kg ?? 50),
-      packing_rate: Number(b.packing_rate_per_bag || 0),
-      packing_charge: Number(b.packing_charge || 0),
-      damaged_bags: 0,
-      status: b.status,
-      notes: b.notes,
-      created_at: b.created_at,
-    })) as any)
-    setIsLoading(false)
+    try {
+      const [pk, pr, ba, bat] = await Promise.all([listPackagingTypes(), listProducts(), getBardanaLedger({}), listBatches()])
+      const failed = [pk, pr, ba, bat].find((x) => !x.success)
+      if (failed) setFormError(failed.error ?? "Could not load packing data.")
+      const packagingList = (Array.isArray(pk.data) ? pk.data : []) as PackagingType[]
+      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+      setPackaging(packagingList)
+      setProducts(productList.filter((x) => x.category === "finished_seed" || x.category === "intermediate"))
+      const entries = ba.success ? ((ba.data as any)?.entries ?? []) : []
+      setBardanaEntries(entries)
+      setBardanaTotals(ba.success ? ba.data : null)
+      // Packing records are written by postBatch (production.ts) when a batch
+      // is posted with a packing rate / bag count — there is no standalone
+      // packing-record action. Batches with bags_consumed are the records.
+      setPackingRecords((Array.isArray(bat.data) ? bat.data : []).filter((b: any) => Number(b.bags_consumed || 0) > 0).map((b: any) => ({
+        id: b.id,
+        packing_no: b.batch_no,
+        date: b.date,
+        reference_type: "batch",
+        output_product_id: b.output_product_id,
+        output_product_name: productList.find((x) => x.id === b.output_product_id)?.name ?? b.output_product_id,
+        packaging_type_id: b.packaging_type_id,
+        packaging_name: packagingList.find((x) => x.id === b.packaging_type_id)?.name ?? b.packaging_type_id,
+        bags_packed: Number(b.bags_consumed || 0),
+        bag_capacity_kg: packagingList.find((x) => x.id === b.packaging_type_id)?.capacity_kg ?? 50,
+        total_packed_kg: Number(b.bags_consumed || 0) * (packagingList.find((x) => x.id === b.packaging_type_id)?.capacity_kg ?? 50),
+        packing_rate: Number(b.packing_rate_per_bag || 0),
+        packing_charge: Number(b.packing_charge || 0),
+        damaged_bags: 0,
+        status: b.status,
+        notes: b.notes,
+        created_at: b.created_at,
+      })) as any)
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not load packing data.")
+    } finally {
+      setIsLoading(false)
+    }
   }, [])
+
+  // Mount load: without this the page never leaves its skeleton —
+  // isLoading starts true and only post-action handlers reloaded before.
+  React.useEffect(() => { loadData() }, [loadData])
 
   React.useEffect(() => {
     if (packaging.length > 0 && !packagingId) setPackagingId(packaging[0].id)

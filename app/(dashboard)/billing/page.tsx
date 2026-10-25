@@ -65,19 +65,28 @@ export default function BillingPage() {
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const [re, inv, pa] = await Promise.all([listReceipts(), listInvoices(), listParties()])
-    const failed = [re, inv, pa].find((x) => !x.success)
-    if (failed) setFormError(failed.error ?? "Could not load billing data.")
-    const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
-    setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both"))
-    setInvoices(Array.isArray(inv.data) ? inv.data : [])
-    setReceipts((Array.isArray(re.data) ? re.data : []).map((row: any) => ({
-      ...row,
-      customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
-      payment_method: row.account ?? row.payment_method,
-    })))
-    setIsLoading(false)
+    try {
+      const [re, inv, pa] = await Promise.all([listReceipts(), listInvoices(), listParties()])
+      const failed = [re, inv, pa].find((x) => !x.success)
+      if (failed) setFormError(failed.error ?? "Could not load billing data.")
+      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+      setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both"))
+      setInvoices(Array.isArray(inv.data) ? inv.data : [])
+      setReceipts((Array.isArray(re.data) ? re.data : []).map((row: any) => ({
+        ...row,
+        customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
+        payment_method: row.account ?? row.payment_method,
+      })))
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not load billing data.")
+    } finally {
+      setIsLoading(false)
+    }
   }, [])
+
+  // Mount load: without this the page never leaves its skeleton —
+  // isLoading starts true and only post-action handlers reloaded before.
+  React.useEffect(() => { loadData() }, [loadData])
 
   React.useEffect(() => {
     if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
@@ -399,7 +408,7 @@ export default function BillingPage() {
                     onChange={(e) => setPaymentMethod(e.target.value as any)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                   >
-                    <option value="bank">HBL Bank Account</option>
+                    <option value="bank">Bank Account</option>
                     <option value="cash">Godown Counter Cash</option>
                     <option value="online">Online Transfer / Raast</option>
                   </select>

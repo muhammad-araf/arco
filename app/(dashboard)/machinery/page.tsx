@@ -58,22 +58,31 @@ export default function MachineryJobsPage() {
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const [j, m, pa, pr, g] = await Promise.all([listJobs(), listMachines(), listParties(), listProducts(), listGodowns()])
-    const failed = [j, m, pa, pr, g].find((x) => !x.success)
-    if (failed) setFormError(failed.error ?? "Could not load machinery data.")
-    const machineList = (Array.isArray(m.data) ? m.data : []) as Machine[]
-    const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
-    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-    setMachines(machineList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both")); setProducts(productList)
-    setGodowns(Array.isArray(g.data) ? g.data : [])
-    setJobs((Array.isArray(j.data) ? j.data : []).map((row: any) => ({
-      ...row,
-      customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
-      machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? row.machine_id,
-      input_product_name: productList.find((x) => x.id === row.input_product_id)?.name ?? row.input_product_id,
-    })))
-    setIsLoading(false)
+    try {
+      const [j, m, pa, pr, g] = await Promise.all([listJobs(), listMachines(), listParties(), listProducts(), listGodowns()])
+      const failed = [j, m, pa, pr, g].find((x) => !x.success)
+      if (failed) setFormError(failed.error ?? "Could not load machinery data.")
+      const machineList = (Array.isArray(m.data) ? m.data : []) as Machine[]
+      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+      setMachines(machineList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both")); setProducts(productList)
+      setGodowns(Array.isArray(g.data) ? g.data : [])
+      setJobs((Array.isArray(j.data) ? j.data : []).map((row: any) => ({
+        ...row,
+        customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
+        machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? row.machine_id,
+        input_product_name: productList.find((x) => x.id === row.input_product_id)?.name ?? row.input_product_id,
+      })))
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not load machinery data.")
+    } finally {
+      setIsLoading(false)
+    }
   }, [])
+
+  // Mount load: without this the page never leaves its skeleton —
+  // isLoading starts true and only post-action handlers reloaded before.
+  React.useEffect(() => { loadData() }, [loadData])
 
   React.useEffect(() => {
     if (machines.length > 0 && !machineId) setMachineId(machines[0].id)

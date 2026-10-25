@@ -60,25 +60,34 @@ export default function PurchasesPage() {
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const [pu, pa, g, pr, re] = await Promise.all([listPurchases(), listParties(), listGodowns(), listProducts(), listPurchaseReturns()])
-    const failed = [pu, pa, g, pr, re].find((x) => !x.success)
-    if (failed) setFormError(failed.error ?? "Could not load purchase data.")
-    const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
-    const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
-    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-    setVendors(partyList.filter((x) => x.type === "supplier" || x.type === "both"))
-    setGodowns(godownList); setProducts(productList)
-    setReturns(Array.isArray(re.data) ? re.data : [])
-    setPurchases((Array.isArray(pu.data) ? pu.data : []).map((row: any) => ({
-      ...row,
-      vendor_name: partyList.find((x) => x.id === row.vendor_id)?.name ?? row.vendor_id,
-      godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
-      items: (row.purchase_items ?? row.items ?? []).map((it: any) => ({
-        ...it, product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
-      })),
-    })))
-    setIsLoading(false)
+    try {
+      const [pu, pa, g, pr, re] = await Promise.all([listPurchases(), listParties(), listGodowns(), listProducts(), listPurchaseReturns()])
+      const failed = [pu, pa, g, pr, re].find((x) => !x.success)
+      if (failed) setFormError(failed.error ?? "Could not load purchase data.")
+      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+      const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
+      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+      setVendors(partyList.filter((x) => x.type === "supplier" || x.type === "both"))
+      setGodowns(godownList); setProducts(productList)
+      setReturns(Array.isArray(re.data) ? re.data : [])
+      setPurchases((Array.isArray(pu.data) ? pu.data : []).map((row: any) => ({
+        ...row,
+        vendor_name: partyList.find((x) => x.id === row.vendor_id)?.name ?? row.vendor_id,
+        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+        items: (row.purchase_items ?? row.items ?? []).map((it: any) => ({
+          ...it, product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+        })),
+      })))
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not load purchase data.")
+    } finally {
+      setIsLoading(false)
+    }
   }, [])
+
+  // Mount load: without this the page never leaves its skeleton —
+  // isLoading starts true and only post-action handlers reloaded before.
+  React.useEffect(() => { loadData() }, [loadData])
 
   React.useEffect(() => {
     if (vendors.length > 0 && !vendorId) setVendorId(vendors[0].id)

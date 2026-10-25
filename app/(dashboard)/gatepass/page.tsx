@@ -81,33 +81,47 @@ export default function GatePassPage() {
     { productId: "", bags: 100, netWeight: 5000, remarks: "50kg Packed Certified Bags" },
   ])
 
+  // "Today" for the today-only filter, from client-side effect state (see
+  // isTodayISO): never read new Date() during render.
+  const [todayStr, setTodayStr] = React.useState<string | null>(null)
+  React.useEffect(() => { setTodayStr(new Date().toISOString().slice(0, 10)) }, [])
+
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const [gp, g, pr, pa, sm] = await Promise.all([listGatePasses(), listGodowns(), listProducts(), listParties(), getStockSummary()])
-    const failed = [gp, g, pr, pa, sm].find((x) => !x.success)
-    if (failed) setFormError(failed.error ?? "Could not load gate pass data.")
-    const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
-    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-    const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
-    setGodowns(godownList); setProducts(productList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both"))
-    setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
-    setGatePasses((Array.isArray(gp.data) ? gp.data : []).map((row: any) => ({
-      ...row,
-      customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
-      godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
-      items: (row.gate_pass_items ?? row.items ?? []).map((it: any) => ({
-        ...it, product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
-      })),
-    })))
-    setIsLoading(false)
+    try {
+      const [gp, g, pr, pa, sm] = await Promise.all([listGatePasses(), listGodowns(), listProducts(), listParties(), getStockSummary()])
+      const failed = [gp, g, pr, pa, sm].find((x) => !x.success)
+      if (failed) setFormError(failed.error ?? "Could not load gate pass data.")
+      const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
+      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+      setGodowns(godownList); setProducts(productList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both"))
+      setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
+      setGatePasses((Array.isArray(gp.data) ? gp.data : []).map((row: any) => ({
+        ...row,
+        customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
+        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+        items: (row.gate_pass_items ?? row.items ?? []).map((it: any) => ({
+          ...it, product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+        })),
+      })))
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not load gate pass data.")
+    } finally {
+      setIsLoading(false)
+    }
   }, [])
+
+  // Mount load: without this the page never leaves its skeleton —
+  // isLoading starts true and only post-action handlers reloaded before.
+  React.useEffect(() => { loadData() }, [loadData])
 
   React.useEffect(() => {
     if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
     if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
     const finishedProds = products.filter((p) => p.category === "finished_seed" || p.category === "by_product")
     if (finishedProds.length > 0 && items[0].productId === "") {
-      setItems([{ productId: finishedProds[0].id, bags: 100, netWeight: 5000, remarks: "Packed in 50kg Green PP Bags" }])
+      setItems([{ productId: finishedProds[0].id, bags: 100, netWeight: 5000, remarks: "" }])
     }
   }, [godowns, customers, products, godownId, customerId, items])
 
@@ -271,7 +285,7 @@ export default function GatePassPage() {
   }
 
   const visiblePasses = drillFilter === "today"
-    ? gatePasses.filter((gp) => isTodayISO(gp.date))
+    ? gatePasses.filter((gp) => isTodayISO(gp.date, todayStr))
     : drillFilter === "posted"
       ? gatePasses.filter((gp) => gp.status === "posted")
       : gatePasses

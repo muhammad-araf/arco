@@ -75,25 +75,39 @@ export default function ProductionPage() {
   const [wasteKg, setWasteKg] = React.useState<number>(250)
   const [batchNotes, setBatchNotes] = React.useState("")
 
+  // "Today" for the today-only filter, from client-side effect state (see
+  // isTodayISO): never read new Date() during render.
+  const [todayStr, setTodayStr] = React.useState<string | null>(null)
+  React.useEffect(() => { setTodayStr(new Date().toISOString().slice(0, 10)) }, [])
+
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const [b, g, pr, m, r, sm] = await Promise.all([listBatches(), listGodowns(), listProducts(), listMachines(), listRecipes(), getStockSummary()])
-    const failed = [b, g, pr, m, r, sm].find((x) => !x.success)
-    if (failed) setFormError(failed.error ?? "Could not load production data.")
-    const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
-    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-    const machineList = (Array.isArray(m.data) ? m.data : []) as Machine[]
-    setGodowns(godownList); setProducts(productList); setMachines(machineList)
-    setRecipes(Array.isArray(r.data) ? r.data : [])
-    setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
-    setBatches((Array.isArray(b.data) ? b.data : []).map((row: any) => ({
-      ...row,
-      machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? row.machine_id,
-      godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
-      output_product_name: productList.find((x) => x.id === row.output_product_id)?.name,
-    })))
-    setIsLoading(false)
+    try {
+      const [b, g, pr, m, r, sm] = await Promise.all([listBatches(), listGodowns(), listProducts(), listMachines(), listRecipes(), getStockSummary()])
+      const failed = [b, g, pr, m, r, sm].find((x) => !x.success)
+      if (failed) setFormError(failed.error ?? "Could not load production data.")
+      const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
+      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+      const machineList = (Array.isArray(m.data) ? m.data : []) as Machine[]
+      setGodowns(godownList); setProducts(productList); setMachines(machineList)
+      setRecipes(Array.isArray(r.data) ? r.data : [])
+      setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
+      setBatches((Array.isArray(b.data) ? b.data : []).map((row: any) => ({
+        ...row,
+        machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? row.machine_id,
+        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+        output_product_name: productList.find((x) => x.id === row.output_product_id)?.name,
+      })))
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not load production data.")
+    } finally {
+      setIsLoading(false)
+    }
   }, [])
+
+  // Mount load: without this the page never leaves its skeleton —
+  // isLoading starts true and only post-action handlers reloaded before.
+  React.useEffect(() => { loadData() }, [loadData])
 
   React.useEffect(() => {
     if (machines.length > 0 && !machineId) setMachineId(machines[0].id)
@@ -230,7 +244,7 @@ export default function ProductionPage() {
   }
 
   const visibleBatches = drillFilter === "today"
-    ? batches.filter((b) => isTodayISO(b.date))
+    ? batches.filter((b) => isTodayISO(b.date, todayStr))
     : drillFilter === "posted"
       ? batches.filter((b) => b.status === "posted")
       : batches
