@@ -177,11 +177,8 @@ export default function PackingPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <PackageCheck className="h-6 w-6 text-emerald-500" />
-            Final Unit Packing & Bardana Ledger
+            Packing
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Track packaging material inventory (PP bags, jute bardana), bag consumption, stitch/packing charges, and damages.
-          </p>
         </div>
 
         <button
@@ -190,7 +187,7 @@ export default function PackingPage() {
           className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
         >
           <Plus className="h-4 w-4" />
-          <span>Record Packing & Bag Consumption</span>
+          <span>New Packing</span>
         </button>
       </div>
 
@@ -232,9 +229,8 @@ export default function PackingPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <PackageCheck className="h-4 w-4 text-emerald-500" />
-            Bardana Ledger — Consumed, Damaged &amp; Closing
+            Bardana Ledger
           </h2>
-          <span className="text-xs text-muted-foreground">Opening + purchases are tracked in Masters &amp; Purchases; closing here is live stock.</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
@@ -264,7 +260,7 @@ export default function PackingPage() {
               {bardanaLedger.length === 0 && (
                 <tr>
                   <td colSpan={5} className="py-4">
-                    <EmptyState title="No packaging types yet" hint="Add bag / bardana types in Master Data to track consumption here." />
+                    <EmptyState title="No packaging types yet" hint="Add bag types in Masters." />
                   </td>
                 </tr>
               )}
@@ -323,7 +319,7 @@ export default function PackingPage() {
                   <td colSpan={9} className="py-4 font-sans">
                     <EmptyState
                       title="No packing entries yet"
-                      hint="Log a bagging run — packed and damaged bags are both deducted from bardana stock."
+                      hint="Log a bagging run."
                       actionLabel="Record Packing & Bag Consumption"
                       onAction={() => setIsModalOpen(true)}
                     />
@@ -462,7 +458,7 @@ export default function PackingPage() {
       <ConfirmDialog
         open={showConfirm}
         title="Post this packing record?"
-        description={draftRecord ? `${draftRecord.packing_no} will pack ${draftRecord.bags_packed} bags (${formatWeight(draftRecord.total_packed_kg)}) of ${draftRecord.output_product_name || "the selected product"} and deduct ${draftRecord.bags_packed + (draftRecord.damaged_bags || 0)} ${draftRecord.packaging_name || "bags"} from bardana stock (packed + damaged). Packing charge: ${formatCurrency(draftRecord.packing_charge)}.` : ""}
+        description={draftRecord ? `${draftRecord.packing_no} will pack ${draftRecord.bags_packed} bags (${formatWeight(draftRecord.total_packed_kg)}) of ${draftRecord.output_product_name || "the selected product"} and use ${draftRecord.bags_packed + (draftRecord.damaged_bags || 0)} ${draftRecord.packaging_name || "bags"}. Packing charge: ${formatCurrency(draftRecord.packing_charge)}.` : ""}
         confirmLabel="Post & Deduct Bardana"
         pending={isPending}
         onConfirm={handleConfirmPacking}
