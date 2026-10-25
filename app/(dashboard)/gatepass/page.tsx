@@ -806,7 +806,7 @@ export default function GatePassPage() {
       <ReversalDialog
         open={!!reversalTarget}
         voucherLabel={reversalTarget?.pass_no ?? ""}
-        note="Compensating inward ledger rows will restore the dispatched stock. The pass number will never be reused."
+        note="The dispatched stock will be restored. The pass number will never be reused."
         pending={isReversing}
         onConfirm={handleConfirmReversal}
         onCancel={() => setReversalTarget(null)}

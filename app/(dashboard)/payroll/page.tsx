@@ -82,7 +82,7 @@ export default function PayrollPage() {
     // be marked, and re-saving a date corrects it instead of duplicating.
     if (!attendanceDate) return setFormError("Pick the attendance date first.")
     if (attendanceDate > new Date().toISOString().slice(0, 10)) return setFormError("Attendance cannot be marked for a future date. Pick today or an earlier date.")
-    if (employees.length === 0) return setFormError("No employees exist yet. Add staff in Master Data before marking attendance.")
+    if (employees.length === 0) return setFormError("No employees exist yet. Add staff in Masters before marking attendance.")
     setFormError("")
     setShowConfirm(true)
   }
@@ -123,7 +123,7 @@ export default function PayrollPage() {
     try {
       const res = await runPayroll({ employeeId: runEmployeeId, month: runMonth, year: runYear })
       if (!res.success) { setFormError(res.error ?? "Could not run payroll."); return }
-      setFormNotice("Payroll period created (draft). Approve it, then pay it from the register below.")
+      setFormNotice("Payroll period created as a draft. Approve it, then pay it.")
       await loadData()
     } finally { setRunPending(false) }
   }
@@ -357,7 +357,7 @@ export default function PayrollPage() {
           </table>
         </div>
         <p className="text-[11px] text-muted-foreground mt-3">
-          Estimate only: 26 standard business days; daily staff at base rate × 26, monthly staff at base rate. Advance recovery is 0 until the employee advance ledger lands (Phase 2) — payroll rules (paid leave, half-day conversion, denominator) still need client approval per spec §13.4.
+          Estimate only: 26 standard business days. Daily staff at base rate × 26, monthly staff at base rate. Advance recovery is not counted yet.
         </p>
       </div>
       <div className="expensive-card p-5">

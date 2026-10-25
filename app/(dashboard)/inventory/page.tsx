@@ -136,9 +136,9 @@ export default function InventoryPage() {
     // Spec §5.3: a transfer needs distinct locations, a positive quantity,
     // enough source stock, and a reason — each failure says what to fix.
     if (!transferFromGodown || !transferToGodown || !transferProductId) return setTransferError("Select a product and both godowns for the transfer.")
-    if (transferFromGodown === transferToGodown) return setTransferError("Source and destination godowns must be different — a transfer moves stock between two locations.")
+    if (transferFromGodown === transferToGodown) return setTransferError("Source and destination must be different.")
     if (!isPositive(transferQty)) return setTransferError("Transfer quantity must be greater than zero.")
-    if (!transferNotes.trim()) return setTransferError("A transfer reason is required (spec §5.3). Write why this stock is moving.")
+    if (!transferNotes.trim()) return setTransferError("A reason is required. Write why this stock is moving.")
     const availableStock = rawSummary.filter((r) => r.product_id === transferProductId && r.godown_id === transferFromGodown).reduce((a, r) => a + (Number(r.balance_kg) || 0), 0)
     if (transferQty > availableStock) return setTransferError(`Insufficient stock in the source godown: ${availableStock} kg available, but ${transferQty} kg requested. Reduce the quantity.`)
     setTransferError("")

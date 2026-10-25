@@ -152,7 +152,7 @@ export default function InwardPage() {
     if (isPending) return
     // Spec §4.3: required fields + positive quantities blocked with an
     // actionable message — never a silent return.
-    if (!partyId) return setFormError("Select a supplier / source before posting. Add one in Master Data if the list is empty.")
+    if (!partyId) return setFormError("Select a supplier / source before posting. Add one in Masters if the list is empty.")
     if (!godownId) return setFormError("Select the target godown that will receive this stock.")
     for (let i = 0; i < items.length; i++) {
       const item = items[i]

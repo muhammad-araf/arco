@@ -45,7 +45,7 @@ export default function UsersPage() {
     const actor = me.data
     setMyRole(actor?.role ?? null)
     if (!actor) {
-      setError("Sign in required: no signed-in operator was found. Sign in as an operator to manage users.")
+      setError("Sign in as an operator to manage users.")
       setLoading(false)
       return
     }
@@ -66,7 +66,7 @@ export default function UsersPage() {
   async function confirmRoleChange() {
     if (!target) return
     if (reason.trim().length < 3) {
-      setError("A reason of at least 3 characters is required before a role change can be confirmed.")
+      setError("A reason of at least 3 characters is required.")
       return
     }
     setPending(true)

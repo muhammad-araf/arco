@@ -145,7 +145,7 @@ export default function PackingPage() {
     // packing_records rows are written by postBatch when a batch is posted
     // with a packing rate and bag count. Recording here would be a fake
     // local write, so this page refuses it and points at the real flow.
-    setFormError("No standalone packing action exists yet: packing records are written when a production batch is posted with a packing rate and bag count (production.ts postBatch). Post the batch in Production, then its bags, charge and bardana consumption appear here from getBardanaLedger and the batch list. Damaged bags have no write path in the current actions either — they are shown as 0 until a damaged-tracking action lands.")
+    setFormError("Packing is recorded when a production batch is posted — post the batch in Production instead. Damaged bags show as 0 until damaged-bag tracking is added.")
     setShowConfirm(false)
     setIsModalOpen(false)
     setDraftRecord(null)

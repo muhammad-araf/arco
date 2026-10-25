@@ -80,7 +80,7 @@ const dataDictionary: DataDictionaryItem[] = [
     excelColumn: "Net Profit Calc",
     systemField: "net_profit = Revenue - COGS - Overheads",
     targetTable: "reports",
-    description: "Replaces unverified spreadsheet formulas with double-entry ledger truth",
+    description: "Net profit from the ledger, not spreadsheet formulas",
     status: "mapped",
   },
 ]
@@ -167,11 +167,11 @@ export default function MigrationPage() {
     if (!openingGodownId) return setFormError("Select the godown this opening stock belongs to.")
     if (!openingProductId) return setFormError("Select the product for this opening stock.")
     if (!isPositive(openingStockWeight)) return setFormError("Opening stock weight must be greater than zero.")
-    if (!openingNotes.trim()) return setFormError("A source note is required — e.g. which scale count sheet this balance came from.")
+    if (!openingNotes.trim()) return setFormError("A source note is required — e.g. which scale count sheet.")
     const already = openingBalances.some(
       (b) => b.balance_kind === "stock" && b.product_id === openingProductId && b.godown_id === openingGodownId
     )
-    if (already) return setFormError("An opening balance for this product and godown is already recorded. Correcting it needs a stock adjustment (Phase 2) — recording a second opening row would double-count stock.")
+    if (already) return setFormError("An opening balance for this product and godown is already recorded. Correcting it needs a stock adjustment — a second opening row would double-count stock.")
     setFormError("")
     setShowOpeningConfirm(true)
   }
@@ -281,7 +281,7 @@ export default function MigrationPage() {
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Source Sheet</th>
                   <th className="pb-3 font-bold">Excel Column Name</th>
-                  <th className="pb-3 font-bold">Target System Field</th>
+                  <th className="pb-3 font-bold">Target Field</th>
                   <th className="pb-3 font-bold">Database Entity</th>
                   <th className="pb-3 font-bold">Conversion / Logic Rule</th>
                   <th className="pb-3 font-bold text-center">Status</th>
@@ -508,7 +508,7 @@ export default function MigrationPage() {
                 <div>
                   <strong className="text-foreground">{parsedFile.rows.length} data rows parsed from {parsedFile.name} for {importType.replace("_", " ")}.</strong>
                   <div className="text-[11px] text-muted-foreground mt-0.5">
-                    Preview only — nothing was written to masters. Writing rows needs the column mapping to be confirmed first (spec §18: ambiguous columns must be flagged, not guessed), which lands with the Phase 2 import.
+                    Preview only — nothing was saved yet. Confirm the column mapping first.
                   </div>
                   <div className="text-[11px] mt-1">Columns found: <span className="font-mono">{parsedFile.headers.join(", ")}</span></div>
                 </div>
