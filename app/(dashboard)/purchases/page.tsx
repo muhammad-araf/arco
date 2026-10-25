@@ -239,11 +239,8 @@ export default function PurchasesPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <ShoppingCart className="h-6 w-6 text-emerald-500" />
-            Purchases & Vendor Payables
+            Purchases
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Record raw seed and bardana purchases, track supplier invoice balances, payments, and credit liabilities.
-          </p>
         </div>
 
         <button
@@ -261,7 +258,7 @@ export default function PurchasesPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <Building2 className="h-4 w-4 text-emerald-500" />
-            Vendor Purchase Invoices ({visiblePurchases.length})
+            Invoices ({visiblePurchases.length})
           </h2>
         </div>
 
@@ -286,7 +283,7 @@ export default function PurchasesPage() {
                   <td colSpan={9} className="py-4">
                     <EmptyState
                       title={drillFilter === "payable" ? "No outstanding vendor balances" : "No purchase vouchers recorded yet"}
-                      hint={drillFilter === "payable" ? "Every posted purchase is fully paid." : "Record raw seed or bardana orders — unpaid balances become vendor payables."}
+                      hint={drillFilter === "payable" ? "Every posted purchase is fully paid." : "Record your first purchase."}
                       actionLabel="New Purchase Invoice"
                       onAction={() => setIsModalOpen(true)}
                     />
@@ -493,7 +490,7 @@ export default function PurchasesPage() {
       />
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Purchase Returns</h2>
-        <p className="text-xs text-muted-foreground mb-4">Returns link to a posted original purchase (createPurchaseReturn) and need a reason. This form returns the first line of the selected purchase; {returns.length} return(s) on record.</p>
+        <p className="text-xs text-muted-foreground mb-4">Returns need a posted purchase and a reason, and return the first line of the purchase. {returns.length} return(s) on record.</p>
         <form onSubmit={handlePurchaseReturn} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
           <div><label className="block font-medium text-foreground mb-1">Posted purchase *</label><select value={retPurchaseId} onChange={(e) => setRetPurchaseId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select purchase</option>{purchases.filter((x) => x.status === "posted").map((x) => (<option key={x.id} value={x.id}>{x.purchase_no}</option>))}</select></div>
           <div><label className="block font-medium text-foreground mb-1">Return quantity *</label><input type="number" value={retQty} onChange={(e) => setRetQty(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
@@ -505,7 +502,7 @@ export default function PurchasesPage() {
       <ReversalDialog
         open={!!reversalTarget}
         voucherLabel={reversalTarget?.purchase_no ?? ""}
-        note="The payable added by this invoice will be unwound from the vendor balance."
+        note="The vendor balance will be corrected."
         pending={isReversing}
         onConfirm={handleConfirmReversal}
         onCancel={() => setReversalTarget(null)}
