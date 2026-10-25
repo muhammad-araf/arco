@@ -87,11 +87,9 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2.5">
-            Operations Command Center
-            <span className="text-xs px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 font-semibold">Live Godown Feed</span>
+          <h1 className="text-2xl font-black tracking-tight text-foreground">
+            Dashboard
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">Unified operational overview — all figures aggregated client-side from Supabase server actions, never hand-edited.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <Link href="/inward" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"><Plus className="h-3.5 w-3.5" />New Inward</Link>
@@ -99,12 +97,12 @@ export default function DashboardPage() {
           <Link href="/production" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold"><Boxes className="h-3.5 w-3.5 text-amber-500" />Run Batch</Link>
         </div>
       </div>
-      {error && <AlertBanner tone="error" message={/not configured|Authentication required/i.test(error) ? "Supabase is not configured / sign in required: set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then sign in. No local demo data is shown." : error} onDismiss={() => setError("")} />}
+      {error && <AlertBanner tone="error" message={/not configured|Authentication required/i.test(error) ? "Supabase is not set up, or sign-in is required. See SETUP.md." : error} onDismiss={() => setError("")} />}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="expensive-card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Today&apos;s Inward</span><div className="h-8 w-8 rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center"><Truck className="h-4 w-4" /></div></div>
           <div className="my-3"><div className="text-2xl font-black text-foreground">{formatWeight(todayInwardKg)}</div><div className="text-xs text-muted-foreground mt-1 font-medium"><span className="text-emerald-600 dark:text-emerald-400 font-semibold">{formatBags(todayInwardBags)}</span> received today</div></div>
-          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>Arrivals today: {todayInward.length} voucher{todayInward.length === 1 ? "" : "s"}</span><Link href="/inward?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">View Bilty <ArrowUpRight className="h-3 w-3" /></Link></div>
+          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>Arrivals today: {todayInward.length} voucher{todayInward.length === 1 ? "" : "s"}</span><Link href="/inward?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">View <ArrowUpRight className="h-3 w-3" /></Link></div>
         </div>
         <div className="expensive-card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Processing Output</span><div className="h-8 w-8 rounded-lg bg-teal-500/15 text-teal-600 dark:text-teal-400 flex items-center justify-center"><Boxes className="h-4 w-4" /></div></div>
@@ -112,31 +110,31 @@ export default function DashboardPage() {
           <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>By-products today: {formatWeight(byproductToday)}</span><Link href="/production?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">Batches <ArrowUpRight className="h-3 w-3" /></Link></div>
         </div>
         <div className="expensive-card p-4 flex flex-col justify-between">
-          <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Outward Dispatches</span><div className="h-8 w-8 rounded-lg bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center"><FileCheck2 className="h-4 w-4" /></div></div>
-          <div className="my-3"><div className="text-2xl font-black text-foreground">{formatWeight(todayOutKg)}</div><div className="text-xs text-muted-foreground mt-1 font-medium"><span className="text-blue-600 dark:text-blue-400 font-semibold">{todayPasses.length} Gate Pass</span> dispatched &amp; verified</div></div>
-          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>Latest pass: {latestPass?.pass_no ?? "—"}</span><Link href="/gatepass?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">Gate Register <ArrowUpRight className="h-3 w-3" /></Link></div>
+          <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Dispatched</span><div className="h-8 w-8 rounded-lg bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center"><FileCheck2 className="h-4 w-4" /></div></div>
+          <div className="my-3"><div className="text-2xl font-black text-foreground">{formatWeight(todayOutKg)}</div><div className="text-xs text-muted-foreground mt-1 font-medium"><span className="text-blue-600 dark:text-blue-400 font-semibold">{todayPasses.length} gate pass{todayPasses.length === 1 ? "" : "es"}</span> today</div></div>
+          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>Latest pass: {latestPass?.pass_no ?? "—"}</span><Link href="/gatepass?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">View <ArrowUpRight className="h-3 w-3" /></Link></div>
         </div>
         <div className="expensive-card p-4 flex flex-col justify-between">
-          <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cash &amp; Daybook</span><div className="h-8 w-8 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center"><Wallet className="h-4 w-4" /></div></div>
-          <div className="my-3"><div className="text-2xl font-black text-foreground">{formatCurrency(cashOpening)}</div><div className="text-xs text-muted-foreground mt-1 font-medium">Opening balances across cash accounts (live daybook balances are on the Daybook page)</div></div>
-          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span className="text-emerald-500 font-medium">Daybook per account</span><Link href="/daybook?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">Daybook <ArrowUpRight className="h-3 w-3" /></Link></div>
+          <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cash</span><div className="h-8 w-8 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center"><Wallet className="h-4 w-4" /></div></div>
+          <div className="my-3"><div className="text-2xl font-black text-foreground">{formatCurrency(cashOpening)}</div><div className="text-xs text-muted-foreground mt-1 font-medium">Opening balances</div></div>
+          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>See live balances on the Daybook page</span><Link href="/daybook?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">Daybook <ArrowUpRight className="h-3 w-3" /></Link></div>
         </div>
       </div>
       {lowCount > 0 && (
         <Link href="/inventory?filter=low" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs font-medium text-amber-700 dark:text-amber-400 hover:bg-amber-500/15 transition-colors">
-          <AlertTriangle className="h-4 w-4 shrink-0" /><span><strong>{lowCount} product{lowCount === 1 ? "" : "s"} at or below minimum stock.</strong> View the low-stock list in Stock &amp; Godowns.</span><span className="ml-auto font-semibold flex items-center gap-0.5">View low stock <ArrowUpRight className="h-3.5 w-3.5" /></span>
+          <AlertTriangle className="h-4 w-4 shrink-0" /><span><strong>{lowCount} product{lowCount === 1 ? "" : "s"} at or below minimum stock.</strong></span><span className="ml-auto font-semibold flex items-center gap-0.5">View low stock <ArrowUpRight className="h-3.5 w-3.5" /></span>
         </Link>
       )}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
           <div className="expensive-card p-5">
             <div className="flex items-center justify-between mb-4">
-              <div><h2 className="text-sm font-bold text-foreground flex items-center gap-2"><Package className="h-4 w-4 text-emerald-500" />Live Product Stock Summary</h2><p className="text-xs text-muted-foreground">Current balances from getStockSummary, grouped by product.</p></div>
-              <Link href="/inventory" className="text-xs text-primary hover:underline font-semibold flex items-center gap-1">Full Stock Ledger <ArrowUpRight className="h-3.5 w-3.5" /></Link>
+              <div><h2 className="text-sm font-bold text-foreground flex items-center gap-2"><Package className="h-4 w-4 text-emerald-500" />Stock by Product</h2></div>
+              <Link href="/inventory" className="text-xs text-primary hover:underline font-semibold flex items-center gap-1">Full ledger <ArrowUpRight className="h-3.5 w-3.5" /></Link>
             </div>
             <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2.5">Product / Grade</th><th className="pb-2.5 text-right">Available Weight</th><th className="pb-2.5 text-center">Status</th></tr></thead>
               <tbody className="divide-y divide-border">
-                {productRows.length === 0 && <tr><td colSpan={3} className="py-8 text-center text-muted-foreground">No stock summary rows yet. Post an inward voucher to start the ledger trail.</td></tr>}
+                {productRows.length === 0 && <tr><td colSpan={3} className="py-8 text-center text-muted-foreground">No stock yet. Post an inward voucher.</td></tr>}
                 {productRows.map((item) => (
                   <tr key={item.name} className="hover:bg-muted transition-colors">
                     <td className="py-2.5 font-medium text-foreground">{item.name}</td>
@@ -147,9 +145,9 @@ export default function DashboardPage() {
               </tbody></table></div>
           </div>
           <div className="expensive-card p-5">
-            <div className="mb-4"><h2 className="text-sm font-bold text-foreground flex items-center gap-2"><Clock className="h-4 w-4 text-emerald-500" />Recent Stock Ledger Movements</h2><p className="text-xs text-muted-foreground">Immutable transaction trail from getStockLedger.</p></div>
+            <div className="mb-4"><h2 className="text-sm font-bold text-foreground flex items-center gap-2"><Clock className="h-4 w-4 text-emerald-500" />Recent Movements</h2></div>
             <div className="space-y-3">
-              {ledger.length === 0 && <p className="text-xs text-muted-foreground py-4 text-center">No stock movements yet. Post an inward voucher to start the ledger trail.</p>}
+              {ledger.length === 0 && <p className="text-xs text-muted-foreground py-4 text-center">No movements yet. Post an inward voucher.</p>}
               {ledger.map((entry: Row) => {
                 const isInward = num(entry.inward_qty) > 0
                 return (
@@ -165,18 +163,16 @@ export default function DashboardPage() {
         </div>
         <div className="space-y-6">
           <div className="expensive-card p-5">
-            <h2 className="text-sm font-bold text-foreground mb-1 flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />Commercial Ledgers</h2>
-            <p className="text-xs text-muted-foreground mb-4">Outstanding balances aggregated from invoices and purchases (balance_amount).</p>
+            <h2 className="text-sm font-bold text-foreground mb-1 flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />Money Owed</h2>
             <div className="space-y-3.5">
               <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20"><div className="text-xs text-muted-foreground font-medium">Customer Receivables</div><div className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{formatCurrency(receivables)}</div></div>
               <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/20"><div className="text-xs text-muted-foreground font-medium">Vendor Payables</div><div className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1">{formatCurrency(payables)}</div></div>
             </div>
-            <Link href="/payroll?filter=unpaid" className="mt-3 flex items-center justify-between p-3 rounded-lg bg-card border border-border hover:bg-muted transition-colors"><span className="text-xs text-muted-foreground font-medium">Payroll due (unpaid periods)</span><span className="text-xs font-bold text-foreground flex items-center gap-1">Open payroll <ArrowUpRight className="h-3.5 w-3.5 text-primary" /></span></Link>
+            <Link href="/payroll?filter=unpaid" className="mt-3 flex items-center justify-between p-3 rounded-lg bg-card border border-border hover:bg-muted transition-colors"><span className="text-xs text-muted-foreground font-medium">Payroll due</span><span className="text-xs font-bold text-foreground flex items-center gap-1">Open payroll <ArrowUpRight className="h-3.5 w-3.5 text-primary" /></span></Link>
             <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs"><Link href="/billing?filter=receivable" className="text-primary hover:underline font-semibold">Customer Invoices</Link><Link href="/purchases?filter=payable" className="text-primary hover:underline font-semibold">Vendor Bills</Link></div>
           </div>
           <div className="expensive-card p-5">
-            <h2 className="text-sm font-bold text-foreground mb-1 flex items-center gap-2"><Building2 className="h-4 w-4 text-emerald-500" />Godown Storage Utilization</h2>
-            <p className="text-xs text-muted-foreground mb-4">Physical storage footprint across active sheds, from the stock summary.</p>
+            <h2 className="text-sm font-bold text-foreground mb-1 flex items-center gap-2"><Building2 className="h-4 w-4 text-emerald-500" />Godown Space</h2>
             <div className="space-y-4">
               {godowns.map((g) => {
                 const stored = summary.filter((r) => r.godown_id === g.id).reduce((a, r) => a + num(r.balance_kg), 0)
