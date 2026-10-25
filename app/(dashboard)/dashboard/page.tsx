@@ -6,12 +6,7 @@ import {
   Truck, Boxes, FileCheck2, Wallet, TrendingUp, AlertTriangle, ArrowUpRight, ArrowDownRight,
   Plus, Building2, Clock, CheckCircle2, Package,
 } from "lucide-react"
-import { getStockSummary, getStockLedger } from "@/app/actions/inventory"
-import { listInward } from "@/app/actions/inward"
-import { listGatePasses } from "@/app/actions/gatepass"
-import { listBatches } from "@/app/actions/production"
-import { listInvoices, listPurchases, listCashAccounts } from "@/app/actions/finance"
-import { listGodowns } from "@/app/actions/masters"
+import { getDashboardData } from "@/app/actions/dashboard"
 import { formatCurrency, formatWeight, formatBags } from "@/lib/utils"
 import { PageSkeleton, AlertBanner } from "@/components/erp-ui"
 
@@ -32,26 +27,31 @@ export default function DashboardPage() {
   const [receivables, setReceivables] = React.useState(0)
   const [payables, setPayables] = React.useState(0)
   const [cashOpening, setCashOpening] = React.useState(0)
+  const [latestPassNo, setLatestPassNo] = React.useState<string | null>(null)
 
   const load = React.useCallback(async () => {
     setLoading(true)
     setError("")
     try {
-      const [s, l, inw, bat, gp, inv, pur, cash, gdn] = await Promise.all([
-        getStockSummary(), getStockLedger({ limit: 20 }), listInward(), listBatches(),
-        listGatePasses(), listInvoices(), listPurchases(), listCashAccounts(), listGodowns(),
-      ])
-      const failed = [s, l, inw, bat, gp, inv, pur, cash, gdn].find((r) => !r.success)
-      if (failed) setError(failed.error ?? "Could not load dashboard data.")
-      setSummary(Array.isArray(s.data) ? s.data : [])
-      setLedger(Array.isArray(l.data) ? l.data : [])
-      setInward(Array.isArray(inw.data) ? inw.data : [])
-      setBatches(Array.isArray(bat.data) ? bat.data : [])
-      setPasses(Array.isArray(gp.data) ? gp.data : [])
-      setGodowns(Array.isArray(gdn.data) ? gdn.data : [])
-      setReceivables((Array.isArray(inv.data) ? inv.data : []).reduce((a, r: Row) => a + num(r.balance_amount ?? num(r.total_amount) - num(r.paid_amount)), 0))
-      setPayables((Array.isArray(pur.data) ? pur.data : []).reduce((a, r: Row) => a + num(r.balance_amount ?? num(r.total_amount) - num(r.paid_amount)), 0))
-      setCashOpening((Array.isArray(cash.data) ? cash.data : []).reduce((a, r: Row) => a + num(r.opening_balance), 0))
+      // One aggregate call (was: nine separate actions, nine auth checks,
+      // five full-table fetches with nested line items). All downstream
+      // math below is unchanged.
+      const d = await getDashboardData()
+      if (!d.success) {
+        setError(d.error ?? "Could not load dashboard data.")
+        return
+      }
+      const data = (d.data ?? {}) as Record<string, any>
+      setSummary(Array.isArray(data.summary) ? data.summary : [])
+      setLedger(Array.isArray(data.ledger) ? data.ledger : [])
+      setInward(Array.isArray(data.inwardToday) ? data.inwardToday : [])
+      setBatches(Array.isArray(data.batchesToday) ? data.batchesToday : [])
+      setPasses(Array.isArray(data.passesToday) ? data.passesToday : [])
+      setGodowns(Array.isArray(data.godowns) ? data.godowns : [])
+      setReceivables(num(data.receivables))
+      setPayables(num(data.payables))
+      setCashOpening(num(data.cashOpening))
+      setLatestPassNo(data.latestPassNo ?? null)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -81,7 +81,6 @@ export default function DashboardPage() {
     byProduct.set(r.product_id, cur)
   }
   const productRows = [...byProduct.values()]
-  const latestPass = passes.find((r) => r.status === "posted")
 
   return (
     <div className="space-y-6">
@@ -112,7 +111,7 @@ export default function DashboardPage() {
         <div className="expensive-card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Dispatched</span><div className="h-8 w-8 rounded-lg bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center"><FileCheck2 className="h-4 w-4" /></div></div>
           <div className="my-3"><div className="text-2xl font-black text-foreground">{formatWeight(todayOutKg)}</div><div className="text-xs text-muted-foreground mt-1 font-medium"><span className="text-blue-600 dark:text-blue-400 font-semibold">{todayPasses.length} gate pass{todayPasses.length === 1 ? "" : "es"}</span> today</div></div>
-          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>Latest pass: {latestPass?.pass_no ?? "—"}</span><Link href="/gatepass?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">View <ArrowUpRight className="h-3 w-3" /></Link></div>
+          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>Latest pass: {latestPassNo ?? "—"}</span><Link href="/gatepass?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">View <ArrowUpRight className="h-3 w-3" /></Link></div>
         </div>
         <div className="expensive-card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cash</span><div className="h-8 w-8 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center"><Wallet className="h-4 w-4" /></div></div>
