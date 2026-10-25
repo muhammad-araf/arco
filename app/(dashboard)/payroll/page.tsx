@@ -158,7 +158,7 @@ export default function PayrollPage() {
     <div className="space-y-6">
       <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
       {drillFilter === "unpaid" && (
-        <AlertBanner tone="warning" message={periods.length === 0 ? "No finalized payroll periods exist yet — the register below is an estimate for the current period, not a finalized payable. Run, approve and pay periods in the finalized register below." : "Finalized payroll periods for the current month are listed below; the estimate register is still only an estimate."} />
+        <AlertBanner tone="warning" message={periods.length === 0 ? "No finalized periods yet — the register below is only an estimate." : "The register below is only an estimate. Finalized periods are listed separately."} />
       )}
       <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
       <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
@@ -166,11 +166,8 @@ export default function PayrollPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <Users2 className="h-6 w-6 text-emerald-500" />
-            Employee Management, Attendance & Payroll
+            Payroll
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Log daily roster attendance, manage monthly and daily-wage staff, advances, and generate pay slips.
-          </p>
         </div>
 
         <button
@@ -180,7 +177,7 @@ export default function PayrollPage() {
           className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
         >
           {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
-          <span>{isPending ? "Saving…" : "Save Today's Attendance"}</span>
+          <span>{isPending ? "Saving…" : "Save Attendance"}</span>
         </button>
       </div>
 
@@ -190,9 +187,8 @@ export default function PayrollPage() {
           <div>
             <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
               <UserCheck className="h-4 w-4 text-emerald-500" />
-              Daily Attendance Roster
+              Attendance
             </h2>
-            <span className="text-xs text-muted-foreground">Mark daily operational presence across godowns and plants</span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -224,7 +220,7 @@ export default function PayrollPage() {
                   <td colSpan={6} className="py-4">
                     <EmptyState
                       title="No employees yet"
-                      hint="Add staff in Master Data — code, designation, pay type and base rate — then mark attendance here."
+                      hint="Add staff in Masters, then mark attendance here."
                     />
                   </td>
                 </tr>
@@ -303,7 +299,7 @@ export default function PayrollPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <DollarSign className="h-4 w-4 text-emerald-500" />
-            Monthly Payroll Estimated Register (Current Period)
+            Payroll Estimate
           </h2>
           <span className="text-xs text-muted-foreground font-mono">26 Standard Business Days</span>
         </div>
@@ -365,8 +361,8 @@ export default function PayrollPage() {
         </p>
       </div>
       <div className="expensive-card p-5">
-        <h2 className="text-sm font-bold text-foreground mb-1">Finalized Payroll Register &amp; Unpaid Salaries</h2>
-        <p className="text-xs text-muted-foreground mb-4">From listPayroll (current month) and getUnpaidSalaries. Draft periods are approved, then paid; only approved / partially-paid periods with a balance appear as unpaid. Total unpaid: {formatCurrency(unpaidTotal)}.</p>
+        <h2 className="text-sm font-bold text-foreground mb-1">Finalized Payroll</h2>
+        <p className="text-xs text-muted-foreground mb-4">Only approved or partially-paid periods with a balance appear here. Total unpaid: {formatCurrency(unpaidTotal)}.</p>
         <form onSubmit={handleRunPayroll} className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs mb-4">
           <div><label className="block font-medium text-foreground mb-1">Employee *</label><select value={runEmployeeId} onChange={(e) => setRunEmployeeId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select employee</option>{employees.map((e) => (<option key={e.id} value={e.id}>{e.full_name}</option>))}</select></div>
           <div><label className="block font-medium text-foreground mb-1">Month</label><input type="number" value={runMonth} onChange={(e) => setRunMonth(Number(e.target.value))} min="1" max="12" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
@@ -382,7 +378,7 @@ export default function PayrollPage() {
       <ConfirmDialog
         open={showConfirm}
         title="Save attendance?"
-        description={`Save the roster for ${attendanceDate} for ${employees.length} employee${employees.length === 1 ? "" : "s"}. If this date was saved before, the marks are updated in place — no duplicate records are created.`}
+        description={`Save the roster for ${attendanceDate} for ${employees.length} employee${employees.length === 1 ? "" : "s"}. Saving again updates the same marks.`}
         confirmLabel="Save Attendance"
         pending={isPending}
         onConfirm={handleConfirmSave}
