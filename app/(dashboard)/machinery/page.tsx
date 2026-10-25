@@ -195,11 +195,8 @@ export default function MachineryJobsPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <Cog className="h-6 w-6 text-emerald-500" />
-            Machinery Processing Jobs & Customer Services
+            Machinery
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Process customer-owned seed, apply rate bases (per 50kg, per bag, maund, or fixed), and calculate service charges.
-          </p>
         </div>
 
         <button
@@ -208,7 +205,7 @@ export default function MachineryJobsPage() {
           className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
         >
           <Plus className="h-4 w-4" />
-          <span>New Machinery Service Job</span>
+          <span>New Job</span>
         </button>
       </div>
 
@@ -217,7 +214,7 @@ export default function MachineryJobsPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <Cog className="h-4 w-4 text-emerald-500" />
-            Completed Machinery Service Jobs ({jobs.length})
+            Jobs ({jobs.length})
           </h2>
         </div>
 
@@ -266,7 +263,7 @@ export default function MachineryJobsPage() {
                   <td colSpan={10} className="py-4">
                     <EmptyState
                       title="No machinery jobs recorded yet"
-                      hint="Log a grading, cleaning or treatment job — the service charge is calculated from the rate basis you pick."
+                      hint="Log a grading, cleaning or treatment job."
                       actionLabel="New Machinery Service Job"
                       onAction={() => setIsModalOpen(true)}
                     />
