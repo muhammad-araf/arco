@@ -782,7 +782,11 @@ export async function listInvoices(filters: {
   if (!db) return fail(error);
   const gate = await requireSignedIn(db);
   if (!gate.ok) return fail(gate.error);
-  let q = db.from("customer_invoices").select("*, invoice_lines(*)").order("date", { ascending: false });
+  // Header columns only: no caller reads invoice_lines from this list
+  // (billing renders headers and balances; receipt print builds its own
+  // allocations), so shipping every line with every invoice was pure
+  // payload on every billing load.
+  let q = db.from("customer_invoices").select("*").order("date", { ascending: false });
   if (filters.customerId) q = q.eq("customer_id", filters.customerId);
   if (filters.status) q = q.eq("status", filters.status);
   if (filters.sourceType) q = q.eq("source_type", filters.sourceType);
