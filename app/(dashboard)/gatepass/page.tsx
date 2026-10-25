@@ -287,11 +287,8 @@ export default function GatePassPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <FileCheck2 className="h-6 w-6 text-emerald-500" />
-            Outgoing Goods & Gate Pass Engine
+            Gate Pass
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Strict dispatch authorizations, vehicle & driver tracking, stock verification, and print-ready A4 gate passes.
-          </p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -328,7 +325,7 @@ export default function GatePassPage() {
             className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
           >
             <Plus className="h-4 w-4" />
-            <span>Create & Authorize Gate Pass</span>
+            <span>New Gate Pass</span>
           </button>
         </div>
       </div>
@@ -338,9 +335,8 @@ export default function GatePassPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-emerald-500" />
-            Issued Gate Passes ({visiblePasses.length})
+            Gate Passes ({visiblePasses.length})
           </h2>
-          <span className="text-xs text-muted-foreground">Authorized Premise Clearance Documents</span>
         </div>
 
         <div className="overflow-x-auto">
@@ -364,7 +360,7 @@ export default function GatePassPage() {
                   <td colSpan={9} className="py-4">
                     <EmptyState
                       title={drillFilter ? "No gate passes match this filter" : "No gate passes issued yet"}
-                      hint={drillFilter ? "Clear the dashboard filter above to see the full register." : "Create your first authorized dispatch — stock is verified before the pass is issued."}
+                      hint={drillFilter ? "Clear the filter to see all passes." : "Create your first gate pass."}
                       actionLabel="Create & Authorize Gate Pass"
                       onAction={() => setIsModalOpen(true)}
                     />
@@ -414,7 +410,7 @@ export default function GatePassPage() {
                           type="button"
                           onClick={() => setReturnTarget(gp)}
                           className="px-2 py-1 rounded-md hover:bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[11px] font-semibold cursor-pointer"
-                          title="Return this pass in full (partial returns pass items via returnGatePass)"
+                          title="Return this pass in full"
                         >
                           Return
                         </button>
@@ -525,7 +521,7 @@ export default function GatePassPage() {
                     type="text"
                     value={driverName}
                     onChange={(e) => setDriverName(e.target.value)}
-                    placeholder="Driver's Name"
+                    placeholder="Driver name"
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   />
@@ -792,7 +788,7 @@ export default function GatePassPage() {
       <ConfirmDialog
         open={returnTarget !== null}
         title={`Return ${returnTarget?.pass_no ?? ""} in full?`}
-        description="The full dispatched quantity is returned to stock. For a partial return, call returnGatePass with item quantities — the server action supports it; this button covers the full-return flow."
+        description="The full dispatched quantity is returned to stock."
         confirmLabel="Return in full"
         pending={returnPending}
         onConfirm={handleFullReturn}
