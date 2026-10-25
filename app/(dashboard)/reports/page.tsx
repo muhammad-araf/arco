@@ -137,18 +137,15 @@ export default function ReportsPage() {
 
   return (
     <div className="space-y-6">
-      <AlertBanner tone="warning" message="P&L from getPL (spec §15): posted invoices only; receipts are never revenue. Anything the backend excludes or cannot value is shown below exactly as the backend reports it — do not treat this P&L as audited accounts." />
-      {reportError && <AlertBanner tone="error" message={/not configured|Authentication required/i.test(reportError) ? "Supabase is not configured / sign in required: set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then sign in. No local demo data is shown." : reportError} onDismiss={() => setReportError("")} />}
+      <AlertBanner tone="warning" message="P&L counts posted invoices only. Receipts are never revenue. This is not audited accounts." />
+      {reportError && <AlertBanner tone="error" message={/not configured|Authentication required/i.test(reportError) ? "Supabase is not set up, or sign-in is required. See SETUP.md." : reportError} onDismiss={() => setReportError("")} />}
       {plWarnings.map((w, i) => (<AlertBanner key={i} tone="warning" message={w} />))}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <BarChart3 className="h-6 w-6 text-emerald-500" />
-            Executive Reports & Profit & Loss Statement
+            Reports
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Audit-grade reporting engine for stock movements, packaging materials, and commercial P&L analysis.
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -343,7 +340,7 @@ export default function ReportsPage() {
                 {stockSummary.length === 0 && (
                   <tr>
                     <td colSpan={6} className="py-4 font-sans">
-                      <EmptyState title="No products in stock summary" hint="Add products in Master Data and post inward vouchers to build stock." />
+                      <EmptyState title="No products in stock summary" hint="Add products in Masters and post inward vouchers." />
                     </td>
                   </tr>
                 )}
@@ -395,7 +392,7 @@ export default function ReportsPage() {
                 {bardanaRows.length === 0 && (
                   <tr>
                     <td colSpan={7} className="py-4 font-sans">
-                      <EmptyState title="No packaging types yet" hint="Add bag / bardana types in Master Data to see the ledger here." />
+                      <EmptyState title="No packaging types yet" hint="Add bag types in Masters." />
                     </td>
                   </tr>
                 )}
@@ -420,7 +417,7 @@ export default function ReportsPage() {
             <select value={stmtPartyId} onChange={(e) => setStmtPartyId(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select a party</option>{parties.filter((x) => selectedReport === "vendor" ? (x.type === "supplier" || x.type === "both") : (x.type === "customer" || x.type === "both")).map((x) => (<option key={x.id} value={x.id}>{x.name}</option>))}</select>
             {stmtError && <span className="text-red-600 dark:text-red-400 font-medium">{stmtError}</span>}
           </div>
-          {!stmt && <EmptyState title="Select a party to view its statement" hint="Statements come from getPartyStatement / getVendorStatement: opening balance, charges, settlements and closing, with a receivable-positive sign convention." />}
+          {!stmt && <EmptyState title="Select a party to view its statement" hint="Shows opening balance, charges, settlements and closing. A positive balance means the party owes you." />}
           {stmt && (
             <div>
               <p className="text-xs text-muted-foreground mb-3">Opening: {formatCurrency(Number(stmt.opening || 0))} · Charges: {formatCurrency(Number(stmt.charges || 0))} · Settlements: {formatCurrency(Number(stmt.settlements || 0))} · Closing: {formatCurrency(Number(stmt.closing || 0))} ({stmt.closingKind})</p>
