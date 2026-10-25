@@ -41,45 +41,61 @@ export default function ReportsPage() {
   const [isLoading, setIsLoading] = React.useState(true)
   const [dateFrom, setDateFrom] = React.useState("")
   const [dateTo, setDateTo] = React.useState("")
+  // Month defaults come from a client-side effect, never from render
+  // (blocking-prerender-current-time under cacheComponents). The skeleton
+  // covers first paint, so real defaults are set before content renders.
+  const [defaultFrom, setDefaultFrom] = React.useState("")
+  const [defaultTo, setDefaultTo] = React.useState("")
+  React.useEffect(() => {
+    const now = new Date()
+    setDefaultFrom(now.toISOString().slice(0, 8) + "01")
+    setDefaultTo(now.toISOString().slice(0, 10))
+  }, [])
 
-  const effFrom = dateFrom || new Date().toISOString().slice(0, 8) + "01"
-  const effTo = dateTo || new Date().toISOString().slice(0, 10)
+  const effFrom = dateFrom || defaultFrom
+  const effTo = dateTo || defaultTo
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    setReportError("")
-    const [plRes, sm, le, ba, pk, pa, pr] = await Promise.all([
-      getPL({ from: effFrom, to: effTo }),
-      getStockSummary(), getStockLedger({ from: effFrom, to: effTo }),
-      getBardanaLedger({ from: effFrom, to: effTo }),
-      listPackagingTypes(), listParties(), listProducts(),
-    ])
-    const failed = [plRes, sm, le, ba, pk, pa, pr].find((x) => !x.success)
-    if (failed) setReportError(failed.error ?? "Could not load report data.")
-    setPl(plRes.success ? plRes.data : null)
-    const productList = Array.isArray(pr.data) ? pr.data : []
-    const grouped = new Map<string, any>()
-    for (const r of (Array.isArray(sm.data) ? sm.data : []) as any[]) {
-      const prod = productList.find((x: any) => x.id === r.product_id)
-      const cur = grouped.get(r.product_id) ?? { id: r.product_id, code: prod?.code ?? "", name: r.product_name, category: prod?.category ?? "", totalStock: 0, bagsCount: 0, min_stock: prod?.min_stock ?? 0 }
-      cur.totalStock += Number(r.balance_kg) || 0
-      grouped.set(r.product_id, cur)
+    try {
+      setReportError("")
+      const [plRes, sm, le, ba, pk, pa, pr] = await Promise.all([
+        getPL({ from: effFrom, to: effTo }),
+        getStockSummary(), getStockLedger({ from: effFrom, to: effTo }),
+        getBardanaLedger({ from: effFrom, to: effTo }),
+        listPackagingTypes(), listParties(), listProducts(),
+      ])
+      const failed = [plRes, sm, le, ba, pk, pa, pr].find((x) => !x.success)
+      if (failed) setReportError(failed.error ?? "Could not load report data.")
+      setPl(plRes.success ? plRes.data : null)
+      const productList = Array.isArray(pr.data) ? pr.data : []
+      const grouped = new Map<string, any>()
+      for (const r of (Array.isArray(sm.data) ? sm.data : []) as any[]) {
+        const prod = productList.find((x: any) => x.id === r.product_id)
+        const cur = grouped.get(r.product_id) ?? { id: r.product_id, code: prod?.code ?? "", name: r.product_name, category: prod?.category ?? "", totalStock: 0, bagsCount: 0, min_stock: prod?.min_stock ?? 0 }
+        cur.totalStock += Number(r.balance_kg) || 0
+        grouped.set(r.product_id, cur)
+      }
+      for (const cur of grouped.values()) {
+        const prod = productList.find((x: any) => x.id === cur.id)
+        cur.bagsCount = prod?.weight_per_bag ? Math.round(cur.totalStock / prod.weight_per_bag) : 0
+      }
+      setStockSummary([...grouped.values()])
+      setLedgerRows(Array.isArray(le.data) ? le.data : [])
+      setBardanaTotals(ba.success ? ba.data : null)
+      setPackaging(Array.isArray(pk.data) ? pk.data : [])
+      setParties(Array.isArray(pa.data) ? pa.data : [])
+      setJobs([])
+      setPackingRecords([])
+      setExpenses([])
+    } catch (err) {
+      setReportError(err instanceof Error ? err.message : "Could not load report data.")
+    } finally {
+      setIsLoading(false)
     }
-    for (const cur of grouped.values()) {
-      const prod = productList.find((x: any) => x.id === cur.id)
-      cur.bagsCount = prod?.weight_per_bag ? Math.round(cur.totalStock / prod.weight_per_bag) : 0
-    }
-    setStockSummary([...grouped.values()])
-    setLedgerRows(Array.isArray(le.data) ? le.data : [])
-    setBardanaTotals(ba.success ? ba.data : null)
-    setPackaging(Array.isArray(pk.data) ? pk.data : [])
-    setParties(Array.isArray(pa.data) ? pa.data : [])
-    setJobs([])
-    setPackingRecords([])
-    setExpenses([])
-    setIsLoading(false)
   }, [effFrom, effTo])
 
   React.useEffect(() => {
+    if (!effFrom || !effTo) return
     loadData()
   }, [loadData])
 

@@ -58,17 +58,22 @@ export default function MastersPage() {
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const [pr, g, pa, m, pk, em, le] = await Promise.all([listProducts(true), listGodowns(true), listParties(true), listMachines(true), listPackagingTypes(true), listEmployees(true), getStockLedger({ limit: 500 })])
-    const failed = [pr, g, pa, m, pk, em, le].find((x) => !x.success)
-    if (failed) setFormError(failed.error ?? "Could not load master data.")
-    setProducts(Array.isArray(pr.data) ? pr.data : [])
-    setGodowns(Array.isArray(g.data) ? g.data : [])
-    setParties(Array.isArray(pa.data) ? pa.data : [])
-    setMachines(Array.isArray(m.data) ? m.data : [])
-    setPackaging(Array.isArray(pk.data) ? pk.data : [])
-    setEmployees(Array.isArray(em.data) ? em.data : [])
-    setReferencedIds(new Set((Array.isArray(le.data) ? le.data : []).map((e: any) => e.product_id)))
-    setIsLoading(false)
+    try {
+      const [pr, g, pa, m, pk, em, le] = await Promise.all([listProducts(true), listGodowns(true), listParties(true), listMachines(true), listPackagingTypes(true), listEmployees(true), getStockLedger({ limit: 500 })])
+      const failed = [pr, g, pa, m, pk, em, le].find((x) => !x.success)
+      if (failed) setFormError(failed.error ?? "Could not load master data.")
+      setProducts(Array.isArray(pr.data) ? pr.data : [])
+      setGodowns(Array.isArray(g.data) ? g.data : [])
+      setParties(Array.isArray(pa.data) ? pa.data : [])
+      setMachines(Array.isArray(m.data) ? m.data : [])
+      setPackaging(Array.isArray(pk.data) ? pk.data : [])
+      setEmployees(Array.isArray(em.data) ? em.data : [])
+      setReferencedIds(new Set((Array.isArray(le.data) ? le.data : []).map((e: any) => e.product_id)))
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not load master data.")
+    } finally {
+      setIsLoading(false)
+    }
   }, [])
 
   React.useEffect(() => {

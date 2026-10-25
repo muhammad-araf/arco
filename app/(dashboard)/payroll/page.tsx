@@ -27,7 +27,7 @@ import {
 
 export default function PayrollPage() {
   const [employees, setEmployees] = React.useState<Employee[]>([])
-  const [attendanceDate, setAttendanceDate] = React.useState(new Date().toISOString().slice(0, 10))
+  const [attendanceDate, setAttendanceDate] = React.useState("")
   const [attendanceState, setAttendanceState] = React.useState<{ [empId: string]: AttendanceStatus }>({})
   const [isLoading, setIsLoading] = React.useState(true)
   const [formError, setFormError] = React.useState("")
@@ -39,39 +39,64 @@ export default function PayrollPage() {
   const [unpaid, setUnpaid] = React.useState<any[]>([])
   const [unpaidTotal, setUnpaidTotal] = React.useState(0)
   const [runEmployeeId, setRunEmployeeId] = React.useState("")
-  const [runMonth, setRunMonth] = React.useState(() => new Date().getMonth() + 1)
-  const [runYear, setRunYear] = React.useState(() => new Date().getFullYear())
+  const [runMonth, setRunMonth] = React.useState(0)
+  const [runYear, setRunYear] = React.useState(0)
   const [runPending, setRunPending] = React.useState(false)
   const saveGuard = React.useRef(false)
 
+  // Date defaults come from a client-side effect, never from render:
+  // reading new Date() during render blocks prerendering under
+  // cacheComponents (blocking-prerender-current-time). The skeleton covers
+  // first paint, so real defaults are set before content renders.
+  React.useEffect(() => {
+    const now = new Date()
+    setAttendanceDate(now.toISOString().slice(0, 10))
+    setRunMonth(now.getMonth() + 1)
+    setRunYear(now.getFullYear())
+  }, [])
+
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const now = new Date()
-    const [em, att, per, un] = await Promise.all([
-      listEmployees(), listAttendance({ from: attendanceDate, to: attendanceDate }),
-      listPayroll({ month: now.getMonth() + 1, year: now.getFullYear() }), getUnpaidSalaries(),
-    ])
-    const failed = [em, att, per, un].find((x) => !x.success)
-    if (failed) setFormError(failed.error ?? "Could not load payroll data.")
-    const emps = (Array.isArray(em.data) ? em.data : []) as Employee[]
-    setEmployees(emps)
-    const initialAtt: { [empId: string]: AttendanceStatus } = {}
-    emps.forEach((emp) => { initialAtt[emp.id] = "present" })
-    for (const row of (Array.isArray(att.data) ? att.data : []) as any[]) {
-      if (row.employee_id && row.status) initialAtt[row.employee_id] = row.status
+    try {
+      const now = new Date()
+      const [em, att, per, un] = await Promise.all([
+        listEmployees(), listAttendance({ from: attendanceDate, to: attendanceDate }),
+        listPayroll({ month: now.getMonth() + 1, year: now.getFullYear() }), getUnpaidSalaries(),
+      ])
+      const failed = [em, att, per, un].find((x) => !x.success)
+      if (failed) setFormError(failed.error ?? "Could not load payroll data.")
+      const emps = (Array.isArray(em.data) ? em.data : []) as Employee[]
+      setEmployees(emps)
+      const initialAtt: { [empId: string]: AttendanceStatus } = {}
+      emps.forEach((emp) => { initialAtt[emp.id] = "present" })
+      for (const row of (Array.isArray(att.data) ? att.data : []) as any[]) {
+        if (row.employee_id && row.status) initialAtt[row.employee_id] = row.status
+      }
+      setAttendanceState(initialAtt)
+      setPeriods(Array.isArray(per.data) ? per.data : [])
+      const unData: any = un.data ?? {}
+      setUnpaid(Array.isArray(unData.rows) ? unData.rows : [])
+      setUnpaidTotal(Number(unData.totalUnpaid || 0))
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not load payroll data.")
+    } finally {
+      setIsLoading(false)
     }
-    setAttendanceState(initialAtt)
-    setPeriods(Array.isArray(per.data) ? per.data : [])
-    const unData: any = un.data ?? {}
-    setUnpaid(Array.isArray(unData.rows) ? unData.rows : [])
-    setUnpaidTotal(Number(unData.totalUnpaid || 0))
-    setIsLoading(false)
   }, [attendanceDate])
 
+  // Keyed mount guard: the effect re-runs whenever loadData changes, and
+  // dev double-invokes mount effects — without this, the same four payroll
+  // actions fire twice with identical params (as seen in the owner's log).
+  // The guard skips repeat loads for the same date; changing the date still
+  // refetches, and handlers call loadData() directly, unaffected.
+  const mountLoadedFor = React.useRef<string | null>(null)
   React.useEffect(() => {
+    if (!attendanceDate) return
+    if (mountLoadedFor.current === attendanceDate) return
+    mountLoadedFor.current = attendanceDate
     loadData()
     setDrillFilter(getUrlFilter())
-  }, [loadData])
+  }, [loadData, attendanceDate])
 
   const handleStatusChange = (empId: string, status: AttendanceStatus) => {
     setAttendanceState((prev) => ({ ...prev, [empId]: status }))

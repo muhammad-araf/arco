@@ -76,27 +76,37 @@ export default function InwardPage() {
   // Supabase-backed load: DB rows (incoming_goods + incoming_goods_items)
   // are mapped onto the page's local voucher shape; names come from the
   // master lists, not from hand-edited local state.
+  // "Today" for the today-only filter, from client-side effect state (see
+  // isTodayISO): never read new Date() during render.
+  const [todayStr, setTodayStr] = React.useState<string | null>(null)
+  React.useEffect(() => { setTodayStr(new Date().toISOString().slice(0, 10)) }, [])
+
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const [v, g, pr, pa] = await Promise.all([listInward(), listGodowns(), listProducts(), listParties()])
-    const failed = [v, g, pr, pa].find((r) => !r.success)
-    if (failed) setFormError(failed.error ?? "Could not load inward data.")
-    const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
-    const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-    const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
-    setGodowns(godownList)
-    setProducts(productList)
-    setParties(partyList.filter((pt) => pt.type === "supplier" || pt.type === "both" || pt.type === "source"))
-    setVouchers((Array.isArray(v.data) ? v.data : []).map((row: any) => ({
-      ...row,
-      party_name: partyList.find((x) => x.id === row.party_id)?.name ?? row.party_id,
-      godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
-      items: (row.incoming_goods_items ?? row.items ?? []).map((it: any) => ({
-        ...it,
-        product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
-      })),
-    })))
-    setIsLoading(false)
+    try {
+      const [v, g, pr, pa] = await Promise.all([listInward(), listGodowns(), listProducts(), listParties()])
+      const failed = [v, g, pr, pa].find((r) => !r.success)
+      if (failed) setFormError(failed.error ?? "Could not load inward data.")
+      const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
+      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+      setGodowns(godownList)
+      setProducts(productList)
+      setParties(partyList.filter((pt) => pt.type === "supplier" || pt.type === "both" || pt.type === "source"))
+      setVouchers((Array.isArray(v.data) ? v.data : []).map((row: any) => ({
+        ...row,
+        party_name: partyList.find((x) => x.id === row.party_id)?.name ?? row.party_id,
+        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+        items: (row.incoming_goods_items ?? row.items ?? []).map((it: any) => ({
+          ...it,
+          product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+        })),
+      })))
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not load inward data.")
+    } finally {
+      setIsLoading(false)
+    }
   }, [])
 
   React.useEffect(() => {
@@ -268,7 +278,7 @@ export default function InwardPage() {
   }
 
   const visibleVouchers = drillFilter === "today"
-    ? vouchers.filter((v) => isTodayISO(v.date))
+    ? vouchers.filter((v) => isTodayISO(v.date, todayStr))
     : drillFilter === "posted"
       ? vouchers.filter((v) => v.status === "posted")
       : vouchers

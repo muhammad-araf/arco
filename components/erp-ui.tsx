@@ -22,10 +22,13 @@ export function getUrlFilter(): string | null {
   }
 }
 
-/** True when an ISO date string falls on the local "today". */
-export function isTodayISO(dateStr: string): boolean {
-  if (!dateStr) return false
-  return dateStr.slice(0, 10) === new Date().toISOString().slice(0, 10)
+/** True when an ISO date string falls on the caller's "today". The today
+ * value is passed in from client-side effect state — never read new Date()
+ * here, so pages using this filter in render stay prerenderable under
+ * cacheComponents (blocking-prerender-current-time). */
+export function isTodayISO(dateStr: string, todayISO?: string | null): boolean {
+  if (!dateStr || !todayISO) return false
+  return dateStr.slice(0, 10) === todayISO
 }
 
 /** Positive-number guard used by every posting form (spec §1.2:

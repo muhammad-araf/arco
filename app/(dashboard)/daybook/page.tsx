@@ -37,8 +37,11 @@ export default function DaybookPage() {
   const [daybook, setDaybook] = React.useState<any | null>(null)
   const [cashClosing, setCashClosing] = React.useState(0)
   const [bankClosing, setBankClosing] = React.useState(0)
-  const [fromDate, setFromDate] = React.useState(() => new Date().toISOString().slice(0, 8) + "01")
-  const [toDate, setToDate] = React.useState(() => new Date().toISOString().slice(0, 10))
+  const [fromDate, setFromDate] = React.useState("")
+  const [toDate, setToDate] = React.useState("")
+  // "Today" for the today-only filter, from client-side effect state (see
+  // isTodayISO): never read new Date() during render.
+  const [todayStr, setTodayStr] = React.useState<string | null>(null)
   const [expReverseTarget, setExpReverseTarget] = React.useState<any | null>(null)
   const [expReversing, setExpReversing] = React.useState(false)
 
@@ -58,28 +61,45 @@ export default function DaybookPage() {
   const [paymentMethod, setPaymentMethod] = React.useState<"cash" | "bank">("cash")
   const [description, setDescription] = React.useState("")
 
+  // Month defaults and "today" come from a client-side effect, never from
+  // render: reading new Date() during render blocks prerendering under
+  // cacheComponents (blocking-prerender-current-time). The skeleton covers
+  // first paint, so real defaults are set before content renders.
+  React.useEffect(() => {
+    const now = new Date()
+    setFromDate(now.toISOString().slice(0, 8) + "01")
+    setToDate(now.toISOString().slice(0, 10))
+    setTodayStr(now.toISOString().slice(0, 10))
+  }, [])
+
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
-    const [cash, bank, ex] = await Promise.all([
-      getDaybook({ accountKind: "cash", from: fromDate, to: toDate }),
-      getDaybook({ accountKind: "bank", from: fromDate, to: toDate }),
-      listExpenses({}),
-    ])
-    const failed = [cash, bank, ex].find((x) => !x.success)
-    if (failed) setFormError(failed.error ?? "Could not load daybook data.")
-    setCashClosing(Number((cash.data as any)?.closing || 0))
-    setBankClosing(Number((bank.data as any)?.closing || 0))
-    const entries = [
-      ...((cash.data as any)?.entries ?? []).map((e: any) => ({ ...e, account: "cash", description: e.description ?? e.voucher_no })),
-      ...((bank.data as any)?.entries ?? []).map((e: any) => ({ ...e, account: "bank", description: e.description ?? e.voucher_no })),
-    ].sort((a, b) => String(b.date).localeCompare(String(a.date)))
-    setCashLedger(entries as any)
-    setDaybook({ cash: cash.data, bank: bank.data, opening: Number((cash.data as any)?.opening || 0) + Number((bank.data as any)?.opening || 0), closing: Number((cash.data as any)?.closing || 0) + Number((bank.data as any)?.closing || 0) })
-    setExpenses(Array.isArray(ex.data) ? ex.data : [])
-    setIsLoading(false)
+    try {
+      const [cash, bank, ex] = await Promise.all([
+        getDaybook({ accountKind: "cash", from: fromDate, to: toDate }),
+        getDaybook({ accountKind: "bank", from: fromDate, to: toDate }),
+        listExpenses({}),
+      ])
+      const failed = [cash, bank, ex].find((x) => !x.success)
+      if (failed) setFormError(failed.error ?? "Could not load daybook data.")
+      setCashClosing(Number((cash.data as any)?.closing || 0))
+      setBankClosing(Number((bank.data as any)?.closing || 0))
+      const entries = [
+        ...((cash.data as any)?.entries ?? []).map((e: any) => ({ ...e, account: "cash", description: e.description ?? e.voucher_no })),
+        ...((bank.data as any)?.entries ?? []).map((e: any) => ({ ...e, account: "bank", description: e.description ?? e.voucher_no })),
+      ].sort((a, b) => String(b.date).localeCompare(String(a.date)))
+      setCashLedger(entries as any)
+      setDaybook({ cash: cash.data, bank: bank.data, opening: Number((cash.data as any)?.opening || 0) + Number((bank.data as any)?.opening || 0), closing: Number((cash.data as any)?.closing || 0) + Number((bank.data as any)?.closing || 0) })
+      setExpenses(Array.isArray(ex.data) ? ex.data : [])
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "Could not load daybook data.")
+    } finally {
+      setIsLoading(false)
+    }
   }, [fromDate, toDate])
 
   React.useEffect(() => {
+    if (!fromDate || !toDate) return
     loadData()
     setDrillFilter(getUrlFilter())
   }, [loadData])
@@ -156,7 +176,7 @@ export default function DaybookPage() {
   }
 
   const visibleLedger = drillFilter === "today"
-    ? cashLedger.filter((row) => isTodayISO(row.date))
+    ? cashLedger.filter((row) => isTodayISO(row.date, todayStr))
     : cashLedger
   // Spec §12.3 daybook check: closing = opening + receipts in - payments out.
   // Computed from the ledger itself so a drift is visible, not hidden.
@@ -364,7 +384,7 @@ export default function DaybookPage() {
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                   >
                     <option value="cash">Godown Cash Counter</option>
-                    <option value="bank">HBL Bank Account</option>
+                    <option value="bank">Bank Account</option>
                   </select>
                 </div>
               </div>

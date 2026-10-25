@@ -35,28 +35,33 @@ export default function UsersPage() {
 
   const load = React.useCallback(async () => {
     setLoading(true)
-    setError("")
-    const me = await getMyProfile()
-    if (!me.success) {
-      setError(me.error ?? "Could not load your profile.")
+    try {
+      setError("")
+      const me = await getMyProfile()
+      if (!me.success) {
+        setError(me.error ?? "Could not load your profile.")
+        setLoading(false)
+        return
+      }
+      const actor = me.data
+      setMyRole(actor?.role ?? null)
+      if (!actor) {
+        setError("Sign in as an operator to manage users.")
+        setLoading(false)
+        return
+      }
+      if (actor.role !== "owner_admin") {
+        setLoading(false)
+        return
+      }
+      const res = await listProfiles()
+      if (!res.success) setError(res.error ?? "Could not load operator profiles.")
+      else setProfiles(Array.isArray(res.data) ? (res.data as ProfileRow[]) : [])
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not load user data.")
+    } finally {
       setLoading(false)
-      return
     }
-    const actor = me.data
-    setMyRole(actor?.role ?? null)
-    if (!actor) {
-      setError("Sign in as an operator to manage users.")
-      setLoading(false)
-      return
-    }
-    if (actor.role !== "owner_admin") {
-      setLoading(false)
-      return
-    }
-    const res = await listProfiles()
-    if (!res.success) setError(res.error ?? "Could not load operator profiles.")
-    else setProfiles(Array.isArray(res.data) ? (res.data as ProfileRow[]) : [])
-    setLoading(false)
   }, [])
 
   React.useEffect(() => {

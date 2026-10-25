@@ -91,7 +91,10 @@ export default function MigrationPage() {
   const [importedRowsCount, setImportedRowsCount] = React.useState<number | null>(null)
 
   // Opening Balance Form
-  const [asOfDate, setAsOfDate] = React.useState(new Date().toISOString().slice(0, 10))
+  const [asOfDate, setAsOfDate] = React.useState("")
+  // Default "as of" date from a client-side effect, never from render
+  // (blocking-prerender-current-time under cacheComponents).
+  React.useEffect(() => { setAsOfDate(new Date().toISOString().slice(0, 10)) }, [])
   const [openingGodownId, setOpeningGodownId] = React.useState("")
   const [openingProductId, setOpeningProductId] = React.useState("")
   const [openingStockWeight, setOpeningStockWeight] = React.useState<number>(15000)
@@ -112,13 +115,18 @@ export default function MigrationPage() {
   React.useEffect(() => {
     const load = async () => {
       setIsLoading(true)
-      const [g, pr, ob] = await Promise.all([listGodowns(), listProducts(), listOpeningBalances()])
-      const failed = [g, pr, ob].find((x) => !x.success)
-      if (failed) setFormError(failed.error ?? "Could not load migration data.")
-      setGodowns(Array.isArray(g.data) ? g.data : [])
-      setProducts(Array.isArray(pr.data) ? pr.data : [])
-      setOpeningBalances(Array.isArray(ob.data) ? ob.data : [])
-      setIsLoading(false)
+      try {
+        const [g, pr, ob] = await Promise.all([listGodowns(), listProducts(), listOpeningBalances()])
+        const failed = [g, pr, ob].find((x) => !x.success)
+        if (failed) setFormError(failed.error ?? "Could not load migration data.")
+        setGodowns(Array.isArray(g.data) ? g.data : [])
+        setProducts(Array.isArray(pr.data) ? pr.data : [])
+        setOpeningBalances(Array.isArray(ob.data) ? ob.data : [])
+      } catch (err) {
+        setFormError(err instanceof Error ? err.message : "Could not load migration data.")
+      } finally {
+        setIsLoading(false)
+      }
     }
     load()
   }, [])

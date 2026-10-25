@@ -12,8 +12,6 @@ import { PageSkeleton, AlertBanner } from "@/components/erp-ui"
 
 type Row = Record<string, any>
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0)
-const today = () => new Date().toISOString().slice(0, 10)
-const isToday = (d: string) => String(d ?? "").slice(0, 10) === today()
 
 export default function DashboardPage() {
   const [loading, setLoading] = React.useState(true)
@@ -28,6 +26,13 @@ export default function DashboardPage() {
   const [payables, setPayables] = React.useState(0)
   const [cashOpening, setCashOpening] = React.useState(0)
   const [latestPassNo, setLatestPassNo] = React.useState<string | null>(null)
+  // "Today" is client state, set in an effect (TodayBadge pattern): reading
+  // new Date() during render makes this route un-prerenderable under
+  // cacheComponents (blocking-prerender-current-time). The page skeleton
+  // covers first paint, so the value is set before content renders.
+  const [todayStr, setTodayStr] = React.useState<string | null>(null)
+  React.useEffect(() => { setTodayStr(new Date().toISOString().slice(0, 10)) }, [])
+  const isToday = (d: string) => todayStr !== null && String(d ?? "").slice(0, 10) === todayStr
 
   const load = React.useCallback(async () => {
     setLoading(true)

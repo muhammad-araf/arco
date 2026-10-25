@@ -233,7 +233,7 @@ export async function listAttendance(filters: {
   if (!db) return fail(error);
   const gate = await requireRead(db);
   if ("error" in gate) return fail(gate.error);
-  let q = db.from("attendance").select("*").order("date", { ascending: true });
+  let q = db.from("attendance").select("employee_id, date, status").order("date", { ascending: true });
   if (filters.employeeId) q = q.eq("employee_id", filters.employeeId);
   if (filters.from) q = q.gte("date", filters.from);
   if (filters.to) q = q.lte("date", filters.to);
