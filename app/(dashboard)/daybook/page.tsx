@@ -176,11 +176,8 @@ export default function DaybookPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <Wallet className="h-6 w-6 text-emerald-500" />
-            Daybook, Cashbook & Operational Expenses
+            Daybook
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Single-ledger cash position, bank balances, payment vouchers, and categorized daily overheads.
-          </p>
         </div>
 
         <button
@@ -189,7 +186,7 @@ export default function DaybookPage() {
           className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
         >
           <Plus className="h-4 w-4" />
-          <span>Record Daily Expense</span>
+          <span>New Expense</span>
         </button>
       </div>
 
@@ -197,37 +194,28 @@ export default function DaybookPage() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="expensive-card p-4">
           <div className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">
-            Godown Cash in Hand
+            Cash in Hand
           </div>
           <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-2">
             {formatCurrency(currentCashBalance)}
           </div>
-          <div className="text-[11px] text-muted-foreground mt-1">
-            Imprest & Daily Godown Counter Cash
-          </div>
         </div>
 
         <div className="expensive-card p-4">
           <div className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">
-            Commercial Bank Account
+            Bank
           </div>
           <div className="text-2xl font-black text-blue-600 dark:text-blue-400 mt-2">
             {formatCurrency(currentBankBalance)}
           </div>
-          <div className="text-[11px] text-muted-foreground mt-1">
-            Habib Bank Ltd (HBL) - Operational
-          </div>
         </div>
 
         <div className="expensive-card p-4">
           <div className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">
-            Total Liquid Capital
+            Total Cash
           </div>
           <div className="text-2xl font-black text-foreground mt-2">
             {formatCurrency(currentCashBalance + currentBankBalance)}
-          </div>
-          <div className="text-[11px] text-emerald-600 dark:text-emerald-400 font-semibold mt-1">
-            Reconciled with Daily Vouchers
           </div>
         </div>
       </div>
@@ -237,9 +225,8 @@ export default function DaybookPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <Receipt className="h-4 w-4 text-emerald-500" />
-            Daily Cashbook Movement Ledger ({visibleLedger.length})
+            Cashbook ({visibleLedger.length})
           </h2>
-          <span className="text-xs text-muted-foreground">Immutable Cash / Bank Transactions</span>
         </div>
 
         <div className="overflow-x-auto">
@@ -262,7 +249,7 @@ export default function DaybookPage() {
                   <td colSpan={8} className="py-4 font-sans">
                     <EmptyState
                       title={drillFilter === "today" ? "No cash movements today yet" : "No cash movements recorded"}
-                      hint={drillFilter === "today" ? "Clear the dashboard filter above to see the full cashbook, or record an expense." : "Record an expense or a customer receipt to start the cashbook trail."}
+                      hint={drillFilter === "today" ? "Clear the filter, or record an expense." : "Record an expense or a receipt."}
                       actionLabel="Record Expense"
                       onAction={() => setIsExpenseModalOpen(true)}
                     />
@@ -349,7 +336,7 @@ export default function DaybookPage() {
                   type="text"
                   value={payee}
                   onChange={(e) => setPayee(e.target.value)}
-                  placeholder="e.g. Total Parco / Local Electrician"
+                  placeholder="e.g. Parco / Electrician"
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                   required
                 />
@@ -387,7 +374,7 @@ export default function DaybookPage() {
                   type="text"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="e.g. 50 Liters Diesel for cleaner plant"
+                  placeholder="e.g. 50L diesel for cleaner"
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                 />
               </div>
@@ -446,7 +433,7 @@ export default function DaybookPage() {
       <ConfirmDialog
         open={showConfirm}
         title="Post this expense?"
-        description={draftExpense ? `${draftExpense.expense_no}: ${formatCurrency(draftExpense.amount)} to ${draftExpense.payee} for ${draftExpense.category_name} via ${draftExpense.payment_method}. This records a cash/bank outflow in the daybook.` : ""}
+        description={draftExpense ? `${draftExpense.expense_no}: ${formatCurrency(draftExpense.amount)} to ${draftExpense.payee} for ${draftExpense.category_name} via ${draftExpense.payment_method}.` : ""}
         confirmLabel="Post Expense to Cashbook"
         pending={isPending}
         onConfirm={handleConfirmExpense}
