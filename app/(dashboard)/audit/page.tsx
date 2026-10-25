@@ -24,14 +24,10 @@ export default function AuditPage() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-black tracking-tight text-foreground">Audit Log</h1>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          Append-only trail of posts, reversals, returns and permission changes (spec §17). Audit rows are written
-          by the server actions, but no audit-read action exists yet, so this viewer cannot list rows until one is added.
-        </p>
       </div>
       <AlertBanner
         tone="warning"
-        message="Audit viewer pending: audit rows are written on the server, but there is no read action for audit_log yet. Nothing below is real audit data — use the filters once a read action lands; do not treat this empty view as proof that nothing happened."
+        message="Audit history can't be shown yet — the viewer is still being built. This empty view does not mean nothing happened."
       />
       <div className="expensive-card p-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
@@ -86,15 +82,12 @@ export default function AuditPage() {
           Apply filters
         </button>
         {searched && (
-          <p className="mt-3 text-[11px] text-muted-foreground">
-            Filters kept for the future read action (user: {userFilter || "any"}, action: {actionFilter || "any"}, dates:{" "}
-            {from || "—"} to {to || "—"}). No rows can be returned yet.
-          </p>
+          <p className="mt-3 text-[11px] text-muted-foreground">No rows available yet.</p>
         )}
       </div>
       <EmptyState
-        title="No audit rows can be listed yet"
-        hint="This is a missing backend read action, not an empty history: posts, reversals, returns and role changes made through the server actions do write to audit_log (INSERT-only). Once an audit-read action exists, this page will list those rows filtered by user, action and date."
+        title="No audit rows to show yet"
+        hint="History will appear here once the audit viewer is ready."
       />
     </div>
   )

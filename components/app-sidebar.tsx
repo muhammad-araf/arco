@@ -52,39 +52,39 @@ interface NavSection {
 
 const navSections: NavSection[] = [
   {
-    heading: "Core Operations",
+    heading: "Operations",
     items: [
       { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-      { title: "Inward Goods", href: "/inward", icon: Truck },
-      { title: "Stock & Godowns", href: "/inventory", icon: Boxes },
-      { title: "Gate Pass & Dispatch", href: "/gatepass", icon: FileCheck2 },
+      { title: "Inward", href: "/inward", icon: Truck },
+      { title: "Stock", href: "/inventory", icon: Boxes },
+      { title: "Gate Pass", href: "/gatepass", icon: FileCheck2 },
     ],
   },
   {
-    heading: "Processing & Production",
+    heading: "Production",
     items: [
-      { title: "Production Batches", href: "/production", icon: ScrollText },
-      { title: "Machinery Jobs", href: "/machinery", icon: Cog },
-      { title: "Packing & Bardana", href: "/packing", icon: PackageCheck },
+      { title: "Batches", href: "/production", icon: ScrollText },
+      { title: "Machinery", href: "/machinery", icon: Cog },
+      { title: "Packing", href: "/packing", icon: PackageCheck },
     ],
   },
   {
-    heading: "Commercials & Finance",
+    heading: "Finance",
     items: [
-      { title: "Purchases & Vendors", href: "/purchases", icon: ShoppingCart },
-      { title: "Billing & Receipts", href: "/billing", icon: Receipt },
-      { title: "Daybook & Expenses", href: "/daybook", icon: Wallet },
+      { title: "Purchases", href: "/purchases", icon: ShoppingCart },
+      { title: "Billing", href: "/billing", icon: Receipt },
+      { title: "Daybook", href: "/daybook", icon: Wallet },
     ],
   },
   {
-    heading: "Management & Intelligence",
+    heading: "Manage",
     items: [
-      { title: "Attendance & Payroll", href: "/payroll", icon: Users2 },
-      { title: "Reports & P&L", href: "/reports", icon: BarChart3 },
-      { title: "Excel Import & Balances", href: "/migration", icon: UploadCloud },
-      { title: "Master Data", href: "/masters", icon: Database },
-      { title: "Users & Roles", href: "/users", icon: Users2 },
-      { title: "Audit Log", href: "/audit", icon: ShieldCheck },
+      { title: "Payroll", href: "/payroll", icon: Users2 },
+      { title: "Reports", href: "/reports", icon: BarChart3 },
+      { title: "Import", href: "/migration", icon: UploadCloud },
+      { title: "Masters", href: "/masters", icon: Database },
+      { title: "Users", href: "/users", icon: Users2 },
+      { title: "Audit", href: "/audit", icon: ShieldCheck },
     ],
   },
 ]
@@ -128,7 +128,7 @@ export function AppSidebar() {
           </div>
           <div>
             <span className="font-bold text-sm tracking-tight text-foreground block">ARCO</span>
-            <span className="text-[10px] text-muted-foreground uppercase tracking-wider block">Seed Godown ERP</span>
+            <span className="text-[10px] text-muted-foreground uppercase tracking-wider block">Seed Godown</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -171,14 +171,11 @@ export function AppSidebar() {
               <Sprout className="h-5 w-5" />
             </div>
             <div className="flex flex-col">
-              <span className="font-extrabold text-base tracking-tight text-sidebar-foreground group-hover:text-primary transition-colors flex items-center gap-1.5">
+              <span className="font-extrabold text-base tracking-tight text-sidebar-foreground group-hover:text-primary transition-colors">
                 ARCO
-                <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-emerald-100 dark:bg-emerald-900 text-emerald-600 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-700 font-bold uppercase tracking-wider">
-                  ERP
-                </span>
               </span>
               <span className="text-[11px] text-muted-foreground font-medium truncate">
-                Seed Godown & Processing
+                Seed Godown
               </span>
             </div>
           </Link>

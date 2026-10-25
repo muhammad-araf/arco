@@ -106,7 +106,7 @@ export default function LoginPage() {
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
           <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-          No account? Ask the Owner/Admin to create an operator account.
+          No account? Ask the Owner/Admin.
         </p>
       </div>
     </div>

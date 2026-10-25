@@ -166,13 +166,13 @@ export function EmptyState({
 /* ------------------------- Drill-down banner ------------------------ */
 
 export const FILTER_LABELS: Record<string, string> = {
-  today: "Today's records only",
-  posted: "Posted records only",
-  low: "Low-stock items only",
-  receivable: "Customers with an outstanding receivable",
-  payable: "Vendors with an outstanding payable",
-  unpaid: "Unpaid / outstanding items only",
-  pending: "Pending items only",
+  today: "Today only",
+  posted: "Posted only",
+  low: "Low stock only",
+  receivable: "Unpaid customers",
+  payable: "Unpaid vendors",
+  unpaid: "Unpaid only",
+  pending: "Pending only",
 }
 
 export function FilterBanner({ filter, onClear }: { filter: string | null; onClear: () => void }) {
@@ -180,7 +180,7 @@ export function FilterBanner({ filter, onClear }: { filter: string | null; onCle
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs font-medium text-amber-700 dark:text-amber-400">
       <span>
-        Filtered view from Dashboard: <strong>{FILTER_LABELS[filter] ?? `Filter “${filter}”`}</strong>
+        <strong>{FILTER_LABELS[filter] ?? `Filter “${filter}”`}</strong>
       </span>
       <button
         type="button"
@@ -345,8 +345,8 @@ export function ReversalDialog({
         <div className="min-w-0">
           <h3 className="text-base font-bold text-foreground">Reverse {voucherLabel}?</h3>
           <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-            This does <strong className="text-foreground">not delete</strong> the record. It stays
-            visible in the register marked “Reversed”, with this reason in its audit trail.
+            This will <strong className="text-foreground">not delete</strong> the record. It stays
+            in the register, marked “Reversed”, with this reason saved.
             {note ? ` ${note}` : ""}
           </p>
         </div>
@@ -368,18 +368,18 @@ export function ReversalDialog({
         </div>
         <div>
           <label className="block font-medium text-foreground mb-1">
-            Reason for reversal * <span className="text-muted-foreground font-normal">(required)</span>
+            Reason for reversal *
           </label>
           <textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={3}
-            placeholder="Explain why this posted voucher must be reversed…"
+            placeholder="Why is this being reversed?"
             className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground resize-y"
           />
           {!valid && reason.length > 0 && (
             <p className="mt-1 text-[11px] text-red-600 dark:text-red-400">
-              Please write at least 3 characters so the audit trail is meaningful.
+              Write at least 3 characters.
             </p>
           )}
         </div>
