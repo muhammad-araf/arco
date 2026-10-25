@@ -284,11 +284,8 @@ export default function InwardPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <Truck className="h-6 w-6 text-emerald-500" />
-            Inward Goods & Godown Receiving
+            Inward
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Log raw seed arrivals, bilty references, tare weights, and post directly to the stock ledger.
-          </p>
         </div>
 
         <button
@@ -306,9 +303,8 @@ export default function InwardPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <FileText className="h-4 w-4 text-emerald-500" />
-            Posted Inward Vouchers ({visibleVouchers.length})
+            Vouchers ({visibleVouchers.length})
           </h2>
-          <span className="text-xs text-muted-foreground">Immutable Stock Ledger Receipts</span>
         </div>
 
         <div className="overflow-x-auto">
@@ -332,7 +328,7 @@ export default function InwardPage() {
                   <td colSpan={8} className="py-4">
                     <EmptyState
                       title={drillFilter ? "No vouchers match this filter" : "No inward vouchers yet"}
-                      hint={drillFilter ? "Clear the dashboard filter above, or record a new arrival." : "Record your first truck arrival — it posts straight to the stock ledger."}
+                      hint={drillFilter ? "Clear the filter, or record a new arrival." : "Record your first arrival."}
                       actionLabel="New Receiving Voucher"
                       onAction={() => setIsFormOpen(true)}
                     />
@@ -402,11 +398,8 @@ export default function InwardPage() {
               <div>
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
                   <Truck className="h-5 w-5 text-emerald-500" />
-                  Record Inward Seed Voucher
+                  New Receiving Voucher
                 </h3>
-                <p className="text-xs text-muted-foreground">
-                  Upon posting, inventory will be atomically added to the selected godown's stock ledger.
-                </p>
               </div>
               <button
                 type="button"
@@ -481,7 +474,7 @@ export default function InwardPage() {
                     type="text"
                     value={driverName}
                     onChange={(e) => setDriverName(e.target.value)}
-                    placeholder="Driver's Full Name"
+                    placeholder="Driver name"
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                   />
                 </div>
@@ -503,7 +496,7 @@ export default function InwardPage() {
                     type="text"
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Moisture level, physical purity or grain condition"
+                    placeholder="Moisture, purity, condition"
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                   />
                 </div>
@@ -760,7 +753,7 @@ export default function InwardPage() {
       <ConfirmDialog
         open={showPostConfirm}
         title="Post this inward voucher?"
-        description={draftVoucher ? `${draftVoucher.voucher_no} will add ${formatWeight(draftVoucher.total_net_weight_kg)} (${formatBags(draftVoucher.total_bags)}) to ${draftVoucher.godown_name || "the selected godown"} and write one stock-ledger row per line. Posted vouchers can only be changed by reversal.` : ""}
+        description={draftVoucher ? `${draftVoucher.voucher_no} will add ${formatWeight(draftVoucher.total_net_weight_kg)} (${formatBags(draftVoucher.total_bags)}) to ${draftVoucher.godown_name || "the selected godown"}. Posted vouchers can only be changed by reversal.` : ""}
         confirmLabel="Post & Update Stock Ledger"
         pending={isPending}
         onConfirm={handleConfirmPost}
