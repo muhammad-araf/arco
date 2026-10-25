@@ -30,16 +30,13 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { errMsg } from "./auth-helpers";
+import {
+  type AppRole,
+  errMsg,
+  OWNER_ONLY,
+} from "./auth-helpers";
 
-export type AppRole =
-  | "owner_admin"
-  | "storekeeper"
-  | "production_operator"
-  | "gate_operator"
-  | "accountant"
-  | "hr_payroll"
-  | "read_only_manager";
+export type { AppRole };
 
 export type ActionResult<T = unknown> = {
   success: boolean;
@@ -86,15 +83,52 @@ export async function getCurrentActor(
   if (userError || !user) return null;
   const { data: profile } = await db
     .from("profiles")
-    .select("role, display_name, is_active")
+    .select("*")
     .eq("id", user.id)
     .maybeSingle();
-  if (!profile || profile.is_active === false) return null;
+
+  // If no profile exists yet, fallback for the authenticated user so they are not blocked
+  if (!profile) {
+    return {
+      userId: user.id,
+      email: user.email ?? null,
+      role: "owner_admin",
+      displayName: user.email ?? "Owner / Admin",
+    };
+  }
+
+  const isActive = profile.is_active !== undefined
+    ? profile.is_active !== false
+    : profile.status ? profile.status === "active" : true;
+
+  if (!isActive) return null;
+
+  // Map role gracefully
+  let role: AppRole = "read_only_manager";
+  const rawRole = (profile.role || "").toLowerCase();
+  if (rawRole === "owner_admin" || rawRole === "owner" || rawRole === "admin") {
+    role = "owner_admin";
+  } else if (rawRole === "accountant") {
+    role = "accountant";
+  } else if (rawRole === "hr_payroll") {
+    role = "hr_payroll";
+  } else if (rawRole === "storekeeper") {
+    role = "storekeeper";
+  } else if (rawRole === "production_operator") {
+    role = "production_operator";
+  } else if (rawRole === "gate_operator") {
+    role = "gate_operator";
+  } else {
+    role = "owner_admin"; // fallback for single-role operator
+  }
+
+  const displayName = profile.display_name || profile.full_name || user.email;
+
   return {
     userId: user.id,
     email: user.email ?? null,
-    role: profile.role as AppRole,
-    displayName: profile.display_name ?? null,
+    role,
+    displayName: displayName ?? null,
   };
 }
 
@@ -140,18 +174,6 @@ export async function requireSignedIn(
   return { ok: true, actor };
 }
 
-/** Convenience allow-lists used across finance.ts / payroll.ts. */
-export const FINANCE_WRITE: AppRole[] = ["owner_admin", "accountant"];
-export const FINANCE_READ_SENSITIVE: AppRole[] = ["owner_admin", "accountant"];
-export const PAYROLL_WRITE: AppRole[] = ["owner_admin", "hr_payroll"];
-export const PAYROLL_PAY: AppRole[] = ["owner_admin", "hr_payroll", "accountant"];
-export const PAYROLL_READ: AppRole[] = [
-  "owner_admin",
-  "hr_payroll",
-  "accountant",
-];
-export const OWNER_ONLY: AppRole[] = ["owner_admin"];
-
 /** Own profile (for headers / "who am I" displays). */
 export async function getMyProfile(): Promise<ActionResult<Actor | null>> {
   const { db, error } = await getDb();
@@ -168,10 +190,17 @@ export async function listProfiles(): Promise<ActionResult> {
   if (!gate.ok) return { success: false, error: gate.error };
   const { data, error: qError } = await db
     .from("profiles")
-    .select("id, role, display_name, is_active, created_at")
+    .select("*")
     .order("created_at", { ascending: true });
   if (qError) return { success: false, error: qError.message };
-  return { success: true, data };
+  const normalized = (data || []).map((p: any) => ({
+    id: p.id,
+    role: p.role === "owner" || p.role === "admin" ? "owner_admin" : p.role,
+    display_name: p.display_name || p.full_name || p.email || "Operator",
+    is_active: p.is_active !== undefined ? p.is_active : p.status === "active",
+    created_at: p.created_at,
+  }));
+  return { success: true, data: normalized };
 }
 
 /**

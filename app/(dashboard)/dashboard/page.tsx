@@ -36,22 +36,27 @@ export default function DashboardPage() {
   const load = React.useCallback(async () => {
     setLoading(true)
     setError("")
-    const [s, l, inw, bat, gp, inv, pur, cash, gdn] = await Promise.all([
-      getStockSummary(), getStockLedger({ limit: 20 }), listInward(), listBatches(),
-      listGatePasses(), listInvoices(), listPurchases(), listCashAccounts(), listGodowns(),
-    ])
-    const failed = [s, l, inw, bat, gp, inv, pur, cash, gdn].find((r) => !r.success)
-    if (failed) setError(failed.error ?? "Could not load dashboard data.")
-    setSummary(Array.isArray(s.data) ? s.data : [])
-    setLedger(Array.isArray(l.data) ? l.data : [])
-    setInward(Array.isArray(inw.data) ? inw.data : [])
-    setBatches(Array.isArray(bat.data) ? bat.data : [])
-    setPasses(Array.isArray(gp.data) ? gp.data : [])
-    setGodowns(Array.isArray(gdn.data) ? gdn.data : [])
-    setReceivables((Array.isArray(inv.data) ? inv.data : []).reduce((a, r: Row) => a + num(r.balance_amount ?? num(r.total_amount) - num(r.paid_amount)), 0))
-    setPayables((Array.isArray(pur.data) ? pur.data : []).reduce((a, r: Row) => a + num(r.balance_amount ?? num(r.total_amount) - num(r.paid_amount)), 0))
-    setCashOpening((Array.isArray(cash.data) ? cash.data : []).reduce((a, r: Row) => a + num(r.opening_balance), 0))
-    setLoading(false)
+    try {
+      const [s, l, inw, bat, gp, inv, pur, cash, gdn] = await Promise.all([
+        getStockSummary(), getStockLedger({ limit: 20 }), listInward(), listBatches(),
+        listGatePasses(), listInvoices(), listPurchases(), listCashAccounts(), listGodowns(),
+      ])
+      const failed = [s, l, inw, bat, gp, inv, pur, cash, gdn].find((r) => !r.success)
+      if (failed) setError(failed.error ?? "Could not load dashboard data.")
+      setSummary(Array.isArray(s.data) ? s.data : [])
+      setLedger(Array.isArray(l.data) ? l.data : [])
+      setInward(Array.isArray(inw.data) ? inw.data : [])
+      setBatches(Array.isArray(bat.data) ? bat.data : [])
+      setPasses(Array.isArray(gp.data) ? gp.data : [])
+      setGodowns(Array.isArray(gdn.data) ? gdn.data : [])
+      setReceivables((Array.isArray(inv.data) ? inv.data : []).reduce((a, r: Row) => a + num(r.balance_amount ?? num(r.total_amount) - num(r.paid_amount)), 0))
+      setPayables((Array.isArray(pur.data) ? pur.data : []).reduce((a, r: Row) => a + num(r.balance_amount ?? num(r.total_amount) - num(r.paid_amount)), 0))
+      setCashOpening((Array.isArray(cash.data) ? cash.data : []).reduce((a, r: Row) => a + num(r.opening_balance), 0))
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   React.useEffect(() => { load() }, [load])

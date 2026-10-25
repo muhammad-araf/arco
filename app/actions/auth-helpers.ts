@@ -2,9 +2,30 @@
  * Plain (non-"use server") helpers shared by the server actions.
  *
  * Next.js forbids non-async exports from a "use server" file, so the
- * sync error-message helper lives here instead of app/actions/auth.ts.
- * Behaviour is unchanged: it is the same function, only moved.
+ * sync error-message helper and role-group arrays live here instead of
+ * app/actions/auth.ts.
  */
+
+export type AppRole =
+  | "owner_admin"
+  | "storekeeper"
+  | "production_operator"
+  | "gate_operator"
+  | "accountant"
+  | "hr_payroll"
+  | "read_only_manager";
+
+export const FINANCE_WRITE: AppRole[] = ["owner_admin", "accountant"];
+export const FINANCE_READ_SENSITIVE: AppRole[] = ["owner_admin", "accountant"];
+export const PAYROLL_WRITE: AppRole[] = ["owner_admin", "hr_payroll"];
+export const PAYROLL_PAY: AppRole[] = ["owner_admin", "hr_payroll", "accountant"];
+export const PAYROLL_READ: AppRole[] = [
+  "owner_admin",
+  "hr_payroll",
+  "accountant",
+];
+export const OWNER_ONLY: AppRole[] = ["owner_admin"];
+
 export function errMsg(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
