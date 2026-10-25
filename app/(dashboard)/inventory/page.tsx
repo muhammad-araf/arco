@@ -234,11 +234,8 @@ export default function InventoryPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <Boxes className="h-6 w-6 text-emerald-500" />
-            Stock Ledger & Godown Inventory
+            Stock
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Authoritative single-ledger inventory balances, audit movements, and inter-godown transfers.
-          </p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -287,7 +284,7 @@ export default function InventoryPage() {
             className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
           >
             <ArrowRightLeft className="h-4 w-4" />
-            <span>Inter-Godown Transfer</span>
+            <span>Transfer</span>
           </button>
         </div>
       </div>
@@ -382,7 +379,7 @@ export default function InventoryPage() {
                     <td colSpan={6} className="py-4">
                       <EmptyState
                         title={drillFilter === "low" ? "No low-stock items" : "No stock rows match these filters"}
-                        hint={drillFilter === "low" ? "Every product is above its minimum stock right now." : "Try a different search, godown or category — or post an inward voucher to create stock."}
+                        hint={drillFilter === "low" ? "Every product is above its minimum stock right now." : "Try a different search, or post an inward voucher."}
                       />
                     </td>
                   </tr>
@@ -451,7 +448,7 @@ export default function InventoryPage() {
                     <td colSpan={9} className="py-4 font-sans">
                       <EmptyState
                         title="No ledger movements match these filters"
-                        hint="Post an inward voucher, batch or gate pass and its movement will appear here with its voucher reference."
+                        hint="Movements appear here after you post a voucher."
                       />
                     </td>
                   </tr>
@@ -490,7 +487,7 @@ export default function InventoryPage() {
       {/* Stock Adjustment (reason + approver, create → post → reversible) */}
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Stock Adjustment</h2>
-        <p className="text-xs text-muted-foreground mb-4">Correct a physical count with a reason and an approver. The adjustment is created as a draft, then posted to the ledger; a just-posted adjustment can be reversed below with a mandatory reason. There is no adjustment list action yet, so only the most recent posted adjustment on this page can be reversed from here.</p>
+        <p className="text-xs text-muted-foreground mb-4">Fix a physical count with a reason and an approver. Only the latest posted adjustment can be reversed here.</p>
         <form onSubmit={handleAdjustment} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
           <div><label className="block font-medium text-foreground mb-1">Godown</label><select value={adjGodown} onChange={(e) => setAdjGodown(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select godown</option>{godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
           <div><label className="block font-medium text-foreground mb-1">Product</label><select value={adjProduct} onChange={(e) => setAdjProduct(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select product</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
@@ -587,7 +584,7 @@ export default function InventoryPage() {
                   type="text"
                   value={transferNotes}
                   onChange={(e) => setTransferNotes(e.target.value)}
-                  placeholder="e.g. Shifting raw lot to Plant A for morning batch"
+                  placeholder="e.g. Moving lot to Plant A"
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                 />
               </div>
@@ -616,7 +613,7 @@ export default function InventoryPage() {
       <ConfirmDialog
         open={showTransferConfirm}
         title="Execute this transfer?"
-        description={`Move ${transferQty} kg of ${products.find((p) => p.id === transferProductId)?.name || "the selected product"} from ${godowns.find((g) => g.id === transferFromGodown)?.name || "source"} to ${godowns.find((g) => g.id === transferToGodown)?.name || "destination"}. Two ledger rows are written (out of source, into destination); total enterprise stock does not change.`}
+        description={`Move ${transferQty} kg of ${products.find((p) => p.id === transferProductId)?.name || "the selected product"} from ${godowns.find((g) => g.id === transferFromGodown)?.name || "source"} to ${godowns.find((g) => g.id === transferToGodown)?.name || "destination"}. Total stock does not change.`}
         confirmLabel="Execute Transfer"
         pending={isPending}
         onConfirm={handleConfirmTransfer}
