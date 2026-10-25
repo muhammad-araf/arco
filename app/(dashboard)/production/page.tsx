@@ -276,7 +276,7 @@ export default function ProductionPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Batch No</th>
                 <th className="pb-3 font-bold">Date</th>
                 <th className="pb-3 font-bold">Machine Plant</th>
@@ -288,7 +288,7 @@ export default function ProductionPage() {
                 <th className="pb-3 font-bold text-center">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40">
+            <tbody className="divide-y divide-border">
               {visibleBatches.length === 0 && (
                 <tr>
                   <td colSpan={9} className="py-4">
@@ -302,11 +302,11 @@ export default function ProductionPage() {
                 </tr>
               )}
               {visibleBatches.map((b) => (
-                <tr key={b.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={b.id} className="hover:bg-muted transition-colors">
                   <td className="py-3 font-bold text-foreground">
                     <div className="flex items-center gap-1.5">
                       <span>{b.batch_no}</span>
-                      <span className={b.status === "reversed" ? "px-1.5 py-0.2 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase" : "px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase"}>
+                      <span className={b.status === "reversed" ? "px-1.5 py-0.2 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase" : "px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase"}>
                         {b.status === "reversed" ? "Reversed" : "Posted"}
                       </span>
                     </div>
@@ -324,7 +324,7 @@ export default function ProductionPage() {
                     {formatWeight(b.byproduct_kg)}
                   </td>
                   <td className="py-3 text-center">
-                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-teal-500/15 text-teal-600 dark:text-teal-400 font-bold font-mono">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-teal-500/15 text-teal-600 dark:text-teal-400 font-bold font-mono">
                       <Percent className="h-3 w-3" />
                       {b.yield_pct}%
                     </span>
@@ -360,9 +360,9 @@ export default function ProductionPage() {
 
       {/* Batch Execution Modal */}
       {isBatchModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
-          <div className="expensive-card w-full max-w-2xl p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 my-8 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
+          <div className="expensive-card w-full max-w-2xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-8 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
               <div>
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
                   <Play className="h-4 w-4 text-emerald-500" />
@@ -418,7 +418,7 @@ export default function ProductionPage() {
               </div>
 
               {/* Input Grain Selection & Stock Checker */}
-              <div className="p-3 rounded-lg bg-muted/40 border border-border/70 space-y-2">
+              <div className="p-3 rounded-lg bg-muted border border-border space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-foreground uppercase tracking-wider text-[10px]">
                     Input Grain (Stock Deduction)
@@ -580,8 +580,8 @@ export default function ProductionPage() {
 
       {/* Printable Batch Run Sheet */}
       {selectedBatchForPrint && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs overflow-y-auto">
-          <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-2xl rounded-xl printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 overflow-y-auto">
+          <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-md rounded-md printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-start justify-between border-b pb-4">
               <div>
                 <h2 className="text-xl font-extrabold tracking-tight">ARCO SEED PROCESSING PLANT</h2>
@@ -688,8 +688,8 @@ export default function ProductionPage() {
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Seed Recipes</h2>
         <p className="text-xs text-muted-foreground mb-4">Active recipes from listRecipes. Saving with an existing code creates a new version via createRecipeVersion; the old version is retired, never overwritten.</p>
-        <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Code</th><th className="pb-2">Name</th><th className="pb-2">Version</th><th className="pb-2">Expected yield</th></tr></thead>
-          <tbody className="divide-y divide-border/40">
+        <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Code</th><th className="pb-2">Name</th><th className="pb-2">Version</th><th className="pb-2">Expected yield</th></tr></thead>
+          <tbody className="divide-y divide-border">
             {recipes.length === 0 && <tr><td colSpan={4} className="py-4 text-muted-foreground">No recipes yet — create the first one below.</td></tr>}
             {recipes.map((r: any) => (<tr key={r.id}><td className="py-2 font-mono">{r.code}</td><td className="py-2 font-semibold">{r.name}</td><td className="py-2">{r.version}</td><td className="py-2">{r.expected_yield_pct ?? "—"}%</td></tr>))}
           </tbody></table></div>

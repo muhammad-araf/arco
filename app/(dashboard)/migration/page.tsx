@@ -227,7 +227,7 @@ export default function MigrationPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex flex-wrap items-center gap-2 p-1 rounded-lg bg-muted/60 border border-border/60 self-start max-w-full text-xs font-semibold">
+      <div className="flex flex-wrap items-center gap-2 p-1 rounded-lg bg-muted border border-border self-start max-w-full text-xs font-semibold">
         <button
           type="button"
           onClick={() => setActiveTab("dictionary")}
@@ -284,7 +284,7 @@ export default function MigrationPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+                <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Source Sheet</th>
                   <th className="pb-3 font-bold">Excel Column Name</th>
                   <th className="pb-3 font-bold">Target System Field</th>
@@ -293,9 +293,9 @@ export default function MigrationPage() {
                   <th className="pb-3 font-bold text-center">Status</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border/40 font-mono">
+              <tbody className="divide-y divide-border font-mono">
                 {dataDictionary.map((item, idx) => (
-                  <tr key={idx} className="hover:bg-muted/30 transition-colors">
+                  <tr key={idx} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-bold text-foreground font-sans">
                       <span className="px-2 py-0.5 rounded bg-muted text-[10px] uppercase">
                         {item.excelSheet}
@@ -306,7 +306,7 @@ export default function MigrationPage() {
                     <td className="py-3 text-muted-foreground">{item.targetTable}</td>
                     <td className="py-3 text-muted-foreground font-sans text-[11px]">{item.description}</td>
                     <td className="py-3 text-center">
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase font-sans">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase font-sans">
                         <CheckCircle2 className="h-3 w-3" />
                         Mapped
                       </span>
@@ -357,7 +357,7 @@ export default function MigrationPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 rounded-xl bg-muted/30 border border-border/70">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 rounded-md bg-muted border border-border">
               <div>
                 <label className="block font-medium text-foreground mb-1">Godown Storage Shed</label>
                 <select
@@ -441,8 +441,8 @@ export default function MigrationPage() {
       {activeTab === "opening_balances" && openingBalances.length > 0 && (
         <div className="expensive-card p-5">
           <h2 className="text-sm font-bold text-foreground mb-3">Recorded opening balances ({openingBalances.length})</h2>
-          <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Kind</th><th className="pb-2">Entity</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-right">Quantity</th><th className="pb-2">As of</th></tr></thead>
-            <tbody className="divide-y divide-border/40">
+          <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Kind</th><th className="pb-2">Entity</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-right">Quantity</th><th className="pb-2">As of</th></tr></thead>
+            <tbody className="divide-y divide-border">
               {openingBalances.map((b: any) => (<tr key={b.id}><td className="py-2">{b.balance_kind}</td><td className="py-2 font-mono">{b.entity_key}</td><td className="py-2 text-right">{formatCurrency(Number(b.amount || 0))}</td><td className="py-2 text-right">{formatWeight(Number(b.quantity || 0))}</td><td className="py-2">{b.as_of?.slice(0, 10)}</td></tr>))}
             </tbody></table></div>
           <p className="text-[11px] text-muted-foreground mt-2">CSV import stays preview-only: the import tab parses a CSV and shows its headers and first rows with the mapping notice, but does not write rows — no fake imports.</p>
@@ -497,7 +497,7 @@ export default function MigrationPage() {
           </div>
 
           {/* Upload Drop Area */}
-          <div className="border-2 border-dashed border-border/80 hover:border-primary/50 rounded-xl p-8 text-center bg-muted/20 transition-colors">
+          <div className="border-2 border-dashed border-border hover:border-primary/50 rounded-md p-8 text-center bg-muted/20 transition-colors">
             <FileSpreadsheet className="h-10 w-10 text-emerald-500 mx-auto mb-3" />
             <div className="text-xs font-bold text-foreground">Select a CSV file to preview</div>
             <div className="text-[11px] text-muted-foreground mt-1">
@@ -525,13 +525,13 @@ export default function MigrationPage() {
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+                    <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                       {parsedFile.headers.map((h) => (
                         <th key={h} className="pb-2 pr-3 font-bold">{h}</th>
                       ))}
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-border/40">
+                  <tbody className="divide-y divide-border">
                     {parsedFile.rows.slice(0, 5).map((row, i) => (
                       <tr key={i}>
                         {row.map((cell, j) => (

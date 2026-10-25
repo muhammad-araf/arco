@@ -315,7 +315,7 @@ export default function GatePassPage() {
                 "authorized_gate_passes"
               )
             }}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-card hover:bg-muted/60 text-foreground border border-border/80 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
             title="Download CSV / Excel"
           >
             <Download className="h-4 w-4 text-emerald-500" />
@@ -346,7 +346,7 @@ export default function GatePassPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Gate Pass No</th>
                 <th className="pb-3 font-bold">Date & Time</th>
                 <th className="pb-3 font-bold">Customer / Receiver</th>
@@ -358,7 +358,7 @@ export default function GatePassPage() {
                 <th className="pb-3 font-bold text-center">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40">
+            <tbody className="divide-y divide-border">
               {visiblePasses.length === 0 && (
                 <tr>
                   <td colSpan={9} className="py-4">
@@ -372,7 +372,7 @@ export default function GatePassPage() {
                 </tr>
               )}
               {visiblePasses.map((gp) => (
-                <tr key={gp.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={gp.id} className="hover:bg-muted transition-colors">
                   <td className="py-3 font-bold text-foreground">
                     <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">
                       {gp.pass_no}
@@ -395,7 +395,7 @@ export default function GatePassPage() {
                     {formatWeight(gp.total_weight_kg)}
                   </td>
                   <td className="py-3 text-center">
-                    <span className={gp.status === "reversed" ? "px-2 py-0.5 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase border border-red-500/20" : "px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20"}>
+                    <span className={gp.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase border border-red-500/20" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20"}>
                       {gp.status === "reversed" ? "Reversed" : "Dispatched"}
                     </span>
                   </td>
@@ -440,9 +440,9 @@ export default function GatePassPage() {
 
       {/* Gate Pass Creator Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
-          <div className="expensive-card w-full max-w-3xl p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 my-8 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
+          <div className="expensive-card w-full max-w-3xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-8 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
               <div>
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
                   <ShieldCheck className="h-5 w-5 text-emerald-500" />
@@ -565,7 +565,7 @@ export default function GatePassPage() {
                     return (
                       <div
                         key={idx}
-                        className="grid grid-cols-1 sm:grid-cols-6 gap-2 p-2.5 rounded-lg bg-muted/40 border border-border/70 text-xs items-center"
+                        className="grid grid-cols-1 sm:grid-cols-6 gap-2 p-2.5 rounded-lg bg-muted border border-border text-xs items-center"
                       >
                         <div className="sm:col-span-2">
                           <label className="block text-[10px] text-muted-foreground mb-0.5">
@@ -671,8 +671,8 @@ export default function GatePassPage() {
 
       {/* Formal A4 Printable Gate Pass */}
       {selectedPassForPrint && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs overflow-y-auto">
-          <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-2xl rounded-xl printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 overflow-y-auto">
+          <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-md rounded-md printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-start justify-between border-b pb-4">
               <div>
                 <h1 className="text-2xl font-black tracking-tight uppercase">ARCO SEED GODOWN</h1>

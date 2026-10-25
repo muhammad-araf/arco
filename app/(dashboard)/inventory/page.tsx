@@ -274,7 +274,7 @@ export default function InventoryPage() {
                 )
               }
             }}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-card hover:bg-muted/60 text-foreground border border-border/80 text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
             title="Download CSV / Excel"
           >
             <Download className="h-4 w-4 text-emerald-500" />
@@ -294,7 +294,7 @@ export default function InventoryPage() {
 
       {/* Tabs & Search Filter Bar */}
       <div className="expensive-card p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-1.5 p-1 rounded-lg bg-muted/60 border border-border/60 self-start">
+        <div className="flex items-center gap-1.5 p-1 rounded-lg bg-muted border border-border self-start">
           <button
             type="button"
             onClick={() => setActiveTab("summary")}
@@ -366,7 +366,7 @@ export default function InventoryPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+                <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Code</th>
                   <th className="pb-3 font-bold">Product / Grain</th>
                   <th className="pb-3 font-bold">Category</th>
@@ -376,7 +376,7 @@ export default function InventoryPage() {
                   <th className="pb-3 font-bold text-center">Status</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border/40">
+              <tbody className="divide-y divide-border">
                 {filteredSummary.length === 0 && (
                   <tr>
                     <td colSpan={6} className="py-4">
@@ -388,7 +388,7 @@ export default function InventoryPage() {
                   </tr>
                 )}
                 {filteredSummary.map((item) => (
-                  <tr key={item.id} className="hover:bg-muted/30 transition-colors">
+                  <tr key={item.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-mono font-bold text-muted-foreground">{item.code}</td>
                     <td className="py-3 font-bold text-foreground">
                       <div>{item.name}</div>
@@ -408,12 +408,12 @@ export default function InventoryPage() {
                     </td>
                     <td className="py-3 text-center">
                       {item.isLowStock ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-semibold border border-amber-500/20">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-semibold border border-amber-500/20">
                           <AlertTriangle className="h-3 w-3" />
                           Low Stock
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-semibold border border-emerald-500/20">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-semibold border border-emerald-500/20">
                           <CheckCircle2 className="h-3 w-3" />
                           In Stock
                         </span>
@@ -433,7 +433,7 @@ export default function InventoryPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+                <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Date & Time</th>
                   <th className="pb-3 font-bold">Voucher No</th>
                   <th className="pb-3 font-bold">Type</th>
@@ -445,7 +445,7 @@ export default function InventoryPage() {
                   <th className="pb-3 font-bold">Remarks / Trace</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border/40 font-mono">
+              <tbody className="divide-y divide-border font-mono">
                 {filteredLedger.length === 0 && (
                   <tr>
                     <td colSpan={9} className="py-4 font-sans">
@@ -457,7 +457,7 @@ export default function InventoryPage() {
                   </tr>
                 )}
                 {filteredLedger.map((entry) => (
-                  <tr key={entry.id} className="hover:bg-muted/30 transition-colors">
+                  <tr key={entry.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 text-muted-foreground font-sans">{formatDateTime(entry.date)}</td>
                     <td className="py-3 font-bold text-foreground font-sans">{entry.voucher_no}</td>
                     <td className="py-3">
@@ -499,14 +499,14 @@ export default function InventoryPage() {
           <div><label className="block font-medium text-foreground mb-1">Approver *</label><input value={adjApprover} onChange={(e) => setAdjApprover(e.target.value)} placeholder="Approver name" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
           <div className="flex items-end gap-2"><span className="text-muted-foreground">Current balance: {adjGodown && adjProduct ? `${adjBefore} kg` : "—"}</span><button type="submit" disabled={adjPending} className="ml-auto px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{adjPending ? "Posting…" : "Create & Post Adjustment"}</button></div>
         </form>
-        {postedAdjId && (<button type="button" onClick={() => setAdjReverseOpen(true)} className="mt-3 px-3 py-1.5 rounded-lg bg-card hover:bg-red-500/10 text-red-600 dark:text-red-400 border border-border/80 text-xs font-semibold cursor-pointer">Reverse last posted adjustment</button>)}
+        {postedAdjId && (<button type="button" onClick={() => setAdjReverseOpen(true)} className="mt-3 px-3 py-1.5 rounded-lg bg-card hover:bg-red-500/10 text-red-600 dark:text-red-400 border border-border text-xs font-semibold cursor-pointer">Reverse last posted adjustment</button>)}
       </div>
 
       {/* Inter-Godown Transfer Modal */}
       {isTransferModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <ArrowRightLeft className="h-4 w-4 text-emerald-500" />
                 Inter-Godown Grain Transfer

@@ -201,7 +201,7 @@ export default function PackingPage() {
             <div>
               <div className="flex items-center justify-between">
                 <span className="font-mono text-xs text-muted-foreground font-bold">{pkg.code}</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold">
+                <span className="text-[10px] px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold">
                   {pkg.capacity_kg} kg Bag
                 </span>
               </div>
@@ -217,7 +217,7 @@ export default function PackingPage() {
               </div>
             </div>
 
-            <div className="pt-2 border-t border-border/50 flex items-center justify-between text-[11px] text-muted-foreground">
+            <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground">
               <span>Reorder: {pkg.reorder_level} bags</span>
               <span className={pkg.current_stock <= pkg.reorder_level ? "text-amber-500 font-bold" : "text-emerald-500 font-semibold"}>
                 {pkg.current_stock <= pkg.reorder_level ? "Order Needed" : "Sufficient Stock"}
@@ -239,7 +239,7 @@ export default function PackingPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Bag / Bardana Type</th>
                 <th className="pb-3 font-bold text-right">Consumed (packed)</th>
                 <th className="pb-3 font-bold text-right">Damaged</th>
@@ -247,15 +247,15 @@ export default function PackingPage() {
                 <th className="pb-3 font-bold text-center">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40">
+            <tbody className="divide-y divide-border">
               {bardanaLedger.map((pkg) => (
-                <tr key={pkg.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={pkg.id} className="hover:bg-muted transition-colors">
                   <td className="py-3 font-semibold text-foreground">{pkg.name}</td>
                   <td className="py-3 text-right font-mono">{pkg.consumed} bags</td>
                   <td className="py-3 text-right font-mono text-red-600 dark:text-red-400">{pkg.damaged} bags</td>
                   <td className="py-3 text-right font-black text-emerald-600 dark:text-emerald-400">{pkg.current_stock} bags</td>
                   <td className="py-3 text-center">
-                    <span className={pkg.current_stock <= pkg.reorder_level ? "px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase border border-amber-500/20" : "px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20"}>
+                    <span className={pkg.current_stock <= pkg.reorder_level ? "px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase border border-amber-500/20" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20"}>
                       {pkg.current_stock <= pkg.reorder_level ? "Order needed" : "Sufficient"}
                     </span>
                   </td>
@@ -286,7 +286,7 @@ export default function PackingPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Packing No</th>
                 <th className="pb-3 font-bold">Date</th>
                 <th className="pb-3 font-bold">Product Seed Packed</th>
@@ -298,9 +298,9 @@ export default function PackingPage() {
                 <th className="pb-3 font-bold text-center">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40 font-mono">
+            <tbody className="divide-y divide-border font-mono">
               {packingRecords.map((r) => (
-                <tr key={r.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={r.id} className="hover:bg-muted transition-colors">
                   <td className="py-3 font-bold text-foreground font-sans">{r.packing_no}</td>
                   <td className="py-3 text-muted-foreground font-sans">{formatDate(r.date)}</td>
                   <td className="py-3 font-semibold text-foreground font-sans">{r.output_product_name}</td>
@@ -312,7 +312,7 @@ export default function PackingPage() {
                   <td className="py-3 text-right text-destructive font-bold">{r.damaged_bags} bags</td>
                   <td className="py-3 text-right font-bold text-foreground">{formatCurrency(r.packing_charge)}</td>
                   <td className="py-3 text-center">
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
                       Posted
                     </span>
                   </td>
@@ -337,9 +337,9 @@ export default function PackingPage() {
 
       {/* Packing Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <PackageCheck className="h-4 w-4 text-emerald-500" />
                 Record Packing & Bagging

@@ -314,7 +314,7 @@ export default function InwardPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Voucher No</th>
                 <th className="pb-3 font-bold">Date</th>
                 <th className="pb-3 font-bold">Supplier / Source</th>
@@ -326,7 +326,7 @@ export default function InwardPage() {
                 <th className="pb-3 font-bold text-center">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40">
+            <tbody className="divide-y divide-border">
               {visibleVouchers.length === 0 && (
                 <tr>
                   <td colSpan={8} className="py-4">
@@ -340,11 +340,11 @@ export default function InwardPage() {
                 </tr>
               )}
               {visibleVouchers.map((v) => (
-                <tr key={v.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={v.id} className="hover:bg-muted transition-colors">
                   <td className="py-3 font-bold text-foreground">
                     <div className="flex items-center gap-1.5">
                       <span>{v.voucher_no}</span>
-                      <span className={v.status === "reversed" ? "px-1.5 py-0.2 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase" : "px-1.5 py-0.2 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase"}>
+                      <span className={v.status === "reversed" ? "px-1.5 py-0.2 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase" : "px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase"}>
                         {v.status === "reversed" ? "Reversed" : "Posted"}
                       </span>
                     </div>
@@ -396,9 +396,9 @@ export default function InwardPage() {
 
       {/* Creation Modal */}
       {isFormOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
-          <div className="expensive-card w-full max-w-3xl p-6 bg-card border border-border shadow-2xl rounded-xl my-8 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-4 border-b border-border/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
+          <div className="expensive-card w-full max-w-3xl p-6 bg-card border border-border shadow-md rounded-md my-8 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-4 border-b border-border">
               <div>
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
                   <Truck className="h-5 w-5 text-emerald-500" />
@@ -532,7 +532,7 @@ export default function InwardPage() {
                     return (
                       <div
                         key={idx}
-                        className="grid grid-cols-1 sm:grid-cols-6 gap-2 p-2.5 rounded-lg bg-muted/40 border border-border/70 text-xs items-center"
+                        className="grid grid-cols-1 sm:grid-cols-6 gap-2 p-2.5 rounded-lg bg-muted border border-border text-xs items-center"
                       >
                         <div className="sm:col-span-2">
                           <label className="block text-[10px] text-muted-foreground mb-0.5">Product</label>
@@ -650,8 +650,8 @@ export default function InwardPage() {
 
       {/* Printable Inward Slip View */}
       {selectedVoucherForPrint && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs overflow-y-auto">
-          <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-2xl rounded-xl printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 overflow-y-auto">
+          <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-md rounded-md printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-start justify-between border-b pb-4">
               <div>
                 <h2 className="text-xl font-extrabold tracking-tight">ARCO SEED GODOWN & PROCESSING</h2>

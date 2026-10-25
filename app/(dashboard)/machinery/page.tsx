@@ -224,7 +224,7 @@ export default function MachineryJobsPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Job No</th>
                 <th className="pb-3 font-bold">Date</th>
                 <th className="pb-3 font-bold">Client / Owner</th>
@@ -237,9 +237,9 @@ export default function MachineryJobsPage() {
                 <th className="pb-3 font-bold text-center">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40">
+            <tbody className="divide-y divide-border">
               {jobs.map((j) => (
-                <tr key={j.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={j.id} className="hover:bg-muted transition-colors">
                   <td className="py-3 font-mono font-bold text-foreground">{j.job_no}</td>
                   <td className="py-3 text-muted-foreground">{formatDate(j.date)}</td>
                   <td className="py-3 font-semibold text-foreground">{j.customer_name}</td>
@@ -252,7 +252,7 @@ export default function MachineryJobsPage() {
                     {formatCurrency(j.service_charge)}
                   </td>
                   <td className="py-3 text-center">
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
                       {j.status ?? "Posted"}
                     </span>
                     {j.status === "posted" && (
@@ -280,9 +280,9 @@ export default function MachineryJobsPage() {
 
       {/* Creation Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="expensive-card w-full max-w-xl p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="expensive-card w-full max-w-xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <Cog className="h-4 w-4 text-emerald-500" />
                 Record Machinery Service Job
@@ -379,7 +379,7 @@ export default function MachineryJobsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-muted/40 border border-border">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-muted border border-border">
                 <div>
                   <label className="block font-medium text-foreground mb-1">Rate Basis (Formula)</label>
                   <select
