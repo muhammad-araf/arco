@@ -68,6 +68,120 @@ export function SubmitSpinner() {
   return <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
 }
 
+/* ------- Layout-accurate skeleton blocks (route loading.tsx) ------ */
+/* Every block is an empty pulsing div: no text, no data, flat muted
+ * color only — no gradients, no blur, no decoration. Compose them in
+ * a route's loading.tsx to mirror that route's real layout. */
+
+export function Skel({ className = "bg-muted rounded" }: { className?: string }) {
+  return <div aria-hidden="true" className={`animate-pulse ${className}`} />
+}
+
+/** Page title row: title block, optional subtitle line, action buttons. */
+export function TitleRowSkeleton({ buttons = 0, subtitle = false }: { buttons?: number; subtitle?: boolean }) {
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="space-y-2">
+        <Skel className="h-7 w-56 max-w-full bg-muted rounded" />
+        {subtitle && <Skel className="h-3 w-96 max-w-full bg-muted rounded" />}
+      </div>
+      {buttons > 0 && (
+        <div className="flex items-center gap-2">
+          {Array.from({ length: buttons }).map((_, i) => (
+            <Skel key={i} className="h-10 w-36 rounded-lg bg-muted" />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Stat/summary cards, matching the real card shape (label, value, subline). */
+export function StatCardsSkeleton({ count = 3, cols = "sm:grid-cols-3" }: { count?: number; cols?: string }) {
+  return (
+    <div className={`grid grid-cols-1 ${cols} gap-4`}>
+      {Array.from({ length: count }).map((_, i) => (
+        <div key={i} className="expensive-card p-4 space-y-3">
+          <Skel className="h-3 w-24 bg-muted rounded" />
+          <Skel className="h-7 w-32 bg-muted rounded" />
+          <Skel className="h-3 w-20 bg-muted rounded" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Table card: card title block, column-header row, data rows. */
+export function TableCardSkeleton({ rows = 8, title = true }: { rows?: number; title?: boolean }) {
+  return (
+    <div className="expensive-card p-5 space-y-4">
+      {title && (
+        <div className="flex items-center justify-between">
+          <Skel className="h-4 w-36 bg-muted rounded" />
+          <Skel className="h-3 w-20 bg-muted rounded" />
+        </div>
+      )}
+      <div className="flex gap-4 border-b border-border pb-3">
+        <Skel className="h-3 flex-1 bg-muted rounded" />
+        <Skel className="h-3 flex-1 bg-muted rounded" />
+        <Skel className="h-3 flex-1 bg-muted rounded" />
+        <Skel className="h-3 w-20 bg-muted rounded" />
+      </div>
+      <div className="space-y-3">
+        {Array.from({ length: rows }).map((_, i) => (
+          <Skel key={i} className="h-9 w-full rounded-lg bg-muted" />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** Stacked list card (receipt feed, movement rows): bordered row blocks. */
+export function ListCardSkeleton({ rows = 5, title = true }: { rows?: number; title?: boolean }) {
+  return (
+    <div className="expensive-card p-5 space-y-3">
+      {title && <Skel className="h-4 w-28 bg-muted rounded" />}
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="rounded-lg border border-border p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <Skel className="h-3 w-24 bg-muted rounded" />
+            <Skel className="h-3 w-16 bg-muted rounded" />
+          </div>
+          <Skel className="h-3 w-3/4 bg-muted rounded" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Tab bar: muted bordered bar with tab pills. */
+export function TabBarSkeleton({ tabs = 4 }: { tabs?: number }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 p-1 rounded-lg bg-muted border border-border self-start max-w-full">
+      {Array.from({ length: tabs }).map((_, i) => (
+        <Skel key={i} className="h-7 w-28 rounded-md bg-card" />
+      ))}
+    </div>
+  )
+}
+
+/** Filter card: grid of labeled field blocks plus an action button. */
+export function FilterFieldsSkeleton({ fields = 4, button = true }: { fields?: number; button?: boolean }) {
+  return (
+    <div className="expensive-card p-4 space-y-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {Array.from({ length: fields }).map((_, i) => (
+          <div key={i} className="space-y-2">
+            <Skel className="h-3 w-16 bg-muted rounded" />
+            <Skel className="h-9 w-full rounded-lg bg-muted" />
+          </div>
+        ))}
+      </div>
+      {button && <Skel className="h-10 w-32 rounded-lg bg-muted" />}
+    </div>
+  )
+}
+
 /* ------------------------------ Banners ---------------------------- */
 
 type BannerTone = "error" | "success" | "warning" | "info"
