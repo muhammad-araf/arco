@@ -218,11 +218,8 @@ export default function MigrationPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <UploadCloud className="h-6 w-6 text-emerald-500" />
-            Excel Data Migration & Opening Balances
+            Import
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Transition smoothly from the client's Excel sheets, map columns to database fields, and set opening balances.
-          </p>
         </div>
       </div>
 
@@ -270,14 +267,11 @@ export default function MigrationPage() {
             <div>
               <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <FileSpreadsheet className="h-4 w-4 text-emerald-500" />
-                Legacy Workbook $\rightarrow$ Relational Schema Dictionary
+                Sheet Map
               </h2>
-              <p className="text-xs text-muted-foreground">
-                Resolves ambiguities from client workbook sheets into relational database tables.
-              </p>
             </div>
             <span className="text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400">
-              6 / 6 Sheets Reconciled
+              6 / 6 sheets mapped
             </span>
           </div>
 
@@ -325,18 +319,15 @@ export default function MigrationPage() {
           <div>
             <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
               <Database className="h-4 w-4 text-emerald-500" />
-              Controlled Opening Balances Entry
+              Opening Balances
             </h2>
-            <p className="text-xs text-muted-foreground">
-              Establishes the initial baseline for Godown Grain Stock, Imprest Cash, Customer Receivables, and Packaging.
-            </p>
           </div>
 
           <form onSubmit={handleSaveOpeningBalance} className="space-y-4 text-xs">
             <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block font-medium text-foreground mb-1">Opening Balance "As Of" Date</label>
+                <label className="block font-medium text-foreground mb-1">As-of date</label>
                 <input
                   type="date"
                   value={asOfDate}
@@ -418,7 +409,7 @@ export default function MigrationPage() {
                   type="text"
                   value={openingNotes}
                   onChange={(e) => setOpeningNotes(e.target.value)}
-                  placeholder="e.g. Verified from physical godown scale count sheet"
+                  placeholder="e.g. From physical scale count"
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                 />
               </div>
@@ -440,7 +431,7 @@ export default function MigrationPage() {
 
       {activeTab === "opening_balances" && openingBalances.length > 0 && (
         <div className="expensive-card p-5">
-          <h2 className="text-sm font-bold text-foreground mb-3">Recorded opening balances ({openingBalances.length})</h2>
+          <h2 className="text-sm font-bold text-foreground mb-3">Recorded Balances ({openingBalances.length})</h2>
           <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Kind</th><th className="pb-2">Entity</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-right">Quantity</th><th className="pb-2">As of</th></tr></thead>
             <tbody className="divide-y divide-border">
               {openingBalances.map((b: any) => (<tr key={b.id}><td className="py-2">{b.balance_kind}</td><td className="py-2 font-mono">{b.entity_key}</td><td className="py-2 text-right">{formatCurrency(Number(b.amount || 0))}</td><td className="py-2 text-right">{formatWeight(Number(b.quantity || 0))}</td><td className="py-2">{b.as_of?.slice(0, 10)}</td></tr>))}
@@ -454,10 +445,10 @@ export default function MigrationPage() {
           <div>
             <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
               <UploadCloud className="h-4 w-4 text-emerald-500" />
-              Spreadsheet Import Wizard
+              Import File
             </h2>
             <p className="text-xs text-muted-foreground">
-              Bulk import existing master catalogs and transactions from Excel (`.xlsx` or `.csv`).
+              Import masters and transactions from Excel or CSV.
             </p>
           </div>
 
@@ -552,7 +543,7 @@ export default function MigrationPage() {
       <ConfirmDialog
         open={showOpeningConfirm}
         title="Lock this opening balance?"
-        description={`Record ${openingStockWeight} kg of ${products.find((p) => p.id === openingProductId)?.name || "the selected product"} in ${godowns.find((g) => g.id === openingGodownId)?.name || "the selected godown"} as of ${asOfDate}, marked as an opening (OPN-) ledger row with source note "${openingNotes.trim()}". Opening rows are distinct from ordinary transactions.`}
+        description={`Record ${openingStockWeight} kg of ${products.find((p) => p.id === openingProductId)?.name || "the selected product"} in ${godowns.find((g) => g.id === openingGodownId)?.name || "the selected godown"} as of ${asOfDate} as an opening balance, with source note "${openingNotes.trim()}".`}
         confirmLabel="Lock Opening Balance"
         pending={isPending}
         onConfirm={handleConfirmOpening}
