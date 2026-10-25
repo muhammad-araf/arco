@@ -86,10 +86,9 @@ export default function UsersPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-black tracking-tight text-foreground">Users &amp; Roles</h1>
+        <h1 className="text-2xl font-black tracking-tight text-foreground">Users</h1>
         <p className="text-xs text-muted-foreground mt-0.5">
-          Operator profiles and roles (spec §17). Only Owner / Admin can change a role, and every change is
-          written to the audit trail with a mandatory reason. The last active Owner / Admin cannot be demoted.
+          Only Owner / Admin can change roles. Every change needs a reason, and the last active Owner / Admin cannot be demoted.
         </p>
       </div>
       {error && (
@@ -97,7 +96,7 @@ export default function UsersPage() {
           tone="error"
           message={
             /not configured/i.test(error)
-              ? "Supabase is not configured / sign in required: set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then sign in as the seeded Owner / Admin (see SETUP.md). No local demo data is shown."
+              ? "Supabase is not set up, or sign-in is required. See SETUP.md."
               : error
           }
           onDismiss={() => setError("")}
@@ -107,12 +106,12 @@ export default function UsersPage() {
       {myRole && myRole !== "owner_admin" ? (
         <EmptyState
           title="Requires Owner / Admin"
-          hint={`Your signed-in role is ${ROLE_LABELS[myRole]}. User management is reserved for Owner / Admin operators; the server enforces this even if this page were bypassed.`}
+          hint={`Your role is ${ROLE_LABELS[myRole]}. Only Owner / Admin can manage users.`}
         />
       ) : profiles.length === 0 && !error ? (
         <EmptyState
           title="No operator profiles found"
-          hint="Profiles are created when an operator signs in. Seed the first Owner / Admin operator as described in SETUP.md, then return here."
+          hint="Profiles appear when an operator signs in. Seed the first Owner / Admin (see SETUP.md), then return here."
           actionLabel="Reload"
           onAction={load}
         />
@@ -155,7 +154,7 @@ export default function UsersPage() {
       <ConfirmDialog
         open={target !== null}
         title={`Change role for ${target?.display_name ?? ""}?`}
-        description="This is audited and enforced server-side. A reason is required below, and the last active Owner / Admin cannot be demoted."
+        description="The last active Owner / Admin cannot be demoted."
         confirmLabel="Change role"
         pending={pending}
         onCancel={() => setTarget(null)}
