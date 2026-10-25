@@ -1,7 +1,6 @@
 import * as React from "react"
 import { redirect } from "next/navigation"
 import { AppSidebar } from "@/components/app-sidebar"
-import { ExpensiveAmbientMesh } from "@/components/expensive-ambient-mesh"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { TodayBadge } from "@/components/today-badge"
 import { createClient } from "@/lib/supabase/server"
@@ -32,10 +31,7 @@ export default async function DashboardLayout({
 
   return (
     <div className="flex min-h-screen bg-background relative overflow-hidden">
-      {/* Aurora Ambient Mesh Background */}
-      <ExpensiveAmbientMesh />
-
-      {/* Single-Role Main Navigation Sidebar */}
+      {/* Main Navigation Sidebar */}
       <AppSidebar />
 
       {/* Main Content Area */}

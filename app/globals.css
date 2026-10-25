@@ -114,152 +114,12 @@ body {
   font-feature-settings: "rlig" 1, "calt" 1;
 }
 
-/* Animations */
-@keyframes luxury-pulse-slow {
-  0%, 100% { opacity: 0.8; transform: translateX(-50%) scale(1); }
-  50% { opacity: 1; transform: translateX(-50%) scale(1.06); }
-}
-
-@keyframes luxury-drift-subtle {
-  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
-  50% { transform: translate3d(-3%, 2%, 0) scale(1.05); }
-}
-
-/* Ambient Canvas Mesh */
-.expensive-aurora-canvas {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  overflow: hidden;
-  z-index: 0;
-  contain: strict;
-}
-
-:root .expensive-aurora-canvas {
-  background: 
-    radial-gradient(at 0% 0%, rgba(16, 185, 129, 0.08) 0px, transparent 50%),
-    radial-gradient(at 100% 0%, rgba(217, 119, 6, 0.06) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(16, 185, 129, 0.04) 0px, transparent 50%);
-}
-
-.dark .expensive-aurora-canvas {
-  background: 
-    radial-gradient(at 0% 0%, rgba(16, 185, 129, 0.14) 0px, transparent 50%),
-    radial-gradient(at 100% 0%, rgba(217, 119, 6, 0.08) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(5, 150, 105, 0.06) 0px, transparent 50%);
-}
-
-.expensive-orb-primary {
-  position: absolute;
-  top: -12%;
-  left: 50%;
-  transform: translateX(-50%) translate3d(0, 0, 0);
-  width: min(1100px, 95vw);
-  height: 520px;
-  border-radius: 9999px;
-  animation: luxury-pulse-slow 20s ease-in-out infinite;
-  pointer-events: none;
-}
-
-:root .expensive-orb-primary {
-  background: radial-gradient(ellipse at center, rgba(16, 185, 129, 0.16) 0%, rgba(20, 184, 166, 0.08) 40%, transparent 75%);
-}
-
-.dark .expensive-orb-primary {
-  background: radial-gradient(ellipse at center, rgba(16, 185, 129, 0.24) 0%, rgba(20, 184, 166, 0.12) 40%, transparent 75%);
-}
-
-.expensive-orb-secondary {
-  position: absolute;
-  top: -8%;
-  right: -5%;
-  width: min(650px, 60vw);
-  height: 460px;
-  border-radius: 9999px;
-  animation: luxury-drift-subtle 22s ease-in-out infinite;
-  pointer-events: none;
-}
-
-:root .expensive-orb-secondary {
-  background: radial-gradient(circle at center, rgba(217, 119, 6, 0.10) 0%, rgba(245, 158, 11, 0.04) 45%, transparent 70%);
-}
-
-.dark .expensive-orb-secondary {
-  background: radial-gradient(circle at center, rgba(217, 119, 6, 0.18) 0%, rgba(245, 158, 11, 0.08) 45%, transparent 70%);
-}
-
-.expensive-orb-tertiary {
-  position: absolute;
-  bottom: 0%;
-  left: -6%;
-  width: min(550px, 50vw);
-  height: 440px;
-  border-radius: 9999px;
-  pointer-events: none;
-}
-
-:root .expensive-orb-tertiary {
-  background: radial-gradient(circle at center, rgba(16, 185, 129, 0.06) 0%, transparent 65%);
-}
-
-.dark .expensive-orb-tertiary {
-  background: radial-gradient(circle at center, rgba(16, 185, 129, 0.12) 0%, transparent 65%);
-}
-
-.expensive-dot-grid {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: radial-gradient(rgba(100, 116, 139, 0.12) 1px, transparent 1px);
-  background-size: 24px 24px;
-  mask-image: radial-gradient(ellipse 95% 75% at 50% 12%, black 20%, transparent 90%);
-  -webkit-mask-image: radial-gradient(ellipse 95% 75% at 50% 12%, black 20%, transparent 90%);
-}
-
-.dark .expensive-dot-grid {
-  background-image: radial-gradient(rgba(148, 163, 184, 0.10) 1px, transparent 1px);
-}
-
-.expensive-glow-beam {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  z-index: 10;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    rgba(16, 185, 129, 0.2) 20%,
-    rgba(16, 185, 129, 0.7) 50%,
-    rgba(217, 119, 6, 0.5) 80%,
-    transparent 100%
-  );
-}
-
-/* Glass & Card Surfaces */
-.expensive-card {
-  position: relative;
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.95) 0%, rgba(240, 253, 244, 0.7) 100%);
-  border: 1px solid rgba(16, 185, 129, 0.2);
-  box-shadow: 0 4px 20px -2px rgba(16, 185, 129, 0.06), 0 2px 6px -1px rgba(0, 0, 0, 0.02);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-radius: var(--radius);
-  transition: all 0.2s ease;
-}
-
-.dark .expensive-card {
-  background: linear-gradient(145deg, rgba(26, 40, 32, 0.90) 0%, rgba(14, 22, 18, 0.94) 100%);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  box-shadow: 0 8px 30px -4px rgba(0, 0, 0, 0.5), inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
-}
-
-.expensive-card:hover {
-  border-color: rgba(16, 185, 129, 0.4);
-  box-shadow: 0 12px 32px -4px rgba(16, 185, 129, 0.12);
-  transform: translateY(-1px);
+/* Plain card: a white box with a 1px border. No gradient, no blur,
+   no shadow, no hover lift. */
+.plain-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 
 /* Print Optimization — print documents only (components/print/*).
@@ -275,10 +135,8 @@ body {
     background: #ffffff !important;
     color: #000000 !important;
   }
-  /* App chrome: sidebar, headers, nav, buttons, aurora background. */
-  .no-print, header, nav, aside, footer, button,
-  .expensive-aurora-canvas, .expensive-orb-primary, .expensive-orb-secondary,
-  .expensive-orb-tertiary, .expensive-dot-grid, .expensive-glow-beam {
+  /* App chrome: sidebar, headers, nav, buttons. */
+  .no-print, header, nav, aside, footer, button {
     display: none !important;
   }
   /* Show only the print document, even when the page has other content. */
