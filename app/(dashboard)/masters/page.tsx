@@ -196,11 +196,8 @@ export default function MastersPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <Database className="h-6 w-6 text-emerald-500" />
-            Master Data & Godown Configurations
+            Masters
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Configure primary entities: Seed Products, Godown Locations, Parties (Growers & Clients), and Machinery.
-          </p>
         </div>
 
         {activeTab === "products" && (
@@ -282,7 +279,7 @@ export default function MastersPage() {
                     <td colSpan={8} className="py-4">
                       <EmptyState
                         title="No products yet"
-                        hint="Add your first product master — raw seed, finished seed, intermediate or by-product — to use it across inward, production and gate pass."
+                        hint="Add your first product."
                         actionLabel="Add New Product"
                         onAction={() => setIsNewProdOpen(true)}
                       />
@@ -307,7 +304,7 @@ export default function MastersPage() {
                         type="button"
                         onClick={() => setToggleTarget(p)}
                         className="px-2 py-1 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer"
-                        title={p.is_active ? "Deactivate (never delete a referenced product)" : "Reactivate product"}
+                        title={p.is_active ? "Deactivate" : "Reactivate product"}
                       >
                         {p.is_active ? "Deactivate" : "Reactivate"}
                       </button>
@@ -535,7 +532,7 @@ export default function MastersPage() {
       <ConfirmDialog
         open={showConfirm}
         title="Create this product?"
-        description={draftProduct ? `"${draftProduct.name}" (${draftProduct.category.replace("_", " ")}, ${draftProduct.weight_per_bag} kg standard bag, safety stock ${draftProduct.min_stock} kg) will be added to the product master and appear in inward, production, gate pass and purchase lists.` : ""}
+        description={draftProduct ? `"${draftProduct.name}" (${draftProduct.category.replace("_", " ")}, ${draftProduct.weight_per_bag} kg bag, safety stock ${draftProduct.min_stock} kg) will be added and appear in Inward, Production, Gate Pass and Purchases.` : ""}
         confirmLabel="Create Product"
         pending={isPending}
         onConfirm={handleConfirmProduct}
@@ -543,7 +540,7 @@ export default function MastersPage() {
       />
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Add a master record</h2>
-        <p className="text-xs text-muted-foreground mb-4">Create (never delete) via masters.ts actions. Packaging types ({packaging.length}) and employees ({employees.length}) are listed here as counts; their full tables live in the packing and payroll sections. Deactivation is one-way — no reactivate action exists yet.</p>
+        <p className="text-xs text-muted-foreground mb-4">Packaging types ({packaging.length}) and employees ({employees.length}) are shown as counts only. Their full lists are on the Packing and Payroll pages.</p>
         <form onSubmit={handleCreateMaster} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
           <div><label className="block font-medium text-foreground mb-1">Kind *</label><select value={masterKind} onChange={(e) => setMasterKind(e.target.value as any)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="godown">Godown</option><option value="party">Party</option><option value="machine">Machine</option><option value="packaging">Packaging type</option><option value="employee">Employee</option></select></div>
           <div><label className="block font-medium text-foreground mb-1">Code *</label><input value={masterCode} onChange={(e) => setMasterCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
@@ -565,7 +562,7 @@ export default function MastersPage() {
       <ConfirmDialog
         open={!!toggleTarget}
         title={toggleTarget?.is_active ? `Deactivate "${toggleTarget?.name}"?` : `Reactivate "${toggleTarget?.name}"?`}
-        description={toggleTarget?.is_active ? (referencedIds.has(toggleTarget.id) ? "This product already has stock-ledger history. It will NOT be deleted — it becomes inactive, stays in history, and is hidden from new vouchers." : "This product will become inactive and hidden from new vouchers. Its history is kept.") : "This product will be available in new vouchers again."}
+        description={toggleTarget?.is_active ? (referencedIds.has(toggleTarget.id) ? "This product has stock history. It will become inactive, not deleted, and stay hidden from new vouchers." : "This product will become inactive and hidden from new vouchers. Its history is kept.") : "This product will be available in new vouchers again."}
         confirmLabel={toggleTarget?.is_active ? "Deactivate" : "Reactivate"}
         destructive={toggleTarget?.is_active}
         onConfirm={handleConfirmToggle}
