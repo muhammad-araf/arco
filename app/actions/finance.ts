@@ -1642,28 +1642,36 @@ export async function getDaybook(input: {
     let opening = 0;
     let accountLabel = input.accountKind ?? "all accounts";
     if (input.accountId) {
-      const { data: acct } = await db.from("cash_accounts").select("*").eq("id", input.accountId).maybeSingle();
+      // Independent reads: the account row and its prior ledger rows do not
+      // depend on each other, so fetch them together (was sequential).
+      const [{ data: acct }, { data: prior }] = await Promise.all([
+        db.from("cash_accounts").select("*").eq("id", input.accountId).maybeSingle(),
+        db.from("cash_ledger").select("debit, credit")
+          .eq("cash_account_id", input.accountId).lt("date", input.from),
+      ]);
       if (!acct) return fail("Cash account not found.");
       accountLabel = `${acct.code} — ${acct.name}`;
       opening = roundMoney(Number(acct.opening_balance) || 0);
-      const { data: prior } = await db.from("cash_ledger").select("debit, credit")
-        .eq("cash_account_id", input.accountId).lt("date", input.from);
       for (const r of prior ?? []) {
         opening = roundMoney(opening + (Number(r.debit) || 0) - (Number(r.credit) || 0));
       }
     } else if (input.accountKind) {
-      const { data: accts } = await db.from("cash_accounts").select("opening_balance")
-        .eq("account_kind", input.accountKind).eq("is_active", true);
+      const [{ data: accts }, { data: prior }] = await Promise.all([
+        db.from("cash_accounts").select("opening_balance")
+          .eq("account_kind", input.accountKind).eq("is_active", true),
+        db.from("cash_ledger").select("debit, credit")
+          .eq("account", input.accountKind).lt("date", input.from),
+      ]);
       for (const a of accts ?? []) opening = roundMoney(opening + (Number(a.opening_balance) || 0));
-      const { data: prior } = await db.from("cash_ledger").select("debit, credit")
-        .eq("account", input.accountKind).lt("date", input.from);
       for (const r of prior ?? []) {
         opening = roundMoney(opening + (Number(r.debit) || 0) - (Number(r.credit) || 0));
       }
     } else {
-      const { data: accts } = await db.from("cash_accounts").select("opening_balance").eq("is_active", true);
+      const [{ data: accts }, { data: prior }] = await Promise.all([
+        db.from("cash_accounts").select("opening_balance").eq("is_active", true),
+        db.from("cash_ledger").select("debit, credit").lt("date", input.from),
+      ]);
       for (const a of accts ?? []) opening = roundMoney(opening + (Number(a.opening_balance) || 0));
-      const { data: prior } = await db.from("cash_ledger").select("debit, credit").lt("date", input.from);
       for (const r of prior ?? []) {
         opening = roundMoney(opening + (Number(r.debit) || 0) - (Number(r.credit) || 0));
       }
