@@ -221,11 +221,8 @@ export default function BillingPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <Receipt className="h-6 w-6 text-emerald-500" />
-            Customer Billing, Invoices & Cash Receipts
+            Billing
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Collect service revenue, allocate customer payments to ledger statements, and reconcile accounts.
-          </p>
         </div>
 
         <button
@@ -234,7 +231,7 @@ export default function BillingPage() {
           className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
         >
           <Plus className="h-4 w-4" />
-          <span>Record Customer Receipt</span>
+          <span>New Receipt</span>
         </button>
       </div>
 
@@ -244,7 +241,7 @@ export default function BillingPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
               <Building2 className="h-4 w-4 text-emerald-500" />
-              Customer Ledger Accounts & Outstanding Balances
+              Customers
             </h2>
             <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
               Total Due: {formatCurrency(totalReceivables)}
@@ -269,7 +266,7 @@ export default function BillingPage() {
                     <td colSpan={6} className="py-4">
                       <EmptyState
                         title={drillFilter === "receivable" ? "No outstanding receivables" : "No customers yet"}
-                        hint={drillFilter === "receivable" ? "Every customer balance is settled." : "Add customers in Master Data to record receipts against them."}
+                        hint={drillFilter === "receivable" ? "Every customer balance is settled." : "Add customers in Masters."}
                       />
                     </td>
                   </tr>
@@ -312,9 +309,8 @@ export default function BillingPage() {
         <div className="expensive-card p-5">
           <h2 className="text-sm font-bold text-foreground mb-1 flex items-center gap-2">
             <CreditCard className="h-4 w-4 text-emerald-500" />
-            Recent Payment Receipts
+            Receipts
           </h2>
-          <p className="text-xs text-muted-foreground mb-4">Posted cash & online collections</p>
 
           <div className="space-y-3">
             {receipts.map((r) => (
@@ -337,7 +333,7 @@ export default function BillingPage() {
             {receipts.length === 0 && (
               <EmptyState
                 title="No receipts recorded yet"
-                hint="A receipt collects an earlier invoice — it increases cash/bank and reduces the customer's receivable, without creating new revenue."
+                hint="A receipt collects an earlier invoice. It is not new revenue."
                 actionLabel="Record Customer Receipt"
                 onAction={() => setIsReceiptModalOpen(true)}
               />
@@ -464,7 +460,7 @@ export default function BillingPage() {
       )}
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Customer Invoices</h2>
-        <p className="text-xs text-muted-foreground mb-4">Invoices are revenue when posted; receipts only collect them. Create a manual invoice below (machinery/packing/sale sources invoice through their own flows), post it, and reverse posted ones with a mandatory reason.</p>
+        <p className="text-xs text-muted-foreground mb-4">Invoices count as revenue when posted. Receipts only collect them.</p>
         <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Invoice</th><th className="pb-2">Customer</th><th className="pb-2 text-right">Total</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
             {invoices.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No invoices yet.</td></tr>}
@@ -506,7 +502,7 @@ export default function BillingPage() {
       <ConfirmDialog
         open={showConfirm}
         title="Post this customer receipt?"
-        description={draftReceipt ? `${draftReceipt.receipt_no}: ${formatCurrency(draftReceipt.amount)} from ${draftReceipt.customer_name || "the customer"} via ${draftReceipt.payment_method}. This increases cash/bank and reduces the receivable — it is a collection, not new revenue.` : ""}
+        description={draftReceipt ? `${draftReceipt.receipt_no}: ${formatCurrency(draftReceipt.amount)} from ${draftReceipt.customer_name || "the customer"} via ${draftReceipt.payment_method}. This is a collection, not new revenue.` : ""}
         confirmLabel="Post Receipt to Daybook"
         pending={isPending}
         onConfirm={handleConfirmReceipt}
