@@ -187,7 +187,7 @@ export default function ReportsPage() {
       <p className="text-xs text-muted-foreground -mt-3">Report period: <strong className="text-foreground">{periodLabel}</strong> · Filters and totals are shown on each report, per spec §16.</p>
 
       {/* Report Switcher Tabs */}
-      <div className="flex flex-wrap items-center gap-2 p-1 rounded-lg bg-muted/60 border border-border/60 self-start max-w-full text-xs font-semibold">
+      <div className="flex flex-wrap items-center gap-2 p-1 rounded-lg bg-muted border border-border self-start max-w-full text-xs font-semibold">
         <button
           type="button"
           onClick={() => setSelectedReport("pnl")}
@@ -245,22 +245,22 @@ export default function ReportsPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 text-xs">
             {/* Revenue Column */}
             <div className="space-y-3">
-              <h3 className="font-bold text-foreground uppercase tracking-wider text-[11px] pb-1 border-b border-border/60 flex items-center justify-between">
+              <h3 className="font-bold text-foreground uppercase tracking-wider text-[11px] pb-1 border-b border-border flex items-center justify-between">
                 <span>Operational Revenues</span>
                 <span className="text-emerald-600 dark:text-emerald-400 font-mono">{formatCurrency(totalRevenue)}</span>
               </h3>
 
               <div className="space-y-2">
-                <div className="flex justify-between p-2 rounded bg-muted/40">
+                <div className="flex justify-between p-2 rounded bg-muted">
                   <span className="text-foreground">Certified Seed Product Sales</span>
                   <strong className="font-mono">{formatCurrency(seedSalesRevenue)}</strong>
                 </div>
                 <p className="text-[11px] text-muted-foreground px-1">No product-sale invoices exist in this prototype, so sales revenue is 0 — it is not estimated.</p>
-                <div className="flex justify-between p-2 rounded bg-muted/40">
+                <div className="flex justify-between p-2 rounded bg-muted">
                   <span className="text-foreground">Machinery Processing & Grading Charges</span>
                   <strong className="font-mono">{formatCurrency(machineryRevenue)}</strong>
                 </div>
-                <div className="flex justify-between p-2 rounded bg-muted/40">
+                <div className="flex justify-between p-2 rounded bg-muted">
                   <span className="text-foreground">Final Unit Bardana Packing Fees</span>
                   <strong className="font-mono">{formatCurrency(packingRevenue)}</strong>
                 </div>
@@ -269,26 +269,26 @@ export default function ReportsPage() {
 
             {/* Expenses Column */}
             <div className="space-y-3">
-              <h3 className="font-bold text-foreground uppercase tracking-wider text-[11px] pb-1 border-b border-border/60 flex items-center justify-between">
+              <h3 className="font-bold text-foreground uppercase tracking-wider text-[11px] pb-1 border-b border-border flex items-center justify-between">
                 <span>Recognized Costs & Overheads</span>
                 <span className="text-destructive font-mono">{formatCurrency(totalCosts)}</span>
               </h3>
 
               <div className="space-y-2">
-                <div className="flex justify-between p-2 rounded bg-muted/40">
+                <div className="flex justify-between p-2 rounded bg-muted">
                   <span className="text-foreground">Cost of Goods Sold (Raw Seeds)</span>
                   <strong className="font-mono text-destructive">— not yet approved</strong>
                 </div>
                 <p className="text-[11px] text-muted-foreground px-1">COGS needs an approved inventory valuation method (spec §15.1) and is excluded rather than estimated.</p>
-                <div className="flex justify-between p-2 rounded bg-muted/40">
+                <div className="flex justify-between p-2 rounded bg-muted">
                   <span className="text-foreground">Packaging Material (Bags Consumed)</span>
                   <strong className="font-mono text-destructive">-{formatCurrency(bardanaCost)}</strong>
                 </div>
-                <div className="flex justify-between p-2 rounded bg-muted/40">
+                <div className="flex justify-between p-2 rounded bg-muted">
                   <span className="text-foreground">Posted Operating Expenses</span>
                   <strong className="font-mono text-destructive">-{formatCurrency(operationalExpenses)}</strong>
                 </div>
-                <div className="flex justify-between p-2 rounded bg-muted/40">
+                <div className="flex justify-between p-2 rounded bg-muted">
                   <span className="text-foreground">Labor, Operator & Machine Wages</span>
                   <strong className="font-mono text-destructive">{laborPayroll === 0 ? "— no finalized periods" : `-${formatCurrency(laborPayroll)}`}</strong>
                 </div>
@@ -297,7 +297,7 @@ export default function ReportsPage() {
           </div>
 
           {/* Net Profit Banner */}
-          <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-500/15 via-teal-500/15 to-emerald-500/10 border border-emerald-500/30 flex items-center justify-between">
+          <div className="p-4 rounded-md bg-emerald-100 dark:bg-emerald-900 border border-emerald-300 dark:border-emerald-700 flex items-center justify-between">
             <div>
               <span className="text-xs text-muted-foreground font-semibold uppercase tracking-wider block">
                 Net Operating Profit
@@ -320,7 +320,7 @@ export default function ReportsPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+                <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Product</th>
                   <th className="pb-3 font-bold">Category</th>
                   <th className="pb-3 font-bold text-right">Physical Stock</th>
@@ -329,9 +329,9 @@ export default function ReportsPage() {
                   <th className="pb-3 font-bold text-right">Inventory Valuation</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border/40 font-mono">
+              <tbody className="divide-y divide-border font-mono">
                 {stockSummary.map((item) => (
-                  <tr key={item.id} className="hover:bg-muted/30 transition-colors">
+                  <tr key={item.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-bold text-foreground font-sans">{item.name}</td>
                     <td className="py-3 text-muted-foreground capitalize font-sans">{item.category.replace("_", " ")}</td>
                     <td className="py-3 text-right font-bold text-emerald-600 dark:text-emerald-400">{formatWeight(item.totalStock)}</td>
@@ -368,7 +368,7 @@ export default function ReportsPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+                <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Bardana / Bag Type</th>
                   <th className="pb-3 font-bold">Capacity</th>
                   <th className="pb-3 font-bold text-right">Consumed</th>
@@ -378,9 +378,9 @@ export default function ReportsPage() {
                   <th className="pb-3 font-bold text-right">Total Bag Asset Value</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border/40 font-mono">
+              <tbody className="divide-y divide-border font-mono">
                 {bardanaRows.map((pkg) => (
-                  <tr key={pkg.id} className="hover:bg-muted/30 transition-colors">
+                  <tr key={pkg.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-bold text-foreground font-sans">{pkg.name}</td>
                     <td className="py-3 text-muted-foreground font-sans">{pkg.capacity_kg} kg</td>
                     <td className="py-3 text-right font-mono">{pkg.consumed} bags</td>
@@ -406,8 +406,8 @@ export default function ReportsPage() {
       )}
       {selectedReport === "ledger" && (
         <div className="expensive-card p-5">
-          <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3">Type</th><th className="pb-3 text-right">Inward</th><th className="pb-3 text-right">Outward</th><th className="pb-3 text-right">Balance</th></tr></thead>
-            <tbody className="divide-y divide-border/40">
+          <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3">Type</th><th className="pb-3 text-right">Inward</th><th className="pb-3 text-right">Outward</th><th className="pb-3 text-right">Balance</th></tr></thead>
+            <tbody className="divide-y divide-border">
               {ledgerRows.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No ledger rows in this period.</td></tr>}
               {ledgerRows.map((e: any) => (<tr key={e.id}><td className="py-2">{e.date?.slice(0, 10)}</td><td className="py-2 font-mono font-bold">{e.voucher_no}</td><td className="py-2">{e.voucher_type}</td><td className="py-2 text-right">{formatWeight(Number(e.inward_qty || 0))}</td><td className="py-2 text-right">{formatWeight(Number(e.outward_qty || 0))}</td><td className="py-2 text-right font-bold">{formatWeight(Number(e.running_balance || 0))}</td></tr>))}
             </tbody></table></div>
@@ -424,8 +424,8 @@ export default function ReportsPage() {
           {stmt && (
             <div>
               <p className="text-xs text-muted-foreground mb-3">Opening: {formatCurrency(Number(stmt.opening || 0))} · Charges: {formatCurrency(Number(stmt.charges || 0))} · Settlements: {formatCurrency(Number(stmt.settlements || 0))} · Closing: {formatCurrency(Number(stmt.closing || 0))} ({stmt.closingKind})</p>
-              <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3 text-right">Debit</th><th className="pb-3 text-right">Credit</th><th className="pb-3 text-right">Balance</th></tr></thead>
-                <tbody className="divide-y divide-border/40">
+              <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3 text-right">Debit</th><th className="pb-3 text-right">Credit</th><th className="pb-3 text-right">Balance</th></tr></thead>
+                <tbody className="divide-y divide-border">
                   {(stmt.entries ?? []).map((e: any) => (<tr key={e.id}><td className="py-2">{e.date?.slice(0, 10)}</td><td className="py-2 font-mono">{e.voucher_no}</td><td className="py-2 text-right">{formatCurrency(Number(e.debit || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(e.credit || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.running_balance || 0))}</td></tr>))}
                 </tbody></table></div>
             </div>

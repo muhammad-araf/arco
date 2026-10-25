@@ -186,7 +186,7 @@ export default function PayrollPage() {
 
       {/* Daily Attendance Grid */}
       <div className="expensive-card p-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-border/60">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-border">
           <div>
             <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
               <UserCheck className="h-4 w-4 text-emerald-500" />
@@ -209,7 +209,7 @@ export default function PayrollPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Code</th>
                 <th className="pb-3 font-bold">Staff Name</th>
                 <th className="pb-3 font-bold">Designation</th>
@@ -218,7 +218,7 @@ export default function PayrollPage() {
                 <th className="pb-3 font-bold text-center">Mark Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40">
+            <tbody className="divide-y divide-border">
               {employees.length === 0 && (
                 <tr>
                   <td colSpan={6} className="py-4">
@@ -232,7 +232,7 @@ export default function PayrollPage() {
               {employees.map((emp) => {
                 const currentStatus = attendanceState[emp.id] || "present"
                 return (
-                  <tr key={emp.id} className="hover:bg-muted/30 transition-colors">
+                  <tr key={emp.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-mono font-bold text-muted-foreground">{emp.code}</td>
                     <td className="py-3 font-bold text-foreground">{emp.full_name}</td>
                     <td className="py-3 text-muted-foreground">{emp.designation}</td>
@@ -243,7 +243,7 @@ export default function PayrollPage() {
                       {formatCurrency(emp.base_rate)} {emp.pay_type === "daily" ? "/ day" : "/ mo"}
                     </td>
                     <td className="py-3 text-center">
-                      <div className="inline-flex items-center gap-1 p-1 rounded-lg bg-muted/60 border border-border/60">
+                      <div className="inline-flex items-center gap-1 p-1 rounded-lg bg-muted border border-border">
                         <button
                           type="button"
                           onClick={() => handleStatusChange(emp.id, "present")}
@@ -311,7 +311,7 @@ export default function PayrollPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Employee</th>
                 <th className="pb-3 font-bold">Designation</th>
                 <th className="pb-3 font-bold text-right">Eligible Days</th>
@@ -321,7 +321,7 @@ export default function PayrollPage() {
                 <th className="pb-3 font-bold text-center">Status</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40 font-mono">
+            <tbody className="divide-y divide-border font-mono">
               {employees.map((emp) => {
                 const eligibleDays = 26
                 const baseEarned = emp.pay_type === "monthly" ? emp.base_rate : emp.base_rate * eligibleDays
@@ -331,7 +331,7 @@ export default function PayrollPage() {
                 const netPayable = baseEarned - advance
 
                 return (
-                  <tr key={emp.id} className="hover:bg-muted/30 transition-colors">
+                  <tr key={emp.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-bold text-foreground font-sans">{emp.full_name}</td>
                     <td className="py-3 text-muted-foreground font-sans">{emp.designation}</td>
                     <td className="py-3 text-right">{eligibleDays} days</td>
@@ -341,7 +341,7 @@ export default function PayrollPage() {
                       {formatCurrency(netPayable)}
                     </td>
                     <td className="py-3 text-center">
-                      <span className="px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-600 dark:text-blue-400 text-[10px] font-bold uppercase font-sans">
+                      <span className="px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-600 dark:text-blue-400 text-[10px] font-bold uppercase font-sans">
                         Calculated
                       </span>
                     </td>
@@ -373,8 +373,8 @@ export default function PayrollPage() {
           <div><label className="block font-medium text-foreground mb-1">Year</label><input type="number" value={runYear} onChange={(e) => setRunYear(Number(e.target.value))} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
           <div className="flex items-end"><button type="submit" disabled={runPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{runPending ? "Running…" : "Run payroll (draft)"}</button></div>
         </form>
-        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Gross</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
-          <tbody className="divide-y divide-border/40">
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Gross</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
+          <tbody className="divide-y divide-border">
             {periods.length === 0 && unpaid.length === 0 && <tr><td colSpan={7} className="py-4 text-muted-foreground">No payroll periods yet — run the first draft above. Until then, only the estimate register above applies.</td></tr>}
             {[...periods, ...unpaid.filter((u) => !periods.some((p) => p.id === u.id))].map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? p.employee_id}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}{p.status === "draft" && (<button type="button" onClick={() => handleApprove(p.id)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button>)}{(p.status === "approved" || p.status === "partially_paid") && Number(p.balance_amount || 0) > 0 && (<button type="button" onClick={() => handlePay(p)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Pay balance</button>)}</td></tr>))}
           </tbody></table></div>

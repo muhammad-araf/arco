@@ -268,7 +268,7 @@ export default function PurchasesPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Purchase No</th>
                 <th className="pb-3 font-bold">Date</th>
                 <th className="pb-3 font-bold">Supplier / Grower</th>
@@ -280,7 +280,7 @@ export default function PurchasesPage() {
                 <th className="pb-3 font-bold text-center">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40">
+            <tbody className="divide-y divide-border">
               {visiblePurchases.length === 0 && (
                 <tr>
                   <td colSpan={9} className="py-4">
@@ -294,7 +294,7 @@ export default function PurchasesPage() {
                 </tr>
               )}
               {visiblePurchases.map((p) => (
-                <tr key={p.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={p.id} className="hover:bg-muted transition-colors">
                   <td className="py-3 font-mono font-bold text-foreground">{p.purchase_no}</td>
                   <td className="py-3 text-muted-foreground">{formatDate(p.date)}</td>
                   <td className="py-3 font-semibold text-foreground">{p.vendor_name}</td>
@@ -307,7 +307,7 @@ export default function PurchasesPage() {
                     {formatCurrency(p.balance_amount)}
                   </td>
                   <td className="py-3 text-center">
-                    <span className={p.status === "reversed" ? "px-2 py-0.5 rounded-full bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase" : "px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase"}>
+                    <span className={p.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase"}>
                       {p.status === "reversed" ? "Reversed" : "Posted"}
                     </span>
                   </td>
@@ -333,9 +333,9 @@ export default function PurchasesPage() {
 
       {/* Creation Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="expensive-card w-full max-w-lg p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="expensive-card w-full max-w-lg p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <ShoppingCart className="h-4 w-4 text-emerald-500" />
                 Record Vendor Purchase Invoice
@@ -426,7 +426,7 @@ export default function PurchasesPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-muted/40 border border-border">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-muted border border-border">
                 <div>
                   <label className="block font-medium text-foreground mb-1">Vendor Bill / Ref No</label>
                   <input

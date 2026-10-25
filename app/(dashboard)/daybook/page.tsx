@@ -245,7 +245,7 @@ export default function DaybookPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+              <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Date & Time</th>
                 <th className="pb-3 font-bold">Voucher No</th>
                 <th className="pb-3 font-bold">Type</th>
@@ -256,7 +256,7 @@ export default function DaybookPage() {
                 <th className="pb-3 font-bold text-right">Running Balance</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/40 font-mono">
+            <tbody className="divide-y divide-border font-mono">
               {visibleLedger.length === 0 && (
                 <tr>
                   <td colSpan={8} className="py-4 font-sans">
@@ -270,7 +270,7 @@ export default function DaybookPage() {
                 </tr>
               )}
               {visibleLedger.map((row) => (
-                <tr key={row.id} className="hover:bg-muted/30 transition-colors">
+                <tr key={row.id} className="hover:bg-muted transition-colors">
                   <td className="py-3 text-muted-foreground font-sans">{formatDateTime(row.date)}</td>
                   <td className="py-3 font-bold text-foreground font-sans">{row.voucher_no}</td>
                   <td className="py-3">
@@ -298,7 +298,7 @@ export default function DaybookPage() {
             </tbody>
           </table>
         </div>
-        <div className="mt-4 pt-3 border-t border-border/60 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
+        <div className="mt-4 pt-3 border-t border-border flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
           <span>Shown in: <strong className="text-emerald-600 dark:text-emerald-400 font-mono">{formatCurrency(ledgerTotals.debit)}</strong></span>
           <span>Shown out: <strong className="text-red-600 dark:text-red-400 font-mono">{formatCurrency(ledgerTotals.credit)}</strong></span>
           <span>Net shown: <strong className="text-foreground font-mono">{formatCurrency(ledgerTotals.debit - ledgerTotals.credit)}</strong></span>
@@ -308,9 +308,9 @@ export default function DaybookPage() {
 
       {/* Expense Modal */}
       {isExpenseModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <Receipt className="h-4 w-4 text-emerald-500" />
                 Record Operational Expense
@@ -424,8 +424,8 @@ export default function DaybookPage() {
           <h2 className="text-sm font-bold text-foreground">Expenses in range</h2>
           <PrintButton label="Print daybook" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
         </div>
-        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Expense</th><th className="pb-2">Category</th><th className="pb-2">Payee</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
-          <tbody className="divide-y divide-border/40">
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Expense</th><th className="pb-2">Category</th><th className="pb-2">Payee</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
+          <tbody className="divide-y divide-border">
             {expenses.length === 0 && <tr><td colSpan={5} className="py-4 text-muted-foreground">No expenses recorded yet.</td></tr>}
             {expenses.map((e: any) => (<tr key={e.id}><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.status === "posted" && (<button type="button" onClick={() => setExpReverseTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
           </tbody></table></div>

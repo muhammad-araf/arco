@@ -254,7 +254,7 @@ export default function BillingPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold">
+                <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Party Code</th>
                   <th className="pb-3 font-bold">Customer Name</th>
                   <th className="pb-3 font-bold">Contact / Phone</th>
@@ -263,7 +263,7 @@ export default function BillingPage() {
                   <th className="pb-3 font-bold text-center">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-border/40">
+              <tbody className="divide-y divide-border">
                 {visibleCustomers.length === 0 && (
                   <tr>
                     <td colSpan={6} className="py-4">
@@ -277,7 +277,7 @@ export default function BillingPage() {
                 {visibleCustomers.map((c) => {
                   const bal = custBalance(c)
                   return (
-                    <tr key={c.id} className="hover:bg-muted/30 transition-colors">
+                    <tr key={c.id} className="hover:bg-muted transition-colors">
                       <td className="py-3 font-mono font-bold text-muted-foreground">{c.code}</td>
                       <td className="py-3 font-bold text-foreground">
                         <div>{c.name}</div>
@@ -318,7 +318,7 @@ export default function BillingPage() {
 
           <div className="space-y-3">
             {receipts.map((r) => (
-              <div key={r.id} className="p-3 rounded-lg bg-card/60 border border-border/60 text-xs space-y-1">
+              <div key={r.id} className="p-3 rounded-lg bg-card border border-border text-xs space-y-1">
                 <div className="flex items-center justify-between">
                   <span className="font-mono font-bold text-foreground">{r.receipt_no}</span>
                   <span className="font-bold text-emerald-600 dark:text-emerald-400">{formatCurrency(r.amount)}</span>
@@ -329,7 +329,7 @@ export default function BillingPage() {
                   <span>{formatDate(r.date)}</span>
                 </div>
                 <div className="flex gap-2 pt-1">
-                  <button type="button" onClick={() => setPrintReceipt(r)} className="px-2 py-1 rounded-md bg-card hover:bg-muted/60 border border-border/70 text-[11px] font-semibold cursor-pointer">Print voucher</button>
+                  <button type="button" onClick={() => setPrintReceipt(r)} className="px-2 py-1 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print voucher</button>
                   {(r as any).status === "posted" && (<button type="button" onClick={() => setReceiptReverseTarget(r)} className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}
                 </div>
               </div>
@@ -348,9 +348,9 @@ export default function BillingPage() {
 
       {/* Receipt Modal */}
       {isReceiptModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <Receipt className="h-4 w-4 text-emerald-500" />
                 Record Customer Cash/Bank Receipt
@@ -465,8 +465,8 @@ export default function BillingPage() {
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Customer Invoices</h2>
         <p className="text-xs text-muted-foreground mb-4">Invoices are revenue when posted; receipts only collect them. Create a manual invoice below (machinery/packing/sale sources invoice through their own flows), post it, and reverse posted ones with a mandatory reason.</p>
-        <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border/60 text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Invoice</th><th className="pb-2">Customer</th><th className="pb-2 text-right">Total</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
-          <tbody className="divide-y divide-border/40">
+        <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Invoice</th><th className="pb-2">Customer</th><th className="pb-2 text-right">Total</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
+          <tbody className="divide-y divide-border">
             {invoices.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No invoices yet.</td></tr>}
             {invoices.map((i) => (<tr key={i.id}><td className="py-2 font-mono font-bold">{i.invoice_no}</td><td className="py-2">{customers.find((c) => c.id === i.customer_id)?.name ?? i.customer_id}</td><td className="py-2 text-right">{formatCurrency(Number(i.total_amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(i.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</td><td className="py-2 text-center">{i.status}{i.status === "posted" && (<button type="button" onClick={() => setInvReverseTarget(i)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
           </tbody></table></div>
@@ -484,7 +484,7 @@ export default function BillingPage() {
             <p className="text-xs text-muted-foreground">Receipt voucher print document for {printReceipt.receipt_no}.</p>
             <div className="flex gap-2">
               <PrintButton label="Print voucher" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
-              <button type="button" onClick={() => setPrintReceipt(null)} className="px-4 py-2 rounded-lg bg-card border border-border/80 text-xs font-semibold cursor-pointer">Close</button>
+              <button type="button" onClick={() => setPrintReceipt(null)} className="px-4 py-2 rounded-lg bg-card border border-border text-xs font-semibold cursor-pointer">Close</button>
             </div>
           </div>
           <div className="hidden print:block mt-2">

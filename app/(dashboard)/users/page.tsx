@@ -120,7 +120,7 @@ export default function UsersPage() {
         <div className="expensive-card p-5 overflow-x-auto">
           <table className="w-full text-xs min-w-[560px]">
             <thead>
-              <tr className="text-left text-muted-foreground border-b border-border/60">
+              <tr className="text-left text-muted-foreground border-b border-border">
                 <th className="py-2 pr-3 font-semibold">Operator</th>
                 <th className="py-2 pr-3 font-semibold">Role</th>
                 <th className="py-2 pr-3 font-semibold">Status</th>
@@ -141,7 +141,7 @@ export default function UsersPage() {
                         setNewRole(p.role)
                         setReason("")
                       }}
-                      className="px-3 py-1.5 rounded-lg bg-card hover:bg-muted/60 text-foreground border border-border/80 font-semibold cursor-pointer"
+                      className="px-3 py-1.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border font-semibold cursor-pointer"
                     >
                       Change role
                     </button>
