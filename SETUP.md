@@ -52,6 +52,22 @@ it once per project, or drop the policies first on a re-run.
    (it falls back to the JS aggregation automatically), just slower as
    the ledger grows.
 
+> **Demo data — read before delivery.** `supabase/schema.sql` ships NO
+> demo business data (the old §5 sample godowns, products, machines,
+> parties, and employees were removed). But a live database created from
+> an OLD copy of the schema already contains those sample rows, and
+> removing them from the file does not remove them from that database.
+> Before delivery, delete the sample rows from the live project (they
+> are identifiable by code — godowns `GDN-01`–`GDN-03`, products
+> `RAW-WHT-01`, `RAW-COT-02`, `FIN-WHT-01`, `BYP-PHOK-01`, `BYP-BRK-02`,
+> packaging `BAG-50-PP`, `BAG-100-JT`, `BAG-25-LD`, machines
+> `MCH-GRD-01`, `MCH-GRV-02`, `MCH-TRT-03`, parties `CUST-001`,
+> `SUPP-001`, `BOTH-001`, employees `EMP-001`–`EMP-003`) — but ONLY
+> if those codes are still the untouched samples; if the business has
+> started using a code for real data, keep that row and rename it
+> instead. After cleanup, every value the app shows comes from real
+> masters, vouchers, or ledgers.
+
 ## 3. Seed the single Owner/Admin operator
 
 Supabase Auth users cannot be invented by SQL, so seeding is two steps

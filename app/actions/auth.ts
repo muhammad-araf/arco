@@ -87,13 +87,14 @@ export async function getCurrentActor(
     .eq("id", user.id)
     .maybeSingle();
 
-  // If no profile exists yet, fallback for the authenticated user so they are not blocked
+  // If no profile exists yet, fallback for the authenticated user so they are not blocked.
+  // The display name is the user's own email, never an invented name.
   if (!profile) {
     return {
       userId: user.id,
       email: user.email ?? null,
       role: "owner_admin",
-      displayName: user.email ?? "Owner / Admin",
+      displayName: user.email ?? null,
     };
   }
 

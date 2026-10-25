@@ -5,7 +5,6 @@ import { ThemeToggle } from "@/components/theme-toggle"
 import { TodayBadge } from "@/components/today-badge"
 import { createClient } from "@/lib/supabase/server"
 import { getCurrentActor } from "@/app/actions/auth"
-import { Warehouse } from "lucide-react"
 
 // Authenticated shell: the layout awaits the session (cookies), so
 // these routes can never be statically prerendered. `instant = false`
@@ -51,10 +50,6 @@ export default async function DashboardLayout({
         {/* Sticky Top Header */}
         <header className="h-16 px-4 md:px-6 border-b border-border bg-background sticky top-0 z-30 flex items-center justify-between transition-colors">
           <div className="flex items-center gap-3">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-card border border-border text-xs text-foreground shadow-2xs">
-              <Warehouse className="h-3.5 w-3.5 text-emerald-500" />
-              <span className="font-semibold">Main Seed Godown</span>
-            </div>
             <TodayBadge />
           </div>
 

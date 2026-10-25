@@ -296,45 +296,15 @@ CREATE TABLE IF NOT EXISTS expenses (
 );
 
 -- ============================================================================
--- 5. INITIAL MASTER DATA INSERTS
+-- 5. MASTER DATA — NO DEMO ROWS SHIPPED
 -- ============================================================================
-INSERT INTO godowns (code, name, capacity_metric_tons, address) VALUES
-  ('GDN-01', 'Main Processing Godown A', 1500, 'Plot 14-B, Grain Market Area'),
-  ('GDN-02', 'Raw Seed Godown B', 2000, 'Shed 2, Warehouse Complex'),
-  ('GDN-03', 'Finished Seed & Bardana Unit C', 800, 'Dispatch Terminal 1')
-ON CONFLICT (code) DO NOTHING;
-
-INSERT INTO products (code, name, category, default_unit, weight_per_bag, min_stock) VALUES
-  ('RAW-WHT-01', 'Raw Wheat Seed (Faisalabad-08)', 'raw_seed', 'kg', 50, 5000),
-  ('RAW-COT-02', 'Raw Cotton Seed (FH-142)', 'raw_seed', 'kg', 40, 3000),
-  ('FIN-WHT-01', 'Certified Graded Wheat Seed', 'finished_seed', 'kg', 50, 2000),
-  ('BYP-PHOK-01', 'Wheat Phok / Chhilka (By-Product)', 'by_product', 'kg', 35, 500),
-  ('BYP-BRK-02', 'Broken Grain / Tota', 'by_product', 'kg', 50, 500)
-ON CONFLICT (code) DO NOTHING;
-
-INSERT INTO packaging_types (code, name, capacity_kg, cost_per_bag, reorder_level, current_stock) VALUES
-  ('BAG-50-PP', '50kg Woven PP Seed Bag (Green)', 50, 65, 500, 3200),
-  ('BAG-100-JT', '100kg Standard Jute Bardana', 100, 140, 300, 1150),
-  ('BAG-25-LD', '25kg Laminated Certified Bag', 25, 45, 400, 850)
-ON CONFLICT (code) DO NOTHING;
-
-INSERT INTO machines (code, name, processing_type, capacity_kg_per_hour, operator_name) VALUES
-  ('MCH-GRD-01', 'Westrup Fine Cleaner & Grader', 'Grading & Seed Cleaning', 2500, 'Ustad Aslam'),
-  ('MCH-GRV-02', 'Gravity Separator Table Unit 2', 'Density Separation', 2000, 'Muhammad Rashid'),
-  ('MCH-TRT-03', 'Chemical Treatment & Slurry Coater', 'Seed Chemical Dressing', 1800, 'Shahid Mehmood')
-ON CONFLICT (code) DO NOTHING;
-
-INSERT INTO parties (code, name, contact_person, phone, address, type, opening_balance, balance_type) VALUES
-  ('CUST-001', 'Al-Rehman Agri Farms', 'Chaudhry Tariq', '0300-7654321', 'Depalpur Road, Okara', 'customer', 450000, 'receivable'),
-  ('SUPP-001', 'Punjab Seeds Growers Co.', 'Haji Munir', '0321-9876543', 'Multan Road, Sahiwal', 'supplier', 820000, 'payable'),
-  ('BOTH-001', 'Ittehad Grain Traders', 'Malik Shahzad', '0333-1122334', 'New Grain Market, Burewala', 'both', 120000, 'receivable')
-ON CONFLICT (code) DO NOTHING;
-
-INSERT INTO employees (code, full_name, designation, phone, pay_type, base_rate) VALUES
-  ('EMP-001', 'Muhammad Aslam', 'Head Machine Master', '0301-2345678', 'monthly', 65000),
-  ('EMP-002', 'Abdul Ghafoor', 'Godown Weight Supervisor', '0304-8765432', 'monthly', 45000),
-  ('EMP-003', 'Riaz Hussain', 'Bardana & Packing Operator', '0322-5544332', 'daily', 1500)
-ON CONFLICT (code) DO NOTHING;
+-- Deliberately empty: this schema used to INSERT sample godowns, products,
+-- packaging, machines, parties, and employees (fictional names, phones, and
+-- opening balances). Those rows looked like real business data on a fresh
+-- install, so they were removed for delivery. Real masters are created via
+-- the Masters UI or the Import page. System rows that are NOT business data
+-- (doc_numbering series) are still seeded below in the appendix.
+-- ============================================================================
 -- ============================================================================
 -- APPENDIX — BACKEND CORE (work/backend-core, 2026-10-24)
 -- Added by the backend agent. APPEND ONLY: nothing above this section was
