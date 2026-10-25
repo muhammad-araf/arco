@@ -47,15 +47,10 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center relative overflow-hidden bg-background px-4">
-      {/* Emerald / gold ambient wash, matching the dashboard glass language */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(16,185,129,0.18),transparent_55%),radial-gradient(ellipse_at_bottom,rgba(217,119,6,0.14),transparent_55%)]"
-      />
-      <div className="relative w-full max-w-sm rounded-2xl border border-border/60 bg-card/80 backdrop-blur-xl shadow-2xl p-6 md:p-8">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+      <div className="relative w-full max-w-sm rounded-md border border-border bg-card p-6 md:p-8">
         <div className="flex items-center gap-3 mb-2">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-emerald-100 dark:bg-emerald-900 border border-emerald-300 dark:border-emerald-700">
             <Warehouse className="h-5 w-5 text-emerald-500" />
           </div>
           <div>
@@ -76,7 +71,7 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="operator@example.com"
-              className="w-full h-10 rounded-lg border border-border/70 bg-background/70 px-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500/50"
+              className="w-full h-10 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-emerald-600"
             />
           </div>
           <div className="space-y-1.5">
@@ -90,12 +85,12 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full h-10 rounded-lg border border-border/70 bg-background/70 px-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500/50"
+              className="w-full h-10 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-emerald-600"
             />
           </div>
 
           {error && (
-            <p role="alert" className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
+            <p role="alert" className="rounded-lg border border-red-300 dark:border-red-700 bg-red-100 dark:bg-red-900 px-3 py-2 text-xs text-red-600 dark:text-red-400">
               {error}
             </p>
           )}
