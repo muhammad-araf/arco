@@ -158,13 +158,19 @@ async function appendLedger(
 export async function getStockSummary(): Promise<ActionResult> {
   try {
     const supabase = await createClient();
-    const [ledger, godowns, products, parties] = await Promise.all([
-      supabase.from("stock_ledger").select("godown_id, product_id, party_id, inward_qty, outward_qty"),
+    // Prefer the DB-side aggregate (supabase/migration-stock-summary-rpc.sql):
+    // one grouped sum instead of shipping the whole ledger to aggregate here.
+    // The RPC is result-identical to the JS path below because every ledger
+    // writer rounds quantities to 2dp on write, so a final 2dp rounding of
+    // the exact decimal sum equals the old per-row rounded accumulation.
+    // If the migration was never applied, the RPC errors and we fall back
+    // to the JS aggregation — the app keeps working either way.
+    const [rpc, godowns, products, parties] = await Promise.all([
+      supabase.rpc("stock_summary"),
       supabase.from("godowns").select("id, name"),
       supabase.from("products").select("id, name, min_stock"),
       supabase.from("parties").select("id, name"),
     ]);
-    if (ledger.error) return fail(ledger.error.message);
     const godownName = new Map((godowns.data ?? []).map((g: { id: string; name: string }) => [g.id, g.name]));
     const productInfo = new Map(
       (products.data ?? []).map((p: { id: string; name: string; min_stock: number }) => [p.id, p]),
@@ -174,22 +180,42 @@ export async function getStockSummary(): Promise<ActionResult> {
       string,
       { godown_id: string; product_id: string; party_id: string | null; balance: number }
     >();
-    for (const row of (ledger.data ?? []) as {
-      godown_id: string;
-      product_id: string;
-      party_id: string | null;
-      inward_qty: number;
-      outward_qty: number;
-    }[]) {
-      const key = `${row.godown_id}|${row.product_id}|${row.party_id ?? ""}`;
-      const entry = byKey.get(key) ?? {
-        godown_id: row.godown_id,
-        product_id: row.product_id,
-        party_id: row.party_id,
-        balance: 0,
-      };
-      entry.balance = roundWeight(entry.balance + row.inward_qty - row.outward_qty);
-      byKey.set(key, entry);
+    if (!rpc.error && Array.isArray(rpc.data)) {
+      for (const row of rpc.data as {
+        godown_id: string;
+        product_id: string;
+        party_id: string | null;
+        balance_kg: number;
+      }[]) {
+        byKey.set(`${row.godown_id}|${row.product_id}|${row.party_id ?? ""}`, {
+          godown_id: row.godown_id,
+          product_id: row.product_id,
+          party_id: row.party_id,
+          balance: roundWeight(Number(row.balance_kg) || 0),
+        });
+      }
+    } else {
+      const ledger = await supabase
+        .from("stock_ledger")
+        .select("godown_id, product_id, party_id, inward_qty, outward_qty");
+      if (ledger.error) return fail(ledger.error.message);
+      for (const row of (ledger.data ?? []) as {
+        godown_id: string;
+        product_id: string;
+        party_id: string | null;
+        inward_qty: number;
+        outward_qty: number;
+      }[]) {
+        const key = `${row.godown_id}|${row.product_id}|${row.party_id ?? ""}`;
+        const entry = byKey.get(key) ?? {
+          godown_id: row.godown_id,
+          product_id: row.product_id,
+          party_id: row.party_id,
+          balance: 0,
+        };
+        entry.balance = roundWeight(entry.balance + row.inward_qty - row.outward_qty);
+        byKey.set(key, entry);
+      }
     }
     const summary = [...byKey.values()].map((e) => {
       const minStock = productInfo.get(e.product_id)?.min_stock ?? 0;

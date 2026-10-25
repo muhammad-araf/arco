@@ -45,6 +45,13 @@ ADD COLUMN IF NOT EXISTS` on the two pre-existing tables it extends
 policy block will error if re-run after policies already exist — apply
 it once per project, or drop the policies first on a re-run.
 
+3. `supabase/migration-stock-summary-rpc.sql` — performance only, no data
+   change: a `stock_summary()` grouped-sum function so the dashboard,
+   stock, production, and gate-pass pages stop shipping the whole ledger
+   to aggregate it in code. Recommended: without it the app still works
+   (it falls back to the JS aggregation automatically), just slower as
+   the ledger grows.
+
 ## 3. Seed the single Owner/Admin operator
 
 Supabase Auth users cannot be invented by SQL, so seeding is two steps
