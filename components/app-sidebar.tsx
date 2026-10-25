@@ -26,7 +26,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ThemeToggle } from "./theme-toggle"
-import { getMyProfile, type AppRole } from "@/app/actions/auth"
+import { type AppRole } from "@/app/actions/auth"
 
 const ROLE_LABELS: Record<AppRole, string> = {
   owner_admin: "Owner / Admin",
@@ -89,20 +89,22 @@ const navSections: NavSection[] = [
   },
 ]
 
-export function AppSidebar() {
+export function AppSidebar({
+  displayName,
+  email,
+  role,
+}: {
+  displayName?: string | null
+  email?: string | null
+  role?: AppRole | null
+}) {
   const pathname = usePathname()
   const [isOpenMobile, setIsOpenMobile] = React.useState(false)
-  const [actorLabel, setActorLabel] = React.useState("Operator")
-  const [actorRole, setActorRole] = React.useState("Not signed in")
-
-  React.useEffect(() => {
-    getMyProfile().then((res) => {
-      if (res.success && res.data) {
-        setActorLabel(res.data.displayName ?? res.data.email ?? "Operator")
-        setActorRole(ROLE_LABELS[res.data.role] ?? res.data.role)
-      }
-    }).catch(() => {})
-  }, [])
+  // Identity comes from the server layout (same fallbacks the old
+  // client-side getMyProfile call produced), so the name and role render
+  // with the shell instead of popping in after a round trip.
+  const actorLabel = displayName ?? email ?? "Operator"
+  const actorRole = role ? (ROLE_LABELS[role] ?? role) : "Not signed in"
 
   React.useEffect(() => {
     if (!isOpenMobile) return

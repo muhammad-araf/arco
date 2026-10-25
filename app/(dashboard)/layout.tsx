@@ -4,6 +4,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { TodayBadge } from "@/components/today-badge"
 import { createClient } from "@/lib/supabase/server"
+import { getCurrentActor } from "@/app/actions/auth"
 import { Warehouse } from "lucide-react"
 
 // Authenticated shell: the layout awaits the session (cookies), so
@@ -20,8 +21,9 @@ export default async function DashboardLayout({
   // Session guard: no authenticated Supabase session -> /login.
   // Fail closed on any auth lookup error, the same as no session.
   let session = null
+  let supabase: Awaited<ReturnType<typeof createClient>> | null = null
   try {
-    const supabase = await createClient()
+    supabase = await createClient()
     const { data } = await supabase.auth.getSession()
     session = data.session
   } catch {
@@ -29,10 +31,20 @@ export default async function DashboardLayout({
   }
   if (!session) redirect("/login")
 
+  // Operator identity for the sidebar, resolved here on the server so the
+  // sidebar no longer spends a client round trip (getUser + profile) after
+  // every app load just to render a name and role. Display-only: all
+  // enforcement still happens inside the server actions.
+  const actor = supabase ? await getCurrentActor(supabase).catch(() => null) : null
+
   return (
     <div className="flex min-h-screen bg-background relative overflow-hidden">
       {/* Main Navigation Sidebar */}
-      <AppSidebar />
+      <AppSidebar
+        displayName={actor?.displayName ?? null}
+        email={actor?.email ?? null}
+        role={actor?.role ?? null}
+      />
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 z-10">
