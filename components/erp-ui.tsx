@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils"
 /* ------------------------------------------------------------------ */
 /* Shared Phase-1 UI primitives for the Seed Godown ERP.               */
 /* Design language kept: Deep Forest Emerald #0B2F24, Golden Harvest   */
-/* Amber #D99726, frosted glassmorphism (backdrop-blur-xl). No data    */
+/* Amber #D99726, flat solid colors, 1px borders, 6px radius. No data  */
 /* layer changes here — these components only render UI state.        */
 /* ------------------------------------------------------------------ */
 
@@ -49,7 +49,7 @@ export function PageSkeleton({ rows = 5 }: { rows?: number }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {Array.from({ length: 4 }).map((_, i) => (
           <div key={i} className="expensive-card p-4 space-y-3">
-            <div className="h-3 w-24 rounded bg-muted/60 animate-pulse" />
+            <div className="h-3 w-24 rounded bg-muted animate-pulse" />
             <div className="h-7 w-32 rounded bg-muted/70 animate-pulse" />
             <div className="h-3 w-20 rounded bg-muted/50 animate-pulse" />
           </div>
@@ -57,7 +57,7 @@ export function PageSkeleton({ rows = 5 }: { rows?: number }) {
       </div>
       <div className="expensive-card p-5 space-y-3">
         {Array.from({ length: rows }).map((_, i) => (
-          <div key={i} className="h-9 w-full rounded-lg bg-muted/40 animate-pulse" />
+          <div key={i} className="h-9 w-full rounded-lg bg-muted animate-pulse" />
         ))}
       </div>
     </div>
@@ -101,7 +101,7 @@ export function AlertBanner({
     <div
       role="alert"
       className={cn(
-        "flex items-start gap-2.5 rounded-xl border px-3.5 py-3 text-xs font-medium backdrop-blur-xl",
+        "flex items-start gap-2.5 rounded-md border px-3.5 py-3 text-xs font-medium",
         bannerStyles[tone]
       )}
     >
@@ -144,8 +144,8 @@ export function EmptyState({
   onAction?: () => void
 }) {
   return (
-    <div className="flex flex-col items-center justify-center text-center py-10 px-4 rounded-xl border border-dashed border-border/70 bg-muted/20">
-      <div className="h-11 w-11 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center justify-center mb-3">
+    <div className="flex flex-col items-center justify-center text-center py-10 px-4 rounded-md border border-dashed border-border bg-muted/20">
+      <div className="h-11 w-11 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center justify-center mb-3">
         <Inbox className="h-5 w-5" />
       </div>
       <p className="text-sm font-bold text-foreground">{title}</p>
@@ -178,14 +178,14 @@ export const FILTER_LABELS: Record<string, string> = {
 export function FilterBanner({ filter, onClear }: { filter: string | null; onClear: () => void }) {
   if (!filter) return null
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs font-medium text-amber-700 dark:text-amber-400">
+    <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3.5 py-2.5 text-xs font-medium text-amber-700 dark:text-amber-400">
       <span>
         Filtered view from Dashboard: <strong>{FILTER_LABELS[filter] ?? `Filter “${filter}”`}</strong>
       </span>
       <button
         type="button"
         onClick={onClear}
-        className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-card border border-border/70 text-foreground font-semibold cursor-pointer hover:bg-muted/50"
+        className="ml-auto inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-card border border-border text-foreground font-semibold cursor-pointer hover:bg-muted/50"
       >
         Clear filter ✕
       </button>
@@ -215,7 +215,7 @@ function DialogShell({
   }, [onClose])
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 overflow-y-auto"
       onClick={onClose}
       role="presentation"
     >
@@ -224,7 +224,7 @@ function DialogShell({
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
         className={cn(
-          "expensive-card w-full p-4 sm:p-6 bg-card border border-border shadow-2xl rounded-xl space-y-4 my-auto max-h-[90dvh] overflow-y-auto",
+          "expensive-card w-full p-4 sm:p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-auto max-h-[90dvh] overflow-y-auto",
           wide ? "max-w-2xl" : "max-w-md"
         )}
       >
@@ -263,7 +263,7 @@ export function ConfirmDialog({
       <div className="flex items-start gap-3">
         <div
           className={cn(
-            "h-10 w-10 shrink-0 rounded-xl flex items-center justify-center border",
+            "h-10 w-10 shrink-0 rounded-md flex items-center justify-center border",
             destructive
               ? "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/25"
               : "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/25"
@@ -281,7 +281,7 @@ export function ConfirmDialog({
           type="button"
           onClick={onCancel}
           disabled={pending}
-          className="px-4 py-2.5 rounded-lg bg-card hover:bg-muted/60 text-foreground border border-border/80 text-xs font-semibold cursor-pointer disabled:opacity-50"
+          className="px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold cursor-pointer disabled:opacity-50"
         >
           Go back
         </button>
@@ -339,7 +339,7 @@ export function ReversalDialog({
   return (
     <DialogShell onClose={pending ? () => {} : onCancel}>
       <div className="flex items-start gap-3">
-        <div className="h-10 w-10 shrink-0 rounded-xl bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/25 flex items-center justify-center">
+        <div className="h-10 w-10 shrink-0 rounded-md bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/25 flex items-center justify-center">
           <AlertTriangle className="h-5 w-5" />
         </div>
         <div className="min-w-0">
@@ -389,7 +389,7 @@ export function ReversalDialog({
           type="button"
           onClick={onCancel}
           disabled={pending}
-          className="px-4 py-2.5 rounded-lg bg-card hover:bg-muted/60 text-foreground border border-border/80 text-xs font-semibold cursor-pointer disabled:opacity-50"
+          className="px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold cursor-pointer disabled:opacity-50"
         >
           Keep voucher
         </button>
