@@ -246,11 +246,8 @@ export default function ProductionPage() {
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
             <ScrollText className="h-6 w-6 text-emerald-500" />
-            Seed Recipes & Production Batches
+            Production
           </h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Execute machine runs, calculate graded seed yield %, track by-products and automatically deduct input inventory.
-          </p>
         </div>
 
         <button
@@ -259,7 +256,7 @@ export default function ProductionPage() {
           className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
         >
           <Play className="h-4 w-4" />
-          <span>Execute Production Batch</span>
+          <span>New Batch</span>
         </button>
       </div>
 
@@ -268,9 +265,8 @@ export default function ProductionPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
             <Boxes className="h-4 w-4 text-emerald-500" />
-            Executed Processing Batches ({visibleBatches.length})
+            Batches ({visibleBatches.length})
           </h2>
-          <span className="text-xs text-muted-foreground">Immutable Ledger Stock Deductions & Output Additions</span>
         </div>
 
         <div className="overflow-x-auto">
@@ -294,8 +290,8 @@ export default function ProductionPage() {
                   <td colSpan={9} className="py-4">
                     <EmptyState
                       title={drillFilter ? "No batches match this filter" : "No production batches yet"}
-                      hint={drillFilter ? "Clear the dashboard filter above to see the full run history." : "Execute your first batch — input is deducted and graded output is added to stock on posting."}
-                      actionLabel="Execute Production Batch"
+                      hint={drillFilter ? "Clear the filter to see all batches." : "Run your first batch."}
+                      actionLabel="New Batch"
                       onAction={() => setIsBatchModalOpen(true)}
                     />
                   </td>
@@ -551,7 +547,7 @@ export default function ProductionPage() {
                   type="text"
                   value={batchNotes}
                   onChange={(e) => setBatchNotes(e.target.value)}
-                  placeholder="Operator notes, moisture test result, screen size used"
+                  placeholder="Notes, moisture result, screen size"
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                 />
               </div>
@@ -687,7 +683,7 @@ export default function ProductionPage() {
       {/* Recipes (listRecipes / createRecipe / createRecipeVersion) */}
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Seed Recipes</h2>
-        <p className="text-xs text-muted-foreground mb-4">Active recipes from listRecipes. Saving with an existing code creates a new version via createRecipeVersion; the old version is retired, never overwritten.</p>
+        <p className="text-xs text-muted-foreground mb-4">Saving with an existing code creates a new version. Old versions are kept, never overwritten.</p>
         <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Code</th><th className="pb-2">Name</th><th className="pb-2">Version</th><th className="pb-2">Expected yield</th></tr></thead>
           <tbody className="divide-y divide-border">
             {recipes.length === 0 && <tr><td colSpan={4} className="py-4 text-muted-foreground">No recipes yet — create the first one below.</td></tr>}
