@@ -14,7 +14,8 @@ import {
 } from "lucide-react"
 import { listReceipts, listInvoices, createReceipt, postReceipt, reverseReceipt, createInvoice, postInvoice, reverseInvoice } from "@/app/actions/finance"
 import { listParties } from "@/app/actions/masters"
-import { ReceiptVoucherPrint, PrintButton } from "@/components/print"
+import { ReceiptVoucherPrint } from "@/components/print/receipt-voucher-print"
+import { PrintButton } from "@/components/print/print-button"
 import { CustomerReceipt, Party } from "@/lib/types/database"
 import { formatCurrency, formatDate } from "@/lib/utils"
 import {

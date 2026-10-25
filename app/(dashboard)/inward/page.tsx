@@ -16,7 +16,8 @@ import {
 } from "lucide-react"
 import { listInward, getInward, createInwardDraft, postInward, reverseInward } from "@/app/actions/inward"
 import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
-import { InwardSlipPrint, PrintButton } from "@/components/print"
+import { InwardSlipPrint } from "@/components/print/inward-slip-print"
+import { PrintButton } from "@/components/print/print-button"
 import { IncomingGoodsVoucher, IncomingGoodsItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatCurrency, formatDate } from "@/lib/utils"
 import {

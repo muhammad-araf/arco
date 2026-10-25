@@ -14,7 +14,8 @@ import {
   CreditCard,
 } from "lucide-react"
 import { getDaybook, listExpenses, createExpense, postExpense, reverseExpense, listCashAccounts } from "@/app/actions/finance"
-import { DaybookPrint, PrintButton } from "@/components/print"
+import { DaybookPrint } from "@/components/print/daybook-print"
+import { PrintButton } from "@/components/print/print-button"
 import { ExpenseVoucher, CashLedgerEntry } from "@/lib/types/database"
 import { formatCurrency, formatDateTime, formatDate } from "@/lib/utils"
 import {
