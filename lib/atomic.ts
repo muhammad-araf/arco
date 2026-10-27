@@ -20,6 +20,17 @@ export interface StockTransitionLine {
   inwardQty: number;
   outwardQty: number;
   notes?: string | null;
+  /**
+   * Optional lot number (lot traceability, STOCK-DASH). Carried into
+   * stock_ledger.lot_number when the DB function accepts it; omitted
+   * (null) means no lot tracking for this line and behaviour is
+   * unchanged. Backward compatible: every existing caller omits it.
+   * NOTE for live verification: the deployed atomic_stock_transition()
+   * SQL must be updated to persist lot_number from this field — until
+   * then the function ignores the key and lots do not land in the
+   * ledger (see the STOCK-DASH final report).
+   */
+  lotNumber?: string | null;
 }
 
 export interface AtomicTransitionArgs {
@@ -107,6 +118,7 @@ export async function callAtomicStockTransition(
       inward_qty: l.inwardQty,
       outward_qty: l.outwardQty,
       notes: l.notes ?? null,
+      lot_number: l.lotNumber?.trim() ? l.lotNumber.trim() : null,
     })),
     p_created_by: args.createdBy,
     p_client_token: args.clientToken ?? null,
