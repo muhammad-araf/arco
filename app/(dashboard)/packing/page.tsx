@@ -13,7 +13,7 @@ import {
   ArrowUpRight,
 } from "lucide-react"
 import { getBardanaLedger } from "@/app/actions/finance"
-import { listBatches } from "@/app/actions/production"
+import { listPackingRecords, createPackingRecord } from "@/app/actions/production"
 import { listPackagingTypes, listProducts } from "@/app/actions/masters"
 import { PackagingType, PackingRecord, Product } from "@/lib/types/database"
 import { formatBags, formatCurrency, formatWeight, formatDate } from "@/lib/utils"
@@ -47,13 +47,14 @@ export default function PackingPage() {
   const [bagsPacked, setBagsPacked] = React.useState<number>(100)
   const [damagedBags, setDamagedBags] = React.useState<number>(2)
   const [packingRate, setPackingRate] = React.useState<number>(15)
+  const [packedKg, setPackedKg] = React.useState<number>(0)
   const [notes, setNotes] = React.useState("")
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [pk, pr, ba, bat] = await Promise.all([listPackagingTypes(), listProducts(), getBardanaLedger({}), listBatches()])
-      const failed = [pk, pr, ba, bat].find((x) => !x.success)
+      const [pk, pr, ba, rec] = await Promise.all([listPackagingTypes(), listProducts(), getBardanaLedger({}), listPackingRecords()])
+      const failed = [pk, pr, ba, rec].find((x) => !x.success)
       if (failed) setFormError(failed.error ?? "Could not load packing data.")
       const packagingList = (Array.isArray(pk.data) ? pk.data : []) as PackagingType[]
       const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
@@ -62,27 +63,27 @@ export default function PackingPage() {
       const entries = ba.success ? ((ba.data as any)?.entries ?? []) : []
       setBardanaEntries(entries)
       setBardanaTotals(ba.success ? ba.data : null)
-      // Packing records are written by postBatch (production.ts) when a batch
-      // is posted with a packing rate / bag count — there is no standalone
-      // packing-record action. Batches with bags_consumed are the records.
-      setPackingRecords((Array.isArray(bat.data) ? bat.data : []).filter((b: any) => Number(b.bags_consumed || 0) > 0).map((b: any) => ({
-        id: b.id,
-        packing_no: b.batch_no,
-        date: b.date,
-        reference_type: "batch",
-        output_product_id: b.output_product_id,
-        output_product_name: productList.find((x) => x.id === b.output_product_id)?.name ?? b.output_product_id,
-        packaging_type_id: b.packaging_type_id,
-        packaging_name: packagingList.find((x) => x.id === b.packaging_type_id)?.name ?? b.packaging_type_id,
-        bags_packed: Number(b.bags_consumed || 0),
-        bag_capacity_kg: packagingList.find((x) => x.id === b.packaging_type_id)?.capacity_kg ?? 50,
-        total_packed_kg: Number(b.bags_consumed || 0) * (packagingList.find((x) => x.id === b.packaging_type_id)?.capacity_kg ?? 50),
-        packing_rate: Number(b.packing_rate_per_bag || 0),
-        packing_charge: Number(b.packing_charge || 0),
-        damaged_bags: 0,
-        status: b.status,
-        notes: b.notes,
-        created_at: b.created_at,
+      // History truth: the packing_records table itself, with its real
+      // stored packed kg, charge, damaged count and status — never
+      // rebuilt from batches, never bags x current capacity.
+      setPackingRecords((Array.isArray(rec.data) ? rec.data : []).map((r: any) => ({
+        id: r.id,
+        packing_no: r.packing_no ?? r.batch_no ?? r.id,
+        date: r.date,
+        reference_type: r.job_or_batch_id ? "batch" : "general",
+        output_product_id: r.output_product_id,
+        output_product_name: r.output_product_name,
+        packaging_type_id: r.packaging_type_id,
+        packaging_name: r.packaging_name,
+        bags_packed: Number(r.bags_count || 0),
+        bag_capacity_kg: Number(r.capacity_kg || 0),
+        total_packed_kg: Number(r.total_packed_kg || 0),
+        packing_rate: Number(r.packing_rate || 0),
+        packing_charge: Number(r.packing_charge || 0),
+        damaged_bags: Number(r.damaged_bags || 0),
+        status: r.status,
+        notes: r.notes,
+        created_at: r.created_at,
       })) as any)
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Could not load packing data.")
@@ -102,19 +103,22 @@ export default function PackingPage() {
 
   const selectedPkg = packaging.find((p) => p.id === packagingId)
   const capacityKg = selectedPkg?.capacity_kg || 50
-  const totalPackedKg = bagsPacked * capacityKg
+  // Packed weight is ENTERED, not bags x capacity; the charge is
+  // bags x rate from the entered values.
   const totalCharge = bagsPacked * packingRate
 
   const handleRecordPacking = (e: React.FormEvent) => {
     e.preventDefault()
     if (isPending) return
-    // Spec §8: positive bag count, non-negative damage/rate, and the
-    // bardana stock guard — packed + damaged bags both leave inventory.
+    // Spec §8: positive bag count, non-negative damage/rate/packed kg,
+    // and the bardana stock guard — packed + damaged bags both leave
+    // inventory. The server re-guards all of this before writing.
     if (!packagingId) return setFormError("Select a bag / bardana type.")
     if (!productId) return setFormError("Select the product being packed.")
     if (!isPositive(bagsPacked)) return setFormError("Bags packed must be greater than zero.")
     if (damagedBags < 0) return setFormError("Damaged bags cannot be negative.")
     if (packingRate < 0) return setFormError("Packing rate cannot be negative.")
+    if (packedKg < 0) return setFormError("Packed weight cannot be negative.")
     const ledgerClosing = (() => {
       const recs = bardanaEntries.filter((r) => r.packaging_type_id === packagingId)
       const last = recs[recs.length - 1]
@@ -128,7 +132,7 @@ export default function PackingPage() {
     const selectedProd = products.find((p) => p.id === productId)
     setDraftRecord({
       id: `pck-${Date.now()}`,
-      packing_no: `PCK-2026-${String(packingRecords.length + 1).padStart(3, "0")}`,
+      packing_no: "—",
       date: new Date().toISOString(),
       reference_type: "general",
       output_product_id: productId,
@@ -137,7 +141,7 @@ export default function PackingPage() {
       packaging_name: selectedPkg?.name,
       bags_packed: bagsPacked,
       bag_capacity_kg: capacityKg,
-      total_packed_kg: totalPackedKg,
+      total_packed_kg: packedKg,
       packing_rate: packingRate,
       packing_charge: totalCharge,
       damaged_bags: damagedBags,
@@ -148,30 +152,53 @@ export default function PackingPage() {
     setShowConfirm(true)
   }
 
-  const handleConfirmPacking = () => {
+  const handleConfirmPacking = async () => {
     if (!draftRecord || packGuard.current) return
-    // No standalone packing-record action exists in production.ts/finance.ts:
-    // packing_records rows are written by postBatch when a batch is posted
-    // with a packing rate and bag count. Recording here would be a fake
-    // local write, so this page refuses it and points at the real flow.
-    setFormError("Packing is recorded when a production batch is posted — post the batch in Production instead. Damaged bags show as 0 until damaged-bag tracking is added.")
-    setShowConfirm(false)
-    setIsModalOpen(false)
-    setDraftRecord(null)
+    packGuard.current = true
+    setIsPending(true)
+    try {
+      // Real write: consumes bardana (with a ledger row) and stores a
+      // packing_records row. Seed stock is untouched — this packs
+      // output already in stock; batch packing in Production moves
+      // seed stock.
+      const res = await createPackingRecord({
+        packagingTypeId: packagingId,
+        outputProductId: productId || undefined,
+        bagsPacked,
+        damagedBags,
+        packingRatePerBag: packingRate,
+        packedKg,
+      })
+      if (!res.success) {
+        setFormError(res.error ?? "Could not record the packing.")
+        return
+      }
+      const row: any = res.data
+      setFormNotice(`${row.packing_no ?? "Packing"} recorded — ${bagsPacked} bags packed, ${damagedBags} damaged, charge ${formatCurrency(totalCharge)}.`)
+      setShowConfirm(false)
+      setIsModalOpen(false)
+      setDraftRecord(null)
+      await loadData()
+    } finally {
+      setIsPending(false)
+      packGuard.current = false
+    }
   }
 
-  // Spec §8.2 / §16 bardana ledger, derived from posted packing records:
-  // closing is the live packaging stock; consumed/damaged are totals to date.
+  // Spec §8.2 / §16 bardana ledger: closing is the live packaging
+  // stock; consumed is the ledger total to date; damaged is the real
+  // stored damaged count from packing_records for this bag type.
   const bardanaLedger = packaging.map((pkg) => {
     const recs = bardanaEntries.filter((r) => r.packaging_type_id === pkg.id)
     const consumed = recs.filter((r) => r.voucher_type !== "purchase" && r.voucher_type !== "purchase_return").reduce((a, r) => a + (Number(r.out_qty) || 0), 0)
     const purchased = recs.filter((r) => r.voucher_type === "purchase").reduce((a, r) => a + (Number(r.in_qty) || 0), 0)
+    const damaged = packingRecords.filter((r) => r.packaging_type_id === pkg.id).reduce((a, r) => a + (Number(r.damaged_bags) || 0), 0)
     const last = recs[recs.length - 1]
     return {
       ...pkg,
       consumed,
       purchased,
-      damaged: 0, // no damaged-bag write path in the current actions
+      damaged,
       current_stock: last ? Number(last.running_balance) || 0 : Number(pkg.current_stock || 0),
     }
   })
@@ -317,8 +344,8 @@ export default function PackingPage() {
                   <td className="py-3 text-right text-destructive font-bold">{r.damaged_bags} bags</td>
                   <td className="py-3 text-right font-bold text-foreground">{formatCurrency(r.packing_charge)}</td>
                   <td className="py-3 text-center">
-                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
-                      Posted
+                    <span className={r.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase" : r.status === "draft" ? "px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase"}>
+                      {r.status}
                     </span>
                   </td>
                 </tr>
@@ -426,10 +453,23 @@ export default function PackingPage() {
                 />
               </div>
 
+              <div>
+                <label className="block font-medium text-foreground mb-1">Packed Weight (kg)</label>
+                <input
+                  type="number"
+                  value={packedKg}
+                  onChange={(e) => setPackedKg(Number(e.target.value))}
+                  min="0"
+                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
+                  required
+                />
+                <p className="text-[11px] text-muted-foreground mt-1">Weigh the packed output. Packing uses bardana only — seed stock is unchanged. To move seed stock, pack from a production batch in Production.</p>
+              </div>
+
               <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 space-y-1">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Total Packed Weight:</span>
-                  <strong className="text-foreground font-mono">{formatWeight(totalPackedKg)}</strong>
+                  <strong className="text-foreground font-mono">{formatWeight(packedKg)}</strong>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Total Bags Deducted:</span>
@@ -467,7 +507,7 @@ export default function PackingPage() {
       <ConfirmDialog
         open={showConfirm}
         title="Post this packing record?"
-        description={draftRecord ? `${draftRecord.packing_no} will pack ${draftRecord.bags_packed} bags (${formatWeight(draftRecord.total_packed_kg)}) of ${draftRecord.output_product_name || "the selected product"} and use ${draftRecord.bags_packed + (draftRecord.damaged_bags || 0)} ${draftRecord.packaging_name || "bags"}. Packing charge: ${formatCurrency(draftRecord.packing_charge)}.` : ""}
+        description={draftRecord ? `This packing run will pack ${draftRecord.bags_packed} bags (${formatWeight(draftRecord.total_packed_kg)}) of ${draftRecord.output_product_name || "the selected product"} and use ${draftRecord.bags_packed + (draftRecord.damaged_bags || 0)} ${draftRecord.packaging_name || "bags"}. Packing charge: ${formatCurrency(draftRecord.packing_charge)}.` : ""}
         confirmLabel="Post & Deduct Bardana"
         pending={isPending}
         onConfirm={handleConfirmPacking}
