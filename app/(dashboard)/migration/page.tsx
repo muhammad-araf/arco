@@ -15,6 +15,7 @@ import {
   FileText,
 } from "lucide-react"
 import { createOpeningBalance, listOpeningBalances, listCashAccounts } from "@/app/actions/finance"
+import { getSettingsSnapshot } from "@/app/actions/settings"
 import { listGodowns, listProducts, createProduct, createParty } from "@/app/actions/masters"
 import { formatCurrency, formatWeight } from "@/lib/utils"
 import {
@@ -225,13 +226,15 @@ export default function MigrationPage() {
   const [importResult, setImportResult] = React.useState("")
   const [importPending, setImportPending] = React.useState(false)
   const [openingBalances, setOpeningBalances] = React.useState<any[]>([])
+  const [cutoverDate, setCutoverDate] = React.useState<string | null>(null)
   const [importError, setImportError] = React.useState("")
 
   React.useEffect(() => {
     const load = async () => {
       setIsLoading(true)
       try {
-        const [g, pr, ob, ca] = await Promise.all([listGodowns(), listProducts(), listOpeningBalances(), listCashAccounts()])
+        const [g, pr, ob, ca, snap] = await Promise.all([listGodowns(), listProducts(), listOpeningBalances(), listCashAccounts(), getSettingsSnapshot()])
+        if (snap.success && snap.data && snap.data.cutover_date) setCutoverDate(snap.data.cutover_date)
         const failed = [g, pr, ob, ca].find((x) => !x.success)
         if (failed) setFormError(failed.error ?? "Could not load migration data.")
         setGodowns(Array.isArray(g.data) ? g.data : [])
@@ -415,6 +418,9 @@ export default function MigrationPage() {
     <div className="space-y-6">
       <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
       <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
+      {cutoverDate && (
+        <AlertBanner tone="info" message={`Cutover date: ${cutoverDate} — opening balances on this page are as of the cutover. Change it in Settings.`} />
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-black tracking-tight text-foreground flex items-center gap-2">
