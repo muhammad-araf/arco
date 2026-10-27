@@ -405,6 +405,7 @@ export async function createGatePassDraft(input: {
         receiver_name: input.receiverName?.trim() || null,
         receiver_contact: input.receiverContact?.trim() || null,
         dispatch_mode: input.dispatchMode?.trim() || null,
+        created_by: gate.actor.userId,
         attachment_url: input.attachmentUrl?.trim() || null,
         attachment_note: input.attachmentNote?.trim() || null,
         prepared_by: actorName(gate.actor),
@@ -433,6 +434,7 @@ export async function createGatePassDraft(input: {
             receiver_name: input.receiverName?.trim() || null,
             receiver_contact: input.receiverContact?.trim() || null,
             dispatch_mode: input.dispatchMode?.trim() || null,
+            created_by: gate.actor.userId,
             prepared_by: actorName(gate.actor),
             status: "draft",
             total_bags: totalBags,
@@ -504,7 +506,7 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
     if (await gatepassApprovalRequired(supabase)) {
       const { data: submitted, error: uError } = await supabase
         .from("gate_passes")
-        .update({ status: "awaiting_approval" })
+        .update({ status: "awaiting_approval", updated_by: gate.actor.userId })
         .eq("id", id)
         .in("status", ["draft"])
         .select()
@@ -566,7 +568,7 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
     // is still carried in the returned row for the UI/print.
     await supabase
       .from("gate_passes")
-      .update({ approved_by: actorName(gate.actor) })
+      .update({ approved_by: actorName(gate.actor), updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "posted");
     result.approved_by = actorName(gate.actor);
@@ -651,7 +653,7 @@ export async function approveGatePass(id: string, clientToken?: string): Promise
     const result: Record<string, unknown> = { ...posted, items };
     await supabase
       .from("gate_passes")
-      .update({ approved_by: actorName(gate.actor) })
+      .update({ approved_by: actorName(gate.actor), updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "posted");
     result.approved_by = actorName(gate.actor);
@@ -699,7 +701,7 @@ export async function rejectGatePass(id: string, reason: string, clientToken?: s
     }
     const { data: rejected, error: uError } = await supabase
       .from("gate_passes")
-      .update({ status: "draft", rejection_reason: reason.trim(), approved_by: null })
+      .update({ status: "draft", rejection_reason: reason.trim(), approved_by: null, updated_by: gate.actor.userId })
       .eq("id", id)
       .in("status", ["awaiting_approval"])
       .select()
@@ -1006,6 +1008,7 @@ export async function returnGatePass(
         status: newStatus,
         return_reason: input.reason.trim(),
         returned_at: new Date().toISOString(),
+        updated_by: gate.actor.userId,
       })
       .eq("id", id)
       .in("status", ["posted", "partially_returned"])

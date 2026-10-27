@@ -532,7 +532,7 @@ export async function approvePayroll(id: string, opts: { note?: string } = {}): 
   if (period.status !== "draft") return fail(`Only a draft payroll can be approved (status: ${period.status}).`);
   const { data: updated, error: uError } = await db
     .from("payroll_periods")
-    .update({ status: "approved", approved_by: gate.actor.userId, approved_at: new Date().toISOString() })
+    .update({ status: "approved", approved_by: gate.actor.userId, approved_at: new Date().toISOString(), updated_by: gate.actor.userId })
     .eq("id", id)
     .eq("status", "draft")
     .select()
@@ -726,7 +726,7 @@ export async function reversePayroll(id: string, reason: string): Promise<Action
   }
   const { data: updated, error: uError } = await db
     .from("payroll_periods")
-    .update({ status: "reversed", reversal_reason: reason, balance_amount: 0 })
+    .update({ status: "reversed", reversal_reason: reason, balance_amount: 0, updated_by: gate.actor.userId })
     .eq("id", id)
     .select()
     .single();

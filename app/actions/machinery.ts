@@ -353,6 +353,7 @@ export async function createJobDraft(input: CreateJobDraftInput): Promise<Action
         is_customer_owned: input.isCustomerOwned ?? false,
         status: "draft",
         notes: input.notes ?? null,
+        created_by: gate.actor.userId,
       })
       .select()
       .single();

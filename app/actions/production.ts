@@ -656,6 +656,7 @@ export async function createBatchDraft(input: {
         variance_reason: input.varianceReason?.trim() || null,
         status: "draft",
         notes: input.notes ?? null,
+        created_by: gate.actor.userId,
       })
       .select()
       .single();
@@ -888,6 +889,7 @@ export async function postBatch(id: string, clientToken?: string, varianceReason
         packing_charge: packingCharge(bags, batch.packing_rate_per_bag ?? 0),
         damaged_bags: damaged,
         status: "posted",
+        created_by: by,
       })
         .select()
         .single();
@@ -931,6 +933,7 @@ export async function postBatch(id: string, clientToken?: string, varianceReason
       .update({
         status: "posted",
         posted_at: new Date().toISOString(),
+        updated_by: by,
         actual_input_kg: totalInput,
         yield_pct: computedYield,
         // Stored, not dropped: batch detail and the batch sheet
@@ -1171,7 +1174,7 @@ export async function reverseBatch(id: string, reason: string, clientToken?: str
     }
     const { data: reversed, error: uError } = await supabase
       .from("production_batches")
-      .update({ status: "reversed", reversal_reason: reason.trim(), reversed_at: new Date().toISOString() })
+      .update({ status: "reversed", reversal_reason: reason.trim(), reversed_at: new Date().toISOString(), updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "posted")
       .select()
@@ -1466,6 +1469,7 @@ export async function createPackingRecord(input: {
         processing_amount: input.processingAmount ?? 0,
         notes: input.notes?.trim() || null,
         manual_packing_fee: manualFee,
+        created_by: by,
       })
       .select()
       .single();

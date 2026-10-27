@@ -702,7 +702,7 @@ export async function postPurchase(
     });
     const { data: updated, error: uError } = await db
       .from("purchases")
-      .update({ status: "posted", posted_at: new Date().toISOString() })
+      .update({ status: "posted", posted_at: new Date().toISOString(), updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "draft")
       .select()
@@ -781,7 +781,7 @@ export async function reversePurchase(id: string, reason: string): Promise<Actio
     });
     const { data: updated, error: uError } = await db
       .from("purchases")
-      .update({ status: "reversed", reversal_reason: reason, balance_amount: 0 })
+      .update({ status: "reversed", reversal_reason: reason, balance_amount: 0, updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "posted")
       .select()
@@ -1164,7 +1164,7 @@ export async function postInvoice(id: string, opts: { reason?: string } = {}): P
     });
     const { data: updated, error: uError } = await db
       .from("customer_invoices")
-      .update({ status: "posted", posted_at: new Date().toISOString() })
+      .update({ status: "posted", posted_at: new Date().toISOString(), updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "draft")
       .select()
@@ -1207,7 +1207,7 @@ export async function reverseInvoice(id: string, reason: string): Promise<Action
     });
     const { data: updated, error: uError } = await db
       .from("customer_invoices")
-      .update({ status: "reversed", reversal_reason: reason, balance_amount: 0 })
+      .update({ status: "reversed", reversal_reason: reason, balance_amount: 0, updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "posted")
       .select()
@@ -1389,7 +1389,7 @@ export async function postReceipt(id: string, opts: { reason?: string } = {}): P
     });
     const { data: updated, error: uError } = await db
       .from("customer_receipts")
-      .update({ status: "posted", posted_at: new Date().toISOString() })
+      .update({ status: "posted", posted_at: new Date().toISOString(), updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "draft")
       .select()
@@ -1439,7 +1439,7 @@ export async function reverseReceipt(id: string, reason: string): Promise<Action
     });
     const { data: updated, error: uError } = await db
       .from("customer_receipts")
-      .update({ status: "reversed", reversal_reason: reason })
+      .update({ status: "reversed", reversal_reason: reason, updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "posted")
       .select()
@@ -1692,7 +1692,7 @@ export async function reverseVendorPayment(id: string, reason: string): Promise<
     });
     const { data: updated, error: uError } = await db
       .from("vendor_payments")
-      .update({ status: "reversed", reversal_reason: reason })
+      .update({ status: "reversed", reversal_reason: reason, updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "posted")
       .select()
@@ -1978,7 +1978,7 @@ export async function postExpense(id: string, opts: { reason?: string } = {}): P
     const { data: updated, error: uError } = await db
       .from("expenses")
       .update({
-        status: "posted", posted_at: new Date().toISOString(),
+        status: "posted", posted_at: new Date().toISOString(), updated_by: gate.actor.userId,
         paid_amount: paid,
         balance_amount: roundMoney(Number(exp.amount) - paid),
       })
@@ -2034,7 +2034,7 @@ export async function reverseExpense(id: string, reason: string): Promise<Action
     }
     const { data: updated, error: uError } = await db
       .from("expenses")
-      .update({ status: "reversed", reversal_reason: reason, paid_amount: 0, balance_amount: 0 })
+      .update({ status: "reversed", reversal_reason: reason, paid_amount: 0, balance_amount: 0, updated_by: gate.actor.userId })
       .eq("id", id)
       .eq("status", "posted")
       .select()
