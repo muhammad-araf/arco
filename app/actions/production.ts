@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole, requireSignedIn, type Actor } from "./auth";
 import { PRODUCTION_WRITE } from "./auth-helpers";
+import { isUniqueViolation } from "@/lib/idempotency";
 import {
   roundWeight,
   ledgerRunningBalance,
@@ -123,7 +124,7 @@ async function storeIdempotency(
   if (!clientToken) return;
   await supabase.from("idempotency_keys").upsert(
     { client_token: clientToken, scope, voucher_type: voucherType, voucher_id: voucherId, voucher_no: voucherNo, result },
-    { onConflict: "client_token" },
+    { onConflict: "client_token,scope" },
   );
 }
 
@@ -143,6 +144,7 @@ async function bardanaEntry(
     outQty: number;
     notes?: string;
     userId?: string | null;
+    lineNo?: number;
   },
 ): Promise<void> {
   const { data: prev } = await supabase
@@ -165,7 +167,9 @@ async function bardanaEntry(
     running_balance: running,
     notes: input.notes ?? null,
     created_by: input.userId ?? null,
+    line_no: input.lineNo ?? 0,
   });
+  if (error && isUniqueViolation(error)) return;
   if (error) throw new Error(`bardana_ledger insert failed: ${error.message}`);
 }
 
@@ -194,6 +198,8 @@ async function appendLedger(
     inward_qty: number;
     outward_qty: number;
     notes?: string;
+    entryKind: string;
+    lineNo: number;
   },
   by: string,
 ): Promise<void> {
@@ -212,7 +218,13 @@ async function appendLedger(
     running_balance: running,
     notes: row.notes ?? null,
     created_by: by,
+    entry_kind: row.entryKind,
+    line_no: row.lineNo,
   });
+  // A unique-violation here means this exact line is already written
+  // (concurrent post, or a retry after a crash): skip it so the post
+  // converges instead of failing on its own rows.
+  if (error && isUniqueViolation(error)) return;
   if (error) throw new Error(error.message);
 }
 
@@ -630,7 +642,8 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
       .eq("id", id)
       .single();
     if (error) return fail(error.message);
-    if (batch.status === "posted") return fail(`Batch ${batch.batch_no} is already posted`);
+    // Already posted is a successful replay, not a second posting.
+    if (batch.status === "posted") return ok(batch);
     if (batch.status !== "draft") return fail(`Only a draft can be posted (status: ${batch.status})`);
     const inputs = (batch.production_batch_inputs ?? []) as {
       product_id: string;
@@ -688,7 +701,16 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
     }
     const by = gate.actor.userId;
     const ownerParty: string | null = batch.is_customer_owned ? batch.owner_party_id ?? null : null;
-    for (const item of inputs) {
+    // Batch posting stays loop-based, NOT on atomic_stock_transition:
+    // the flip also writes computed fields (yield, variances) and the
+    // packaging stock / bardana / packing-record legs sit outside any
+    // stock-only function. Exact-once for the LEDGER legs comes from
+    // the (voucher_type, voucher_id, entry_kind, line_no) identity
+    // plus skip-on-duplicate above, and from the flip replay below —
+    // so a retry after a crash converges instead of duplicating.
+    // Residual risk (packaging legs) is stated in the Phase D report.
+    for (let i = 0; i < inputs.length; i++) {
+      const item = inputs[i];
       await appendLedger(
         supabase,
         {
@@ -700,11 +722,14 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
           party_id: item.party_id ?? null,
           inward_qty: 0,
           outward_qty: roundWeight(item.actual_qty_kg),
+          entryKind: "post",
+          lineNo: i,
         },
         by,
       );
     }
-    for (const out of outputs) {
+    for (let i = 0; i < outputs.length; i++) {
+      const out = outputs[i];
       await appendLedger(
         supabase,
         {
@@ -717,6 +742,8 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
           party_id: ownerParty,
           inward_qty: roundWeight(out.qty_kg),
           outward_qty: 0,
+          entryKind: "post",
+          lineNo: i,
         },
         by,
       );
@@ -784,7 +811,19 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
       .eq("status", "draft")
       .select()
       .single();
-    if (uError) return fail(uError.message);
+    if (uError) {
+      // A concurrent post may have flipped this batch after our
+      // ledger rows landed: the union of both writers' rows is the
+      // complete set (identity index), so a posted batch is a
+      // successful replay, not a failure.
+      const { data: now } = await supabase
+        .from("production_batches")
+        .select("*")
+        .eq("id", id)
+        .single();
+      if (now?.status === "posted") return ok({ ...now, inputs, outputs });
+      return fail(uError.message);
+    }
     const result = { ...posted, inputs, outputs, variances, yield_pct: computedYield };
     await storeIdempotency(supabase, "batch:post", clientToken, "batch", id, batch.batch_no, result);
     revalidateProduction();
@@ -809,6 +848,8 @@ export async function reverseBatch(id: string, reason: string, clientToken?: str
       .eq("id", id)
       .single();
     if (error) return fail(error.message);
+    // Already reversed is a successful replay, not a second reversal.
+    if (batch.status === "reversed") return ok(batch);
     if (batch.status !== "posted") {
       return fail(`Only a posted batch can be reversed (status: ${batch.status})`);
     }
@@ -835,7 +876,8 @@ export async function reverseBatch(id: string, reason: string, clientToken?: str
       }
     }
     const by = gate.actor.userId;
-    for (const out of outputs) {
+    for (let i = 0; i < outputs.length; i++) {
+      const out = outputs[i];
       await appendLedger(
         supabase,
         {
@@ -848,11 +890,14 @@ export async function reverseBatch(id: string, reason: string, clientToken?: str
           inward_qty: 0,
           outward_qty: roundWeight(out.qty_kg),
           notes: `Reversal of ${batch.batch_no}: ${reason.trim()}`,
+          entryKind: "reversal",
+          lineNo: i,
         },
         by,
       );
     }
-    for (const item of inputs) {
+    for (let i = 0; i < inputs.length; i++) {
+      const item = inputs[i];
       await appendLedger(
         supabase,
         {
@@ -865,6 +910,8 @@ export async function reverseBatch(id: string, reason: string, clientToken?: str
           inward_qty: roundWeight(item.actual_qty_kg),
           outward_qty: 0,
           notes: `Reversal of ${batch.batch_no}: ${reason.trim()}`,
+          entryKind: "reversal",
+          lineNo: i,
         },
         by,
       );
@@ -910,7 +957,15 @@ export async function reverseBatch(id: string, reason: string, clientToken?: str
       .eq("status", "posted")
       .select()
       .single();
-    if (uError) return fail(uError.message);
+    if (uError) {
+      const { data: now } = await supabase
+        .from("production_batches")
+        .select("*")
+        .eq("id", id)
+        .single();
+      if (now?.status === "reversed") return ok({ ...now, inputs, outputs });
+      return fail(uError.message);
+    }
     const result = { ...reversed, inputs, outputs };
     await storeIdempotency(supabase, "batch:reverse", clientToken, "batch", id, batch.batch_no, result);
     revalidateProduction();
