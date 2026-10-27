@@ -11,9 +11,10 @@ import {
   Building2,
   Boxes,
 } from "lucide-react"
-import { listJobs, createJobDraft, postJob, reverseJob } from "@/app/actions/machinery"
+import { listJobs, createJobDraft, postJob, reverseJob, deleteJobDraft } from "@/app/actions/machinery"
 import { listMachines, listParties, listProducts, listGodowns } from "@/app/actions/masters"
 import { MachineryJob, Machine, Party, Product, RateBasis } from "@/lib/types/database"
+import { machineryCharge } from "@/lib/calc"
 import { formatCurrency, formatWeight, formatDate } from "@/lib/utils"
 import {
   AlertBanner,
@@ -46,11 +47,17 @@ export default function MachineryJobsPage() {
   const jobGuard = React.useRef(false)
   const [customerId, setCustomerId] = React.useState("")
   const [machineId, setMachineId] = React.useState("")
+  const [deleteTarget, setDeleteTarget] = React.useState<any | null>(null)
+  const [isDeleting, setIsDeleting] = React.useState(false)
+  const [isPostingDraft, setIsPostingDraft] = React.useState(false)
   const [processingType, setProcessingType] = React.useState("Grading & Cleaning")
   const [inputProductId, setInputProductId] = React.useState("")
   const [inputWeight, setInputWeight] = React.useState<number>(5000)
+  const [outputProductId, setOutputProductId] = React.useState("")
   const [outputWeight, setOutputWeight] = React.useState<number>(4600)
-  const [wasteWeight, setWasteWeight] = React.useState<number>(400)
+  const [wasteWeight, setWasteWeight] = React.useState<number>(0)
+  const [bagCount, setBagCount] = React.useState<number>(0)
+  const [maundKg, setMaundKg] = React.useState<number>(0)
   const [rateBasis, setRateBasis] = React.useState<RateBasis>("per_50kg")
   const [rate, setRate] = React.useState<number>(85)
   const [isCustomerOwned, setIsCustomerOwned] = React.useState(true)
@@ -88,18 +95,24 @@ export default function MachineryJobsPage() {
     if (machines.length > 0 && !machineId) setMachineId(machines[0].id)
     if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
     if (products.length > 0 && !inputProductId) setInputProductId(products[0].id)
+    if (products.length > 0 && !outputProductId) setOutputProductId(products[0].id)
     if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
-  }, [machines, customers, products, godowns, machineId, customerId, inputProductId, godownId])
+  }, [machines, customers, products, godowns, machineId, customerId, inputProductId, outputProductId, godownId])
 
-  // Calculation based on Rate Basis
-  let calculatedUnits = 0
-  if (rateBasis === "per_50kg") calculatedUnits = inputWeight / 50
-  else if (rateBasis === "per_bag") calculatedUnits = Math.round(inputWeight / 50)
-  else if (rateBasis === "per_maund") calculatedUnits = inputWeight / 40
-  else if (rateBasis === "per_kg") calculatedUnits = inputWeight
-  else calculatedUnits = 1 // fixed
-
-  const serviceCharge = Math.round(calculatedUnits * rate)
+  // Preview charge from the same helper the server uses. Per-bag bills
+  // the ENTERED bag count (never weight / 50); per-maund bills with
+  // the ENTERED kg per maund (never a hardcoded value).
+  let serviceCharge = 0
+  try {
+    serviceCharge = machineryCharge(
+      rateBasis === "per_bag" ? bagCount : inputWeight,
+      rateBasis,
+      rate,
+      rateBasis === "per_maund" ? (maundKg > 0 ? maundKg : undefined) : undefined,
+    )
+  } catch {
+    serviceCharge = 0
+  }
 
   const handleCreateJob = (e: React.FormEvent) => {
     e.preventDefault()
@@ -109,15 +122,20 @@ export default function MachineryJobsPage() {
     if (!customerId) return setFormError("Select the customer / grain owner for this job.")
     if (!machineId) return setFormError("Select the machine that will run this job.")
     if (!inputProductId) return setFormError("Select the input product.")
+    if (!outputProductId) return setFormError("Select the output product — posted jobs credit output stock to this product.")
     if (!godownId) return setFormError("Select the godown where this job runs.")
     if (!isPositive(inputWeight)) return setFormError("Input weight must be greater than zero.")
     if (outputWeight < 0 || wasteWeight < 0) return setFormError("Output and waste weights cannot be negative.")
     if (outputWeight + wasteWeight > inputWeight) return setFormError(`Output (${outputWeight} kg) + waste (${wasteWeight} kg) exceeds input (${inputWeight} kg). Correct the weights before saving.`)
     if (rate < 0) return setFormError("Rate cannot be negative.")
+    if (rateBasis === "per_bag" && !(bagCount > 0)) return setFormError("Enter the actual bag count for per-bag billing.")
+    if (bagCount < 0) return setFormError("Bag count cannot be negative.")
+    if (rateBasis === "per_maund" && !(maundKg > 0)) return setFormError("Enter the client-approved kg per maund for per-maund billing.")
     setFormError("")
     const selectedCust = customers.find((c) => c.id === customerId)
     const selectedMach = machines.find((m) => m.id === machineId)
     const selectedProd = products.find((p) => p.id === inputProductId)
+    const selectedOut = products.find((p) => p.id === outputProductId)
     const jobNo = `JOB-2026-${String(jobs.length + 1).padStart(3, "0")}`
     setDraftJob({
       id: `job-${Date.now()}`,
@@ -131,13 +149,17 @@ export default function MachineryJobsPage() {
       input_product_id: inputProductId,
       input_product_name: selectedProd?.name,
       input_weight_kg: inputWeight,
+      output_product_id: outputProductId,
+      output_product_name: selectedOut?.name,
       output_weight_kg: outputWeight,
       waste_weight_kg: wasteWeight,
+      bags: bagCount > 0 ? bagCount : null,
+      maund_kg: maundKg > 0 ? maundKg : null,
       rate_basis: rateBasis,
       rate,
       service_charge: serviceCharge,
       is_customer_owned: isCustomerOwned,
-      status: "posted",
+      status: "draft",
       payment_status: "unbilled",
       notes: notes || undefined,
       created_at: new Date().toISOString(),
@@ -152,8 +174,9 @@ export default function MachineryJobsPage() {
     try {
       const created = await createJobDraft({
         customerId, machineId, godownId, processingType,
-        inputProductId, inputWeightKg: inputWeight, outputWeightKg: outputWeight, wasteWeightKg: wasteWeight,
-        bags: rateBasis === "per_bag" ? Math.round(inputWeight / 50) : undefined,
+        inputProductId, inputWeightKg: inputWeight, outputProductId, outputWeightKg: outputWeight, wasteWeightKg: wasteWeight,
+        bags: bagCount > 0 ? bagCount : undefined,
+        maundKg: maundKg > 0 ? maundKg : undefined,
         rateBasis, rate, isCustomerOwned, notes: notes || undefined,
       })
       if (!created.success || !(created.data as any)?.id) {
@@ -162,7 +185,10 @@ export default function MachineryJobsPage() {
       }
       const posted = await postJob((created.data as any).id, `job-${Date.now()}`)
       if (!posted.success) {
-        setFormError(posted.error ?? "Could not post the machinery job.")
+        // The draft stays in the list as Draft, with Post / Delete
+        // actions — it is not lost, and it is not shown as posted.
+        setFormError(posted.error ?? "Could not post the machinery job. The draft is kept below — post it again or delete it.")
+        await loadData()
         return
       }
       const row: any = posted.data ?? created.data
@@ -174,6 +200,39 @@ export default function MachineryJobsPage() {
     } finally {
       setIsPending(false)
       jobGuard.current = false
+    }
+  }
+
+  const handlePostDraft = async (job: any) => {
+    if (isPostingDraft) return
+    setIsPostingDraft(true)
+    try {
+      const res = await postJob(job.id, `job-retry-${Date.now()}`)
+      if (!res.success) {
+        setFormError(res.error ?? "Could not post the job.")
+        return
+      }
+      setFormNotice(`${job.job_no} posted.`)
+      await loadData()
+    } finally {
+      setIsPostingDraft(false)
+    }
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget || isDeleting) return
+    setIsDeleting(true)
+    try {
+      const res = await deleteJobDraft(deleteTarget.id)
+      if (!res.success) {
+        setFormError(res.error ?? "Could not delete the draft job.")
+        return
+      }
+      setFormNotice(`${deleteTarget.job_no} draft deleted.`)
+      setDeleteTarget(null)
+      await loadData()
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -258,9 +317,15 @@ export default function MachineryJobsPage() {
                     {formatCurrency(j.service_charge)}
                   </td>
                   <td className="py-3 text-center">
-                    <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
-                      {j.status ?? "Posted"}
+                    <span className={j.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase" : j.status === "draft" ? "px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase"}>
+                      {j.status ?? "draft"}
                     </span>
+                    {j.status === "draft" && (
+                      <>
+                        <button type="button" onClick={() => handlePostDraft(j)} disabled={isPostingDraft} className="ml-2 px-2 py-0.5 rounded-md hover:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer disabled:opacity-60">Post</button>
+                        <button type="button" onClick={() => setDeleteTarget(j)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Delete</button>
+                      </>
+                    )}
                     {j.status === "posted" && (
                       <button type="button" onClick={() => setReversalTarget(j)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>
                     )}
@@ -383,6 +448,74 @@ export default function MachineryJobsPage() {
                     required
                   />
                 </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1">Output Product (credited on post)</label>
+                  <select
+                    value={outputProductId}
+                    onChange={(e) => setOutputProductId(e.target.value)}
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    required
+                  >
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1">Waste Weight (kg)</label>
+                  <input
+                    type="number"
+                    value={wasteWeight}
+                    onChange={(e) => setWasteWeight(Number(e.target.value))}
+                    min="0"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1">Ownership</label>
+                  <select
+                    value={isCustomerOwned ? "customer" : "company"}
+                    onChange={(e) => setIsCustomerOwned(e.target.value === "customer")}
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  >
+                    <option value="customer">Customer-owned</option>
+                    <option value="company">Company-owned</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-foreground mb-1">Actual Bag Count</label>
+                  <input
+                    type="number"
+                    value={bagCount}
+                    onChange={(e) => setBagCount(Number(e.target.value))}
+                    min="0"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
+                  />
+                  <p className="text-[11px] text-muted-foreground mt-1">Count the bags. Required for per-bag billing.</p>
+                </div>
+
+                {rateBasis === "per_maund" && (
+                  <div>
+                    <label className="block font-medium text-foreground mb-1">Kg per Maund (client-approved)</label>
+                    <input
+                      type="number"
+                      value={maundKg}
+                      onChange={(e) => setMaundKg(Number(e.target.value))}
+                      min="1"
+                      step="0.01"
+                      className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
+                      required
+                    />
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-muted border border-border">
@@ -395,7 +528,7 @@ export default function MachineryJobsPage() {
                   >
                     <option value="per_50kg">Per 50 kg Bag Basis (Standard)</option>
                     <option value="per_bag">Per Bag Count Basis</option>
-                    <option value="per_maund">Per Maund (40 kg)</option>
+                    <option value="per_maund">Per Maund</option>
                     <option value="per_kg">Per Kg</option>
                     <option value="fixed">Fixed Lump-Sum Fee</option>
                   </select>
@@ -446,11 +579,21 @@ export default function MachineryJobsPage() {
       <ConfirmDialog
         open={showConfirm}
         title="Record this machinery job?"
-        description={draftJob ? `${draftJob.job_no} for ${draftJob.customer_name || "the customer"}: ${formatWeight(draftJob.input_weight_kg)} in, ${formatWeight(draftJob.output_weight_kg)} out, service charge ${formatCurrency(draftJob.service_charge)}. ${draftJob.is_customer_owned ? "The grain is customer-owned, so company stock is untouched." : "Company-owned input stock is used."}` : ""}
+        description={draftJob ? `${draftJob.job_no} for ${draftJob.customer_name || "the customer"}: ${formatWeight(draftJob.input_weight_kg)} in, ${formatWeight(draftJob.output_weight_kg)} of ${draftJob.output_product_name || "output"} out, service charge ${formatCurrency(draftJob.service_charge)}. ${draftJob.is_customer_owned ? "The grain is customer-owned, so company stock is untouched." : "Company-owned input stock is used."}` : ""}
         confirmLabel="Save & Record Service Job"
         pending={isPending}
         onConfirm={handleConfirmJob}
         onCancel={() => { setShowConfirm(false); setDraftJob(null) }}
+      />
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Delete this draft job?"
+        description={deleteTarget ? `${deleteTarget.job_no} never posted, so deleting it changes no stock. Posted jobs cannot be deleted.` : ""}
+        confirmLabel="Delete Draft"
+        destructive
+        pending={isDeleting}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeleteTarget(null)}
       />
       <ReversalDialog
         open={!!reversalTarget}

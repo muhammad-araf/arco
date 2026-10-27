@@ -227,6 +227,10 @@ export interface MachineryJob {
   output_product_name?: string
   output_weight_kg: number
   waste_weight_kg: number
+  /** Actual bag count the charge was computed from (per_bag basis). */
+  bags?: number | null
+  /** Client-approved kg per maund the charge was computed from. */
+  maund_kg?: number | null
   rate_basis: RateBasis
   rate: number
   service_charge: number
@@ -546,6 +550,9 @@ export interface ProductionBatchAppendix {
   packaging_type_id?: string | null;
   bags_consumed?: number;
   packing_rate_per_bag?: number;
+  damaged_bags?: number;
+  /** Per-input variances stored at post time (see production.ts). */
+  variances?: { product_id: string; planned_qty_kg: number; actual_qty_kg: number; qty: number; pct: number }[] | null;
   is_customer_owned?: boolean;
   owner_party_id?: string | null;
   reversal_reason?: string;
