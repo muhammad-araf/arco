@@ -137,3 +137,19 @@ describe("computePayroll", () => {
     expect(run.netPayable).toBe(15000);
   });
 });
+
+describe("eligibleDays (payroll estimate from real attendance)", () => {
+  it("counts present plus half days at half rate, holidays paid by default flag", async () => {
+    const { eligibleDays } = await import("@/lib/calc/payroll");
+    expect(eligibleDays({ present: 20, half_day: 2, leave: 3, absent: 2, holiday: 1 }, { leavePaid: false, holidayPaid: true })).toBe(22);
+  });
+  it("never counts absent days, and leave counts only when paid", async () => {
+    const { eligibleDays } = await import("@/lib/calc/payroll");
+    expect(eligibleDays({ present: 10, half_day: 0, leave: 5, absent: 5, holiday: 0 }, { leavePaid: true })).toBe(15);
+    expect(eligibleDays({ present: 10, half_day: 0, leave: 5, absent: 5, holiday: 0 }, { leavePaid: false })).toBe(10);
+  });
+  it("throws on negative counts", async () => {
+    const { eligibleDays } = await import("@/lib/calc/payroll");
+    expect(() => eligibleDays({ present: -1, half_day: 0, leave: 0, absent: 0, holiday: 0 })).toThrow(RangeError);
+  });
+});
