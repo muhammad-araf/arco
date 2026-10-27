@@ -30,7 +30,23 @@ This document covers the backend-finance slice: `app/actions/finance.ts`,
 
 ## 2. Apply the migrations, in this order
 
-In the Supabase SQL editor (or `psql` / Supabase CLI), run:
+In the Supabase SQL editor (or `psql` / Supabase CLI), run every file
+below, in this exact order. Every migration after step 2 is idempotent
+(safe to re-run), unless its own header says otherwise. Two ordering
+rules are load-bearing — violating them breaks the app, it does not
+just warn:
+
+- **`migration-gatepass-receiver.sql` (step 12): its `ALTER TYPE …
+  ADD VALUE` statement must run OUTSIDE a transaction block.** Some
+  SQL editors wrap a whole file in one transaction; run that statement
+  on its own first, then the rest of the file.
+- **Apply steps 8 and 14–18 BEFORE deploying app code that calls them.**
+  Until `migration-atomic-posting.sql` is applied, post actions fail
+  cleanly with "function does not exist" and write nothing; until the
+  wave-2 migrations (steps 14–18) are applied, the code that writes
+  the new columns/tables fails instead of degrading. The full
+  wave-2 code set must therefore only be deployed after this whole
+  list is applied.
 
 1. `supabase/schema.sql` — masters, stock ledger, cash ledger, vouchers.
 2. `supabase/schema-finance.sql` — purchases, invoices, receipts,
@@ -51,7 +67,6 @@ it once per project, or drop the policies first on a re-run.
    to aggregate it in code. Recommended: without it the app still works
    (it falls back to the JS aggregation automatically), just slower as
    the ledger grows.
-
 4. `supabase/migration-rls-base-tables.sql` — **security, required
    before go-live.** Enables RLS on every base table from `schema.sql`
    (masters, stock/cash ledgers, vouchers, doc numbering, idempotency
@@ -67,6 +82,61 @@ it once per project, or drop the policies first on a re-run.
    role, audit_log inserts restricted to recognised operators and
    reads restricted to Owner/Admin and Accountant. Idempotent (safe
    to re-run).
+6. `supabase/migration-stock-partial-returns.sql` — gate-pass partial
+   returns: pass status (`partially_returned` / `returned`) is derived
+   from the `gate_pass_returns` rows; no new quantity columns.
+7. `supabase/migration-production-fixes.sql` — production-chain fixes
+   (QA blocker B8 + production majors), including the single-active-
+   recipe index. Exception to the idempotency note: that index fails
+   if the live database already holds two active versions of one
+   recipe code — retire the duplicates first, then re-run.
+8. `supabase/migration-atomic-posting.sql` — **apply BEFORE deploying
+   app code that calls it (see the rule above).** Exact-once posting:
+   `atomic_stock_transition()` (ledger identity + one-transaction
+   post/flip/idempotency key) for inward, gate passes, transfers,
+   adjustments and machinery jobs.
+9. `supabase/migration-settings-processing-types.sql` — the
+   `processing_types` master list plus party tax fields and employee
+   payment-preference fields.
+10. `supabase/migration-finance-fields.sql` — finance field additions
+    (receipt purpose / received-by, purchase and invoice fields).
+11. `supabase/migration-finance-cogs-approvals.sql` — the
+    `pl_cogs_approvals` table (accountant-approved COGS per period)
+    with RLS for that new table only.
+12. `supabase/migration-gatepass-receiver.sql` — gate-pass receiver /
+    dispatch / prepared-by / approved-by / rejection fields, the
+    `awaiting_approval` status, return condition + restock decision,
+    and per-line bag type. **Run its `ALTER TYPE … ADD VALUE`
+    outside a transaction block (see the rule above).**
+13. `supabase/migration-production-job-lines.sql` — multi-line
+    machinery jobs, packing lines, treatment inputs (record-only),
+    batch/recipe fields, with RLS for the new tables only.
+14. `supabase/migration-stock-inward-fields.sql` — inward header
+    fields (`received_by`, `by_hand`, `nature`) and the line `lot_no`
+    column the inward action already writes tolerantly.
+15. `supabase/migration-attachments.sql` — reference-only attachment
+    columns (`attachment_url` + `attachment_note`, both nullable) on
+    `incoming_goods`, `gate_passes` and `expenses`. No storage bucket
+    and no storage policy is created — attachments are links to
+    documents stored elsewhere, never uploads.
+16. `supabase/migration-atomic-lot.sql` — replaces
+    `atomic_stock_transition()` with a version identical to step 8
+    except that it also persists each line's optional `lot_number`
+    JSON key into `stock_ledger.lot_number`. Step 8's file itself is
+    left untouched because it is already applied on live databases.
+17. `supabase/migration-production-cost-ledger.sql` — the gated
+    `production_cost_ledger` table (exactly one of `batch_id` /
+    `job_id` per row) with RLS for that new table only. Writing is
+    gated by the `cost_ledger_enabled` setting (§10), default off.
+18. `supabase/migration-header-actors.sql` — nullable `created_by` +
+    `updated_by` TEXT columns on the header tables (`incoming_goods`,
+    `gate_passes`, `production_batches`, `machinery_jobs`,
+    `packing_records`, `purchases`, `customer_invoices` (= "invoices"),
+    `customer_receipts` (= "receipts"), `vendor_payments`, `expenses`,
+    `payroll_periods`). Tables that already carry a `created_by` UUID
+    column (`purchases`, `vendor_payments`, `payroll_periods`,
+    `expenses`) keep it; only `updated_by` is added there. No RLS
+    policy is touched.
 
 > **Live verification of steps 4–5 (cannot be done from this repo —
 > there is no live database here).** After applying, in the live
@@ -272,7 +342,15 @@ for one account; a reversed voucher stays visible with its reason.
   *separate* staging project, run the migrations check (§2), sign in
   as the seeded owner, and re-run the §7 acceptance checks against a
   known period. Record the date and result; an untested backup is not
-  a backup.
+  a backup. **Status: still a live operation — no restore test has
+  been run against a real project from this repo, because there is no
+  live database here. Do not mark it done until a dated, signed-off
+  restore run exists.**
+- **Staff training:** train each role on its own pages only (a
+  Storekeeper never needs the payroll screens), using the staging
+  project restored above, and record a per-role sign-off. **Status:
+  still a live operation — no training sign-off exists yet.** Until
+  it does, go-live is not complete even if every migration is applied.
 - **Code:** this repo is the source of truth for schema and actions;
   never hand-edit production tables without a matching migration file
   committed here.
@@ -302,4 +380,61 @@ for one account; a reversed voucher stays visible with its reason.
    If the business wants job-posting = revenue, that is a §15.2
    decision to record, then invoice creation from jobs becomes the
    bridge (invoices already carry `source_type`/`source_id` links).
-6. **Backup restore test** (§8) and staff training sign-off.
+6. **Backup restore test** (§8) and staff training sign-off — both
+   still live operations (see §8 and §11); neither is done by
+   applying migrations or by this document.
+
+## 10. Settings reference (app_settings keys)
+
+Every business value that used to be hard-coded lives as a row in
+`app_settings` (value is JSONB). The Settings page is the only place an
+operator changes them; reads go through `getSettingsSnapshot()`, which
+resolves each key against its default below. Writes are Owner/Admin
+only and audited. Nothing here invents a business value: every key
+below resolves to its stated default when its row is absent, and an
+"unconfirmed" default means "not decided yet" — the code must never
+guess past it.
+
+| Key | Default | What it gates |
+|---|---|---|
+| `company` | `null` | Company name, address, phone, email, logo URL printed on slips and passes. Null = not set yet; prints omit it. |
+| `business_model` | `unconfirmed` | Own seed / customer-owned / both (`own`, `customer`, `both`). While `unconfirmed`, no model is assumed anywhere. |
+| `valuation_method` | `unconfirmed` | Stock valuation method (`last_purchase_cost`, `average_cost`). The reports valuation tab reads exactly this key via `getSettingsSnapshot()` and passes it to `getStockValuation(method)`; while `unconfirmed`, valuation returns method-not-set with no number. It also gates cost-ledger ingredient amounts (§11 of the code, `lib/cost-ledger.ts`). |
+| `currency` | `PKR` | Currency code shown on money values. |
+| `session_timeout_minutes` | `60` | Idle sign-out delay; `0` disables idle sign-out. Negative / non-integer values are rejected. |
+| `cutover_date` | `null` | Go-live cutover date (ISO `YYYY-MM-DD`); the Import page shows a banner for it. Empty = no cutover set. |
+| `gatepass_approval_required` | `false` | When `true`, posting a gate pass only submits it for approval (`awaiting_approval`) with NO stock change; only an Owner/Admin approval deducts stock. When `false`, posting dispatches directly. |
+| `variance_tolerance_pct` | `null` | Batch input-variance tolerance (%). Null = disabled. When set, a batch whose input variance exceeds it cannot post without a recorded variance reason. |
+| `bilty_duplicate_check` | `warn` | Duplicate bilty handling on inward: `off` (skip), `warn` (proceed with a warning), `block` (reject). |
+| `cost_ledger_enabled` | `false` | **Wave-2 gate.** When `false` (the default), batch/job posts write NO `production_cost_ledger` rows — current behaviour. When `true`, posts record packaging cost, input/output quantities, and the job processing charge (see the migration in §2 step 17). |
+
+Two rows the code reads but this page deliberately does NOT own:
+`payroll_rules` (payroll module) and `pl_config` (finance module) are
+not in `SETTING_KEYS` and `updateAppSetting()` rejects them. Note the
+stale wording in one finance comment that calls `pl_config` the
+valuation source: the reports valuation tab does NOT read `pl_config`
+— it reads `valuation_method` (verified in the wave-2 program).
+
+## 11. Client decision log (spec §19 — all open, none decided)
+
+Every row below is **open** until the client decides it. Until then the
+app runs on the configurable default in the right-hand column — a
+neutral default, never a hard-coded business value and never a guessed
+decision. When a decision lands, record the date and signature here
+and change the setting (or the code comment that points at it) in the
+same change; do not silently edit the default.
+
+| # | Open item | Configurable default until decided | Decision | Date | Signature |
+|---|---|---|---|---|---|
+| 1 | Business model (§19 / §15.2): own seed, customer-owned, or both | `business_model = unconfirmed`; no model assumed | _open_ | | |
+| 2 | COGS / stock valuation method (§19 / §15.2) | `valuation_method = unconfirmed`; valuation shows no number, COGS shows 0 with a warning | _open_ | | |
+| 3 | Payroll rules: weekly off, paid leave, half-day factor, monthly proration denominator, overtime rate | `payroll_rules` placeholder values; payroll snapshots `applied_rate` per run so a later decision never rewrites history | _open_ | | |
+| 4 | Whether credit expenses are used | Credit expenses allowed but require a vendor (unpaid = payable, no cash row) | _open_ | | |
+| 5 | One-bag / two-bag handling (bag-count conventions on receipt, packing and dispatch) | Bag counts are recorded per line as entered; no one-bag/two-bag conversion is applied anywhere | _open_ | | |
+| 6 | Stage transfers (which processing stages move stock between godowns / stages, and at what point) | No automatic stage transfer is posted; transfers are explicit vouchers only | _open_ | | |
+| 7 | Packing-fee bag-cost inclusion: does the packing fee include the bag's own cost, or is bag cost separate? | Packing charge = bags × rate only; bag (bardana) consumption is costed separately from its ledger rows, never double-counted | _open_ | | |
+| 8 | Treatment inventory impact: do packing treatments consume treatment stock? | Treatments are record-only on packing records; no treatment stock is deducted | _open_ | | |
+| 9 | Gate-pass approver definition: who, by role, approves an awaiting-approval pass? | Interim: Owner/Admin only (`OWNER_ONLY` via the existing `requireRole` helper); no new role invented | _open_ | | |
+| 10 | Historical-transaction import scope: which old vouchers / periods are imported, and from what cutover date? | `cutover_date = null` (no cutover set); Import page shows its banner only once a date is set | _open_ | | |
+| 11 | Job-posting = revenue? (machinery/packing charges not yet invoiced) | Not counted as revenue — revenue is recognised on the posted invoice only | _open_ | | |
+| 12 | Backup restore test + staff training sign-off (live operations, §8) | Neither is done; go-live is incomplete until both have dated sign-offs | _open_ | | |
