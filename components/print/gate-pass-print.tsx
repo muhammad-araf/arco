@@ -18,6 +18,8 @@ export interface GatePassItem {
   weightKg?: number | string
   grossWeightKg?: number | string
   bags?: number | string
+  /** Bag type for this line (packaging type name), if one applies. */
+  bagType?: string
   remarks?: string
 }
 
@@ -30,6 +32,7 @@ export interface GatePassPrintProps {
   status?: string
   customerName?: string
   receiverName?: string
+  receiverContact?: string
   customerPhone?: string
   destination?: string
   address?: string
@@ -65,15 +68,17 @@ export function GatePassPrint(props: GatePassPrintProps) {
   const statusLabel =
     props.status === "draft"
       ? "Draft"
-      : props.status === "reversed"
-        ? "Reversed"
-        : props.status === "returned"
-          ? "Returned"
-          : props.status === "partially_returned"
-            ? "Partially Returned"
-            : props.status === "posted"
-              ? "Posted"
-              : props.status
+      : props.status === "awaiting_approval"
+        ? "Awaiting Approval"
+        : props.status === "reversed"
+          ? "Reversed"
+          : props.status === "returned"
+            ? "Returned"
+            : props.status === "partially_returned"
+              ? "Partially Returned"
+              : props.status === "posted"
+                ? "Posted"
+                : props.status
   const totalQuantity =
     props.totalQuantity !== undefined && props.totalQuantity !== null
       ? props.totalQuantity
@@ -103,6 +108,7 @@ export function GatePassPrint(props: GatePassPrintProps) {
       <PrintInfoGrid>
         <PrintField label="Customer" value={props.customerName} />
         <PrintField label="Receiver" value={props.receiverName} />
+        <PrintField label="Receiver Contact" value={props.receiverContact} />
         <PrintField label="Contact" value={props.customerPhone} />
         <PrintField label="Destination" value={props.destination} />
         <PrintField label="Delivery Address" value={props.address} />
@@ -121,18 +127,19 @@ export function GatePassPrint(props: GatePassPrintProps) {
       <table className="print-table">
         <thead>
           <tr>
-            <th className="print-col-narrow">#</th>
+            <th className="print-col-narrow">S.No.</th>
             <th>Product</th>
             <th className="print-col-number">Quantity</th>
             <th>Unit</th>
             <th className="print-col-number">Weight (kg)</th>
             <th className="print-col-number">Bags</th>
+            <th>Bag Type</th>
             <th>Remarks</th>
           </tr>
         </thead>
         <tbody>
           {items.length === 0 ? (
-            <EmptyRow colSpan={7} label="No items recorded on this gate pass." />
+            <EmptyRow colSpan={8} label="No items recorded on this gate pass." />
           ) : (
             items.map((item, idx) => (
               <tr key={idx}>
@@ -145,6 +152,7 @@ export function GatePassPrint(props: GatePassPrintProps) {
                 <td>{text(item.unit)}</td>
                 <td className="print-col-number">{fmtNum(item.weightKg ?? item.grossWeightKg)}</td>
                 <td className="print-col-number">{fmtNum(item.bags)}</td>
+                <td>{text(item.bagType, "")}</td>
                 <td>{text(item.remarks, "")}</td>
               </tr>
             ))
@@ -159,6 +167,7 @@ export function GatePassPrint(props: GatePassPrintProps) {
             <td />
             <td className="print-col-number">{fmtNum(totalWeight)}</td>
             <td className="print-col-number">{fmtNum(totalBags)}</td>
+            <td />
             <td />
           </tr>
         </tfoot>
