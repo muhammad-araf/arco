@@ -11,6 +11,12 @@ import {
 } from "@/lib/calc";
 import type { RateBasis } from "@/lib/types/database";
 import { callAtomicStockTransition } from "@/lib/atomic";
+import { logAudit } from "@/lib/audit";
+import {
+  checkProductsActive,
+  sumJobLines,
+  type JobLineInput,
+} from "./production-helpers";
 
 /**
  * Machinery / service-job server actions (spec §7).
@@ -56,10 +62,13 @@ import { callAtomicStockTransition } from "@/lib/atomic";
  * charge was already billed separately, that invoice must be
  * reversed through the finance actions as well.
  *
- * Single-line jobs only: machinery_jobs carries one input product
- * and one output product (spec §7.1 mentions multi-line jobs, but
- * the table has no job-lines table — that is a schema gap, not
- * something these actions can paper over).
+ * Multi-line jobs: machinery_job_lines carries one row per line
+ * (input / output / by-product per line). A job WITH lines posts and
+ * reverses from its lines; a job WITHOUT lines posts from its header
+ * exactly as before (one line = current behaviour). The service
+ * charge stays job-level: machineryCharge() runs once over the job's
+ * TOTAL input weight (per_bag bills the job's bag count). By-product
+ * lines ARE stocked; waste is header-only and never stocked.
  */
 
 type Db = Awaited<ReturnType<typeof createClient>>;
@@ -136,14 +145,13 @@ async function stockBalance(supabase: Db, godownId: string, productId: string, p
   return stockBalanceFromRows((data ?? []) as { inward_qty: number; outward_qty: number }[]);
 }
 
-/** Billable quantity for machineryCharge: bag count on per_bag, kg otherwise. */
-function billableQty(input: {
-  rateBasis: RateBasis;
-  inputWeightKg: number;
-  bags?: number;
-}): number {
-  if (input.rateBasis === "per_bag") return input.bags ?? 0;
-  return input.inputWeightKg;
+export interface JobLineDraftInput {
+  inputProductId: string;
+  inputQtyKg: number;
+  outputProductId?: string;
+  outputQtyKg?: number;
+  byproductProductId?: string;
+  byproductQtyKg?: number;
 }
 
 export interface CreateJobDraftInput {
@@ -156,6 +164,15 @@ export interface CreateJobDraftInput {
   outputProductId?: string;
   outputWeightKg?: number;
   wasteWeightKg?: number;
+  /** Operator who ran the job (free text, no operator master exists). */
+  operatorName?: string;
+  /** Single-line job's by-product, stocked on post like a line by-product. */
+  byproductProductId?: string;
+  byproductWeightKg?: number;
+  /** Multi-line jobs: when supplied, the header totals/charge derive
+   *  from these lines and the lines are what posts. When omitted, the
+   *  legacy single-line header path runs exactly as before. */
+  lines?: JobLineDraftInput[];
   /** Bag count — required when rateBasis is per_bag (that basis bills bags). */
   bags?: number;
   rateBasis: RateBasis;
@@ -180,7 +197,7 @@ export async function listJobs(filters?: {
     const supabase = await createClient();
     const gate = await requireSignedIn(supabase);
     if (!gate.ok) return fail(gate.error);
-    let query = supabase.from("machinery_jobs").select("*").order("date", { ascending: false });
+    let query = supabase.from("machinery_jobs").select("*, machinery_job_lines(*)").order("date", { ascending: false });
     if (filters?.status) query = query.eq("status", filters.status);
     if (filters?.customerId) query = query.eq("customer_id", filters.customerId);
     if (filters?.machineId) query = query.eq("machine_id", filters.machineId);
@@ -189,10 +206,27 @@ export async function listJobs(filters?: {
     if (filters?.to) query = query.lte("date", filters.to);
     const { data, error } = await query;
     if (error) return fail(error.message);
-    return ok(data);
+    return ok(sortJobLines(data));
   } catch (e) {
     return fail(errMessage(e));
   }
+}
+
+/** Job lines ordered by line_no (PostgREST nested order is not relied
+ *  on — the action sorts, so the page and print always see line order). */
+function sortJobLines(jobs: unknown): unknown {
+  if (!Array.isArray(jobs)) return jobs;
+  return jobs.map((job: Record<string, unknown>) => {
+    const lines = job.machinery_job_lines;
+    if (!Array.isArray(lines)) return job;
+    return {
+      ...job,
+      machinery_job_lines: [...lines].sort(
+        (a: Record<string, unknown>, b: Record<string, unknown>) =>
+          Number(a.line_no ?? 0) - Number(b.line_no ?? 0),
+      ),
+    };
+  });
 }
 
 export async function getJob(id: string): Promise<ActionResult> {
@@ -201,9 +235,9 @@ export async function getJob(id: string): Promise<ActionResult> {
     const supabase = await createClient();
     const gate = await requireSignedIn(supabase);
     if (!gate.ok) return fail(gate.error);
-    const { data, error } = await supabase.from("machinery_jobs").select("*").eq("id", id).single();
+    const { data, error } = await supabase.from("machinery_jobs").select("*, machinery_job_lines(*)").eq("id", id).single();
     if (error) return fail(error.message);
-    return ok(data);
+    return ok((sortJobLines([data]) as unknown[])[0]);
   } catch (e) {
     return fail(errMessage(e));
   }
@@ -217,12 +251,40 @@ export async function createJobDraft(input: CreateJobDraftInput): Promise<Action
     }
     if (!input?.processingType?.trim()) return fail("processingType is required");
     if (!input?.inputProductId) return fail("inputProductId is required");
-    if (!(input.inputWeightKg > 0)) return fail("inputWeightKg must be > 0");
-    if ((input.outputWeightKg ?? 0) < 0 || (input.wasteWeightKg ?? 0) < 0) {
-      return fail("Output and waste weights cannot be negative");
+    // Multi-line totals (one line = the legacy header values). The
+    // charge is computed ONCE over the job's total input weight —
+    // never per line (see production-helpers.ts).
+    const lines: JobLineInput[] | null = input.lines?.length
+      ? input.lines.map((l) => ({
+          inputProductId: l.inputProductId,
+          inputQtyKg: l.inputQtyKg,
+          outputProductId: l.outputProductId ?? null,
+          outputQtyKg: l.outputQtyKg ?? 0,
+          byproductProductId: l.byproductProductId ?? null,
+          byproductQtyKg: l.byproductQtyKg ?? 0,
+        }))
+      : null;
+    let totalInput = input.inputWeightKg;
+    let totalOutput = input.outputWeightKg ?? 0;
+    let totalByproduct = input.byproductWeightKg ?? 0;
+    if (lines) {
+      for (const line of lines) {
+        if (!line.inputProductId) return fail("Every job line needs an input product");
+        if (line.inputQtyKg < 0 || (line.outputQtyKg ?? 0) < 0 || (line.byproductQtyKg ?? 0) < 0) {
+          return fail("Job line quantities cannot be negative");
+        }
+      }
+      const totals = sumJobLines(lines);
+      totalInput = totals.totalInputKg;
+      totalOutput = totals.totalOutputKg;
+      totalByproduct = totals.totalByproductKg;
     }
-    if ((input.outputWeightKg ?? 0) + (input.wasteWeightKg ?? 0) > input.inputWeightKg) {
-      return fail("Output + waste exceeds input weight");
+    if (!(totalInput > 0)) return fail("inputWeightKg must be > 0");
+    if (totalOutput < 0 || (input.wasteWeightKg ?? 0) < 0 || totalByproduct < 0) {
+      return fail("Output, by-product and waste weights cannot be negative");
+    }
+    if (totalOutput + totalByproduct + (input.wasteWeightKg ?? 0) > totalInput) {
+      return fail("Output + by-product + waste exceeds input weight");
     }
     if (input.rate < 0) return fail("rate cannot be negative");
     if (input.rateBasis === "per_bag" && !(input.bags !== undefined && input.bags >= 0)) {
@@ -236,8 +298,10 @@ export async function createJobDraft(input: CreateJobDraftInput): Promise<Action
     }
     let charge: number;
     try {
+      // Job-level charge: per_bag bills the job's bag count; every
+      // other basis bills the TOTAL input weight across all lines.
       charge = machineryCharge(
-        billableQty(input),
+        input.rateBasis === "per_bag" ? (input.bags ?? 0) : totalInput,
         input.rateBasis,
         input.rate,
         input.maundKg,
@@ -248,7 +312,19 @@ export async function createJobDraft(input: CreateJobDraftInput): Promise<Action
     const supabase = await createClient();
     const gate = await requireWrite(supabase);
     if ("error" in gate) return fail(gate.error);
+    // Server-side is_active check on every selected product.
+    const activeError = await checkProductsActive(supabase, [
+      input.inputProductId,
+      input.outputProductId,
+      input.byproductProductId,
+      ...(lines ?? []).flatMap((l) => [l.inputProductId, l.outputProductId, l.byproductProductId]),
+    ]);
+    if (activeError) return fail(activeError);
     const jobNo = await nextDocNumber(supabase, "machinery", "JOB");
+    // Header keeps job-level totals so list views keep working; the
+    // first line's products stay the header products for a multi-line
+    // job (the lines themselves are the detail).
+    const firstLine = lines?.[0];
     const { data: job, error } = await supabase
       .from("machinery_jobs")
       .insert({
@@ -258,10 +334,13 @@ export async function createJobDraft(input: CreateJobDraftInput): Promise<Action
         machine_id: input.machineId,
         godown_id: input.godownId,
         processing_type: input.processingType.trim(),
-        input_product_id: input.inputProductId,
-        input_weight_kg: roundWeight(input.inputWeightKg),
-        output_product_id: input.outputProductId ?? null,
-        output_weight_kg: roundWeight(input.outputWeightKg ?? 0),
+        operator_name: input.operatorName?.trim() || null,
+        input_product_id: firstLine?.inputProductId ?? input.inputProductId,
+        input_weight_kg: roundWeight(totalInput),
+        output_product_id: firstLine?.outputProductId ?? input.outputProductId ?? null,
+        output_weight_kg: roundWeight(totalOutput),
+        byproduct_product_id: firstLine?.byproductProductId ?? input.byproductProductId ?? null,
+        byproduct_weight_kg: roundWeight(totalByproduct),
         waste_weight_kg: roundWeight(input.wasteWeightKg ?? 0),
         // Stored (not echoed): the charge inputs, so the posted
         // charge can be recomputed and audited later.
@@ -277,6 +356,24 @@ export async function createJobDraft(input: CreateJobDraftInput): Promise<Action
       .select()
       .single();
     if (error) return fail(error.message);
+    if (lines) {
+      const { error: lError } = await supabase.from("machinery_job_lines").insert(
+        lines.map((line, i) => ({
+          job_id: job.id,
+          line_no: i,
+          input_product_id: line.inputProductId,
+          input_qty_kg: roundWeight(line.inputQtyKg),
+          output_product_id: line.outputProductId ?? null,
+          output_qty_kg: roundWeight(line.outputQtyKg ?? 0),
+          byproduct_product_id: line.byproductProductId ?? null,
+          byproduct_qty_kg: roundWeight(line.byproductQtyKg ?? 0),
+        })),
+      );
+      if (lError) {
+        await supabase.from("machinery_jobs").delete().eq("id", job.id);
+        return fail(lError.message);
+      }
+    }
     revalidateMachinery();
     return ok(job);
   } catch (e) {
@@ -317,7 +414,7 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
     if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "machinery:post", clientToken);
     if (replay) return replay;
-    const { data: job, error } = await supabase.from("machinery_jobs").select("*").eq("id", id).single();
+    const { data: job, error } = await supabase.from("machinery_jobs").select("*, machinery_job_lines(*)").eq("id", id).single();
     if (error) return fail(error.message);
     // Already posted is a successful replay, not a second posting.
     if (job.status === "posted") return ok(job);
@@ -327,8 +424,95 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
     // bags / maund_kg let anyone recompute it afterwards; posting
     // preserves the stored service_charge as the charge record.
     const ownerParty: string | null = job.is_customer_owned ? job.customer_id : null;
+    const storedLines = (Array.isArray(job.machinery_job_lines) ? job.machinery_job_lines : [])
+      .slice()
+      .sort((a: { line_no?: number }, b: { line_no?: number }) => Number(a.line_no ?? 0) - Number(b.line_no ?? 0));
+    // Multi-line job: every line's input is guarded (aggregated per
+    // product + owner pool, so duplicate lines cannot each pass
+    // against the same balance) and every line's output AND by-product
+    // is stocked. Waste stays header-only, never stocked.
+    if (storedLines.length > 0) {
+      const needByKey = new Map<string, { productId: string; qty: number }>();
+      for (const line of storedLines) {
+        const qty = roundWeight(Number(line.input_qty_kg ?? 0));
+        if (qty <= 0) continue;
+        const key = `${line.input_product_id}|${ownerParty ?? ""}`;
+        const cur = needByKey.get(key);
+        needByKey.set(key, { productId: line.input_product_id, qty: (cur?.qty ?? 0) + qty });
+      }
+      for (const need of needByKey.values()) {
+        const available = await stockBalance(supabase, job.godown_id, need.productId, ownerParty);
+        if (available < roundWeight(need.qty)) {
+          return fail(
+            `Insufficient stock for job ${job.job_no}: product ${need.productId} has ${available} kg available in this godown${ownerParty ? " for this owner" : ""}, job needs ${need.qty} kg`,
+          );
+        }
+      }
+      const multiLegs: {
+        lineNo: number; godownId: string; productId: string; partyId: string | null; inwardQty: number; outwardQty: number;
+      }[] = [];
+      for (const line of storedLines) {
+        const qty = roundWeight(Number(line.input_qty_kg ?? 0));
+        if (qty > 0) {
+          multiLegs.push({
+            lineNo: multiLegs.length, godownId: job.godown_id, productId: line.input_product_id,
+            partyId: ownerParty, inwardQty: 0, outwardQty: qty,
+          });
+        }
+      }
+      for (const line of storedLines) {
+        const qty = roundWeight(Number(line.output_qty_kg ?? 0));
+        if (line.output_product_id && qty > 0) {
+          multiLegs.push({
+            lineNo: multiLegs.length, godownId: job.godown_id, productId: line.output_product_id,
+            partyId: ownerParty, inwardQty: qty, outwardQty: 0,
+          });
+        }
+      }
+      for (const line of storedLines) {
+        const qty = roundWeight(Number(line.byproduct_qty_kg ?? 0));
+        if (line.byproduct_product_id && qty > 0) {
+          multiLegs.push({
+            lineNo: multiLegs.length, godownId: job.godown_id, productId: line.byproduct_product_id,
+            partyId: ownerParty, inwardQty: qty, outwardQty: 0,
+          });
+        }
+      }
+      const multi = await callAtomicStockTransition(supabase, {
+        voucherTable: "machinery_jobs",
+        voucherId: id,
+        fromStatuses: ["draft"],
+        toStatus: "posted",
+        voucherType: "machinery",
+        voucherNo: job.job_no,
+        entryKind: "post",
+        lines: multiLegs,
+        createdBy: gate.actor.userId,
+        clientToken: clientToken ?? null,
+        scope: "machinery:post",
+      });
+      if (!multi.ok) return fail(multi.error);
+      if (multi.result.outcome === "invalid") {
+        return fail(`Only a draft can be posted (status: ${multi.result.status})`);
+      }
+      const postedMulti = multi.result.voucher as Record<string, unknown>;
+      const resultMulti = { ...postedMulti, service_charge: Number(postedMulti.service_charge ?? 0) };
+      await logAudit(supabase, {
+        action: "post",
+        entityType: "machinery_job",
+        entityId: id,
+        voucherNo: job.job_no,
+        before: { status: "draft" },
+        after: { status: "posted", lines: storedLines.length },
+        userId: gate.actor.userId,
+        userEmail: gate.actor.email,
+      });
+      revalidateMachinery();
+      return ok(resultMulti);
+    }
     const inputQty = roundWeight(Number(job.input_weight_kg ?? 0));
     const outputQty = roundWeight(Number(job.output_weight_kg ?? 0));
+    const byproductQty = roundWeight(Number(job.byproduct_weight_kg ?? 0));
     // Stock guard on the input, scoped to the owner's pool. A
     // customer-owned job guards ONLY the owner's balance and never
     // the company (NULL-party) balance; a company job guards company
@@ -342,6 +526,7 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
     // Atomic post (B4): input + output legs + flip + key in one
     // transaction via atomic_stock_transition (see inward.ts).
     // Waste is recorded on the job header only; it is never stocked.
+    // A single-line job's by-product IS stocked (like a line by-product).
     const jobLines = [
       {
         lineNo: 0,
@@ -361,6 +546,16 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
         // the company — same party scope as the input.
         partyId: ownerParty,
         inwardQty: outputQty,
+        outwardQty: 0,
+      });
+    }
+    if (job.byproduct_product_id && byproductQty > 0) {
+      jobLines.push({
+        lineNo: jobLines.length,
+        godownId: job.godown_id,
+        productId: job.byproduct_product_id,
+        partyId: ownerParty,
+        inwardQty: byproductQty,
         outwardQty: 0,
       });
     }
@@ -386,6 +581,16 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
     // on this posted job is the charge record billing reads later
     // (createInvoice, sourceType "machinery_job", sourceId = job id).
     const result = { ...posted, service_charge: Number(posted.service_charge ?? 0) };
+    await logAudit(supabase, {
+      action: "post",
+      entityType: "machinery_job",
+      entityId: id,
+      voucherNo: job.job_no,
+      before: { status: "draft" },
+      after: { status: "posted" },
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     revalidateMachinery();
     return ok(result);
   } catch (e) {
@@ -403,7 +608,7 @@ export async function reverseJob(id: string, reason: string, clientToken?: strin
     if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "machinery:reverse", clientToken);
     if (replay) return replay;
-    const { data: job, error } = await supabase.from("machinery_jobs").select("*").eq("id", id).single();
+    const { data: job, error } = await supabase.from("machinery_jobs").select("*, machinery_job_lines(*)").eq("id", id).single();
     if (error) return fail(error.message);
     // Already reversed is a successful replay, not a second reversal.
     if (job.status === "reversed") return ok(job);
@@ -412,15 +617,115 @@ export async function reverseJob(id: string, reason: string, clientToken?: strin
     }
     if (!job.godown_id) return fail(`Job ${job.job_no} has no godown, so its stock cannot be reversed`);
     const ownerParty: string | null = job.is_customer_owned ? job.customer_id : null;
+    const storedLines = (Array.isArray(job.machinery_job_lines) ? job.machinery_job_lines : [])
+      .slice()
+      .sort((a: { line_no?: number }, b: { line_no?: number }) => Number(a.line_no ?? 0) - Number(b.line_no ?? 0));
+    // Multi-line reversal: outputs AND by-products must still be on
+    // hand (aggregated per product + owner pool) before they are taken
+    // back; inputs are then restored line by line.
+    if (storedLines.length > 0) {
+      const takeBack = new Map<string, { productId: string; qty: number }>();
+      const addTakeBack = (productId: string | null, qty: number) => {
+        if (!productId || qty <= 0) return;
+        const key = `${productId}|${ownerParty ?? ""}`;
+        const cur = takeBack.get(key);
+        takeBack.set(key, { productId, qty: (cur?.qty ?? 0) + qty });
+      };
+      for (const line of storedLines) {
+        addTakeBack(line.output_product_id, roundWeight(Number(line.output_qty_kg ?? 0)));
+        addTakeBack(line.byproduct_product_id, roundWeight(Number(line.byproduct_qty_kg ?? 0)));
+      }
+      for (const need of takeBack.values()) {
+        const available = await stockBalance(supabase, job.godown_id, need.productId, ownerParty);
+        if (available < roundWeight(need.qty)) {
+          return fail(
+            `Cannot reverse job ${job.job_no}: product ${need.productId} has only ${available} kg on hand, reversal needs ${need.qty} kg`,
+          );
+        }
+      }
+      const multiReverse: {
+        lineNo: number; godownId: string; productId: string; partyId: string | null;
+        inwardQty: number; outwardQty: number; notes?: string;
+      }[] = [];
+      for (const line of storedLines) {
+        const outQty = roundWeight(Number(line.output_qty_kg ?? 0));
+        if (line.output_product_id && outQty > 0) {
+          multiReverse.push({
+            lineNo: multiReverse.length, godownId: job.godown_id, productId: line.output_product_id,
+            partyId: ownerParty, inwardQty: 0, outwardQty: outQty,
+            notes: `Reversal of ${job.job_no}: ${reason.trim()}`,
+          });
+        }
+        const byQty = roundWeight(Number(line.byproduct_qty_kg ?? 0));
+        if (line.byproduct_product_id && byQty > 0) {
+          multiReverse.push({
+            lineNo: multiReverse.length, godownId: job.godown_id, productId: line.byproduct_product_id,
+            partyId: ownerParty, inwardQty: 0, outwardQty: byQty,
+            notes: `Reversal of ${job.job_no}: ${reason.trim()}`,
+          });
+        }
+      }
+      for (const line of storedLines) {
+        const inQty = roundWeight(Number(line.input_qty_kg ?? 0));
+        if (inQty > 0) {
+          multiReverse.push({
+            lineNo: multiReverse.length, godownId: job.godown_id, productId: line.input_product_id,
+            partyId: ownerParty, inwardQty: inQty, outwardQty: 0,
+            notes: `Reversal of ${job.job_no}: ${reason.trim()}`,
+          });
+        }
+      }
+      const multi = await callAtomicStockTransition(supabase, {
+        voucherTable: "machinery_jobs",
+        voucherId: id,
+        fromStatuses: ["posted"],
+        toStatus: "reversed",
+        voucherType: "machinery",
+        voucherNo: job.job_no,
+        entryKind: "reversal",
+        lines: multiReverse,
+        createdBy: gate.actor.userId,
+        clientToken: clientToken ?? null,
+        scope: "machinery:reverse",
+        reversalReason: reason.trim(),
+      });
+      if (!multi.ok) return fail(multi.error);
+      if (multi.result.outcome === "invalid") {
+        return fail(`Only a posted job can be reversed (status: ${multi.result.status})`);
+      }
+      const reversedMulti = multi.result.voucher as Record<string, unknown>;
+      await logAudit(supabase, {
+        action: "reverse",
+        entityType: "machinery_job",
+        entityId: id,
+        voucherNo: job.job_no,
+        before: { status: "posted" },
+        after: { status: "reversed" },
+        reason: reason.trim(),
+        userId: gate.actor.userId,
+        userEmail: gate.actor.email,
+      });
+      revalidateMachinery();
+      return ok({ ...reversedMulti });
+    }
     const inputQty = roundWeight(Number(job.input_weight_kg ?? 0));
     const outputQty = roundWeight(Number(job.output_weight_kg ?? 0));
-    // Reversal guard: the output must still be on hand (same party
-    // scope) before it can be taken back.
+    const byproductQty = roundWeight(Number(job.byproduct_weight_kg ?? 0));
+    // Reversal guard: the output (and by-product) must still be on
+    // hand (same party scope) before it can be taken back.
     if (job.output_product_id && outputQty > 0) {
       const available = await stockBalance(supabase, job.godown_id, job.output_product_id, ownerParty);
       if (available < outputQty) {
         return fail(
           `Cannot reverse job ${job.job_no}: output product ${job.output_product_id} has only ${available} kg on hand, reversal needs ${outputQty} kg`,
+        );
+      }
+    }
+    if (job.byproduct_product_id && byproductQty > 0) {
+      const available = await stockBalance(supabase, job.godown_id, job.byproduct_product_id, ownerParty);
+      if (available < byproductQty) {
+        return fail(
+          `Cannot reverse job ${job.job_no}: by-product ${job.byproduct_product_id} has only ${available} kg on hand, reversal needs ${byproductQty} kg`,
         );
       }
     }
@@ -434,6 +739,17 @@ export async function reverseJob(id: string, reason: string, clientToken?: strin
         partyId: ownerParty,
         inwardQty: 0,
         outwardQty: outputQty,
+        notes: `Reversal of ${job.job_no}: ${reason.trim()}`,
+      });
+    }
+    if (job.byproduct_product_id && byproductQty > 0) {
+      reverseLines.push({
+        lineNo: reverseLines.length,
+        godownId: job.godown_id,
+        productId: job.byproduct_product_id,
+        partyId: ownerParty,
+        inwardQty: 0,
+        outwardQty: byproductQty,
         notes: `Reversal of ${job.job_no}: ${reason.trim()}`,
       });
     }
@@ -466,6 +782,17 @@ export async function reverseJob(id: string, reason: string, clientToken?: strin
     }
     const reversed = transition.result.voucher as Record<string, unknown>;
     const result = { ...reversed };
+    await logAudit(supabase, {
+      action: "reverse",
+      entityType: "machinery_job",
+      entityId: id,
+      voucherNo: job.job_no,
+      before: { status: "posted" },
+      after: { status: "reversed" },
+      reason: reason.trim(),
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     revalidateMachinery();
     return ok(result);
   } catch (e) {
