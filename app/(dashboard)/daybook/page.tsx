@@ -13,7 +13,8 @@ import {
   CheckCircle2,
   CreditCard,
 } from "lucide-react"
-import { getDaybook, listExpenses, createExpense, postExpense, reverseExpense, listCashAccounts } from "@/app/actions/finance"
+import { getDaybook, listExpenses, createExpense, postExpense, reverseExpense, listCashAccounts, createCashAccount, postTransfer } from "@/app/actions/finance"
+import { listParties } from "@/app/actions/masters"
 import { DaybookPrint } from "@/components/print/daybook-print"
 import { PrintButton } from "@/components/print/print-button"
 import { ExpenseVoucher, CashLedgerEntry } from "@/lib/types/database"
@@ -37,6 +38,22 @@ export default function DaybookPage() {
   const [daybook, setDaybook] = React.useState<any | null>(null)
   const [cashClosing, setCashClosing] = React.useState(0)
   const [bankClosing, setBankClosing] = React.useState(0)
+  const [onlineClosing, setOnlineClosing] = React.useState(0)
+  const [totalClosing, setTotalClosing] = React.useState(0)
+  const [unattributedOpening, setUnattributedOpening] = React.useState(0)
+  const [accountBalances, setAccountBalances] = React.useState<any[]>([])
+  const [cashAccounts, setCashAccounts] = React.useState<any[]>([])
+  const [vendors, setVendors] = React.useState<any[]>([])
+  const [trFrom, setTrFrom] = React.useState("")
+  const [trTo, setTrTo] = React.useState("")
+  const [trAmount, setTrAmount] = React.useState<number>(0)
+  const [trRef, setTrRef] = React.useState("")
+  const [trPending, setTrPending] = React.useState(false)
+  const [acctCode, setAcctCode] = React.useState("")
+  const [acctName, setAcctName] = React.useState("")
+  const [acctKind, setAcctKind] = React.useState<"cash" | "bank" | "online">("cash")
+  const [acctOpening, setAcctOpening] = React.useState<number>(0)
+  const [acctPending, setAcctPending] = React.useState(false)
   const [fromDate, setFromDate] = React.useState("")
   const [toDate, setToDate] = React.useState("")
   // "Today" for the today-only filter, from client-side effect state (see
@@ -60,6 +77,9 @@ export default function DaybookPage() {
   const [amount, setAmount] = React.useState<number>(15000)
   const [paymentMethod, setPaymentMethod] = React.useState<"cash" | "bank">("cash")
   const [description, setDescription] = React.useState("")
+  const [expSettlement, setExpSettlement] = React.useState<"paid" | "credit">("paid")
+  const [expVendorId, setExpVendorId] = React.useState("")
+  const [expCashAccountId, setExpCashAccountId] = React.useState("")
 
   // Month defaults and "today" come from a client-side effect, never from
   // render: reading new Date() during render blocks prerendering under
@@ -75,21 +95,39 @@ export default function DaybookPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [cash, bank, ex] = await Promise.all([
+      const [cash, bank, online, all, ex, ca, pa] = await Promise.all([
         getDaybook({ accountKind: "cash", from: fromDate, to: toDate }),
         getDaybook({ accountKind: "bank", from: fromDate, to: toDate }),
+        getDaybook({ accountKind: "online", from: fromDate, to: toDate }),
+        getDaybook({ from: fromDate, to: toDate }),
         listExpenses({}),
+        listCashAccounts(),
+        listParties(),
       ])
-      const failed = [cash, bank, ex].find((x) => !x.success)
+      const failed = [cash, bank, online, all, ex, ca, pa].find((x) => !x.success)
       if (failed) setFormError(failed.error ?? "Could not load daybook data.")
       setCashClosing(Number((cash.data as any)?.closing || 0))
       setBankClosing(Number((bank.data as any)?.closing || 0))
+      setOnlineClosing(Number((online.data as any)?.closing || 0))
+      // Total cash comes from the all-accounts daybook, not the sum of
+      // the kind cards: only the all-accounts view can honour a cash
+      // opening recorded without an account.
+      setTotalClosing(Number((all.data as any)?.closing || 0))
+      setUnattributedOpening(Number((all.data as any)?.unattributedOpening || 0))
+      const byId = new Map<string, any>()
+      for (const d of [cash.data, bank.data, online.data] as any[]) {
+        for (const b of (d?.balances ?? [])) byId.set(b.cashAccountId ?? `kind:${b.accountKind}`, b)
+      }
+      setAccountBalances([...byId.values()])
+      setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
+      setVendors((Array.isArray(pa.data) ? pa.data : []).filter((x: any) => x.type === "supplier" || x.type === "both"))
       const entries = [
-        ...((cash.data as any)?.entries ?? []).map((e: any) => ({ ...e, account: "cash", description: e.description ?? e.voucher_no })),
-        ...((bank.data as any)?.entries ?? []).map((e: any) => ({ ...e, account: "bank", description: e.description ?? e.voucher_no })),
+        ...((cash.data as any)?.entries ?? []).map((e: any) => ({ ...e, description: e.description ?? e.voucher_no })),
+        ...((bank.data as any)?.entries ?? []).map((e: any) => ({ ...e, description: e.description ?? e.voucher_no })),
+        ...((online.data as any)?.entries ?? []).map((e: any) => ({ ...e, description: e.description ?? e.voucher_no })),
       ].sort((a, b) => String(b.date).localeCompare(String(a.date)))
       setCashLedger(entries as any)
-      setDaybook({ cash: cash.data, bank: bank.data, opening: Number((cash.data as any)?.opening || 0) + Number((bank.data as any)?.opening || 0), closing: Number((cash.data as any)?.closing || 0) + Number((bank.data as any)?.closing || 0) })
+      setDaybook({ cash: cash.data, bank: bank.data, online: online.data, all: all.data, opening: Number((all.data as any)?.opening || 0), closing: Number((all.data as any)?.closing || 0) })
       setExpenses(Array.isArray(ex.data) ? ex.data : [])
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Could not load daybook data.")
@@ -103,9 +141,16 @@ export default function DaybookPage() {
     loadData()
     setDrillFilter(getUrlFilter())
   }, [loadData])
+  React.useEffect(() => {
+    if (cashAccounts.length > 0 && !expCashAccountId) {
+      const first = cashAccounts.find((a) => a.account_kind === paymentMethod)
+      if (first) setExpCashAccountId(first.id)
+    }
+  }, [cashAccounts, expCashAccountId, paymentMethod])
 
   const currentCashBalance = cashClosing
   const currentBankBalance = bankClosing
+  const currentOnlineBalance = onlineClosing
 
   const handleAddExpense = (e: React.FormEvent) => {
     e.preventDefault()
@@ -116,6 +161,8 @@ export default function DaybookPage() {
     if (!categoryName.trim()) return setFormError("Select or enter an expense category.")
     if (!description.trim()) return setFormError("A short description is required so the daybook stays auditable.")
     if (!isPositive(amount)) return setFormError("Expense amount must be greater than zero.")
+    if (expSettlement === "credit" && !expVendorId) return setFormError("A credit expense needs a vendor — the unpaid amount has to be owed to someone.")
+    if (expSettlement === "paid" && !expCashAccountId) return setFormError("Select the cash account this expense is paid from.")
     setFormError("")
     setDraftExpense({
       id: `exp-${Date.now()}`,
@@ -140,7 +187,10 @@ export default function DaybookPage() {
     try {
       const created = await createExpense({
         categoryName, payee: payee.trim(), amount, paymentMethod,
-        description: description.trim(), settlement: "paid", clientToken: `expense-${Date.now()}`,
+        description: description.trim(), settlement: expSettlement,
+        vendorId: expSettlement === "credit" ? expVendorId : undefined,
+        cashAccountId: expSettlement === "paid" ? expCashAccountId : undefined,
+        clientToken: `expense-${Date.now()}`,
       })
       if (!created.success || !(created.data as any)?.id) {
         setFormError(created.error ?? "Could not create the expense.")
@@ -152,7 +202,7 @@ export default function DaybookPage() {
         return
       }
       const row: any = posted.data ?? created.data
-      setFormNotice(`${row.expense_no ?? draftExpense.expense_no} posted — ${formatCurrency(amount)} for ${categoryName} (${paymentMethod}).`)
+      setFormNotice(`${row.expense_no ?? draftExpense.expense_no} posted — ${formatCurrency(amount)} for ${categoryName} (${expSettlement === "credit" ? "credit, unpaid" : paymentMethod}).`)
       setShowConfirm(false)
       setIsExpenseModalOpen(false)
       setDraftExpense(null)
@@ -161,6 +211,36 @@ export default function DaybookPage() {
       setIsPending(false)
       expenseGuard.current = false
     }
+  }
+
+  const handleTransfer = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (trPending) return
+    if (!trFrom || !trTo) return setFormError("Select both transfer accounts.")
+    if (trFrom === trTo) return setFormError("Transfer accounts must differ.")
+    if (!(trAmount > 0)) return setFormError("Transfer amount must be greater than zero.")
+    setTrPending(true)
+    try {
+      const res = await postTransfer({ fromAccountId: trFrom, toAccountId: trTo, amount: trAmount, referenceNo: trRef || undefined, clientToken: `transfer-${Date.now()}` })
+      if (!res.success) { setFormError(res.error ?? "Could not post the transfer."); return }
+      setFormNotice(`Transfer ${(res.data as any)?.transfer_no ?? ""} posted — ${formatCurrency(trAmount)} moved between accounts.`)
+      await loadData()
+    } finally { setTrPending(false) }
+  }
+
+  const handleCreateCashAccount = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (acctPending) return
+    if (!acctCode.trim() || !acctName.trim()) return setFormError("Cash account code and name are required.")
+    if (acctOpening < 0) return setFormError("Opening balance cannot be negative.")
+    setAcctPending(true)
+    try {
+      const res = await createCashAccount({ code: acctCode.trim(), name: acctName.trim(), accountKind: acctKind, openingBalance: acctOpening })
+      if (!res.success) { setFormError(res.error ?? "Could not create the cash account."); return }
+      setFormNotice(`Cash account ${acctCode.trim()} — ${acctName.trim()} created.`)
+      setAcctCode(""); setAcctName(""); setAcctOpening(0)
+      await loadData()
+    } finally { setAcctPending(false) }
   }
 
   const handleExpenseReverse = async (reasonCode: string, reason: string) => {
@@ -212,7 +292,7 @@ export default function DaybookPage() {
       </div>
 
       {/* Liquidity Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="expensive-card p-4">
           <div className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">
             Cash in Hand
@@ -233,13 +313,34 @@ export default function DaybookPage() {
 
         <div className="expensive-card p-4">
           <div className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">
+            Online
+          </div>
+          <div className="text-2xl font-black text-violet-600 dark:text-violet-400 mt-2">
+            {formatCurrency(currentOnlineBalance)}
+          </div>
+        </div>
+
+        <div className="expensive-card p-4">
+          <div className="text-xs text-muted-foreground font-semibold uppercase tracking-wider">
             Total Cash
           </div>
           <div className="text-2xl font-black text-foreground mt-2">
-            {formatCurrency(currentCashBalance + currentBankBalance)}
+            {formatCurrency(totalClosing)}
           </div>
+          {unattributedOpening !== 0 && (<p className="text-[11px] text-muted-foreground mt-1">Includes {formatCurrency(unattributedOpening)} opening recorded without an account.</p>)}
         </div>
       </div>
+
+      {/* Balances by account: each account has its own balance chain. */}
+      {accountBalances.length > 0 && (
+        <div className="expensive-card p-5">
+          <h2 className="text-sm font-bold text-foreground mb-3">Balances by account</h2>
+          <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Account</th><th className="pb-2">Kind</th><th className="pb-2 text-right">Opening</th><th className="pb-2 text-right">Closing</th></tr></thead>
+            <tbody className="divide-y divide-border">
+              {accountBalances.map((b: any, i: number) => (<tr key={b.cashAccountId ?? `kind-${b.accountKind}-${i}`}><td className="py-2 font-semibold">{b.cashAccountId ? `${b.code} — ${b.name}` : b.name}</td><td className="py-2 uppercase text-muted-foreground">{b.accountKind}</td><td className="py-2 text-right font-mono">{formatCurrency(Number(b.opening || 0))}</td><td className="py-2 text-right font-bold font-mono">{formatCurrency(Number(b.closing || 0))}</td></tr>))}
+            </tbody></table></div>
+        </div>
+      )}
 
       {/* Cash Movement Ledger Table */}
       <div className="expensive-card p-5">
@@ -261,7 +362,7 @@ export default function DaybookPage() {
                 <th className="pb-3 font-bold">Description</th>
                 <th className="pb-3 font-bold text-right">Cash In (Debit)</th>
                 <th className="pb-3 font-bold text-right">Cash Out (Credit)</th>
-                <th className="pb-3 font-bold text-right">Running Balance</th>
+                <th className="pb-3 font-bold text-right">Balance (this account)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border font-mono">
@@ -286,8 +387,8 @@ export default function DaybookPage() {
                       {row.voucher_type}
                     </span>
                   </td>
-                  <td className="py-3 text-muted-foreground uppercase text-[10px] font-bold">
-                    {row.account}
+                  <td className="py-3 text-muted-foreground text-[11px] font-semibold">
+                    {(row as any).account_label ?? row.account}
                   </td>
                   <td className="py-3 text-foreground font-sans max-w-xs truncate">
                     {row.description}
@@ -390,6 +491,33 @@ export default function DaybookPage() {
               </div>
 
               <div>
+                <label className="block font-medium text-foreground mb-1">Settlement</label>
+                <select value={expSettlement} onChange={(e) => setExpSettlement(e.target.value as "paid" | "credit")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                  <option value="paid">Paid now (cash out on posting)</option>
+                  <option value="credit">Credit (unpaid — settle later as a vendor payment)</option>
+                </select>
+              </div>
+              {expSettlement === "credit" && (
+                <div>
+                  <label className="block font-medium text-foreground mb-1">Vendor owed *</label>
+                  <select value={expVendorId} onChange={(e) => setExpVendorId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
+                    <option value="">Select vendor</option>
+                    {vendors.map((v: any) => (<option key={v.id} value={v.id}>{v.name}</option>))}
+                  </select>
+                </div>
+              )}
+              {expSettlement === "paid" && (
+                <div>
+                  <label className="block font-medium text-foreground mb-1">Cash account *</label>
+                  <select value={expCashAccountId} onChange={(e) => setExpCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
+                    <option value="">Select account</option>
+                    {cashAccounts.filter((a) => a.account_kind === paymentMethod).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}
+                  </select>
+                  {cashAccounts.filter((a) => a.account_kind === paymentMethod).length === 0 && (<p className="mt-1 text-[11px] text-muted-foreground">No {paymentMethod} account yet — create one below.</p>)}
+                </div>
+              )}
+
+              <div>
                 <label className="block font-medium text-foreground mb-1">Particulars / Description</label>
                 <input
                   type="text"
@@ -425,7 +553,34 @@ export default function DaybookPage() {
         <div><label className="block font-medium text-foreground mb-1">From</label><input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
         <div><label className="block font-medium text-foreground mb-1">To</label><input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
         <button type="button" onClick={loadData} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer">Load daybook</button>
-        <span className="text-muted-foreground">Daybook is per account and date range (getDaybook). Cash + bank closings above come from those two calls; transfers are included in the entries.</span>
+        <span className="text-muted-foreground">Daybook is per account and date range (getDaybook). Cash, bank and online closings above come from those three calls; the balance column is per account, not one merged chain. Transfers are included in the entries.</span>
+      </div>
+      <div className="expensive-card p-5">
+        <h2 className="text-sm font-bold text-foreground mb-1">Cash transfer</h2>
+        <p className="text-xs text-muted-foreground mb-4">Move cash between two accounts. A transfer is never revenue or expense.</p>
+        <form onSubmit={handleTransfer} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          <div><label className="block font-medium text-foreground mb-1">From account *</label><select value={trFrom} onChange={(e) => setTrFrom(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name} ({a.account_kind})</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1">To account *</label><select value={trTo} onChange={(e) => setTrTo(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name} ({a.account_kind})</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1">Amount *</label><input type="number" value={trAmount} onChange={(e) => setTrAmount(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Reference</label><input value={trRef} onChange={(e) => setTrRef(e.target.value)} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+          <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={trPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{trPending ? "Posting…" : "Post transfer"}</button></div>
+        </form>
+      </div>
+      <div className="expensive-card p-5">
+        <h2 className="text-sm font-bold text-foreground mb-1">Cash accounts</h2>
+        <p className="text-xs text-muted-foreground mb-4">Receipts, payments and paid expenses must land in one of these accounts, so per-account daybook views stay complete.</p>
+        <form onSubmit={handleCreateCashAccount} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs mb-4">
+          <div><label className="block font-medium text-foreground mb-1">Code *</label><input value={acctCode} onChange={(e) => setAcctCode(e.target.value)} placeholder="e.g. CASH-01" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Name *</label><input value={acctName} onChange={(e) => setAcctName(e.target.value)} placeholder="e.g. Godown Counter Cash" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Kind *</label><select value={acctKind} onChange={(e) => setAcctKind(e.target.value as "cash" | "bank" | "online")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="cash">Cash</option><option value="bank">Bank</option><option value="online">Online</option></select></div>
+          <div><label className="block font-medium text-foreground mb-1">Opening balance</label><input type="number" value={acctOpening} onChange={(e) => setAcctOpening(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+          <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={acctPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{acctPending ? "Creating…" : "Create cash account"}</button></div>
+        </form>
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Code</th><th className="pb-2">Name</th><th className="pb-2">Kind</th><th className="pb-2 text-right">Opening</th></tr></thead>
+          <tbody className="divide-y divide-border">
+            {cashAccounts.length === 0 && <tr><td colSpan={4} className="py-4 text-muted-foreground">No cash accounts yet — create the first one above.</td></tr>}
+            {cashAccounts.map((a: any) => (<tr key={a.id}><td className="py-2 font-mono font-bold">{a.code}</td><td className="py-2">{a.name}</td><td className="py-2 uppercase text-muted-foreground">{a.account_kind}</td><td className="py-2 text-right font-mono">{formatCurrency(Number(a.opening_balance || 0))}</td></tr>))}
+          </tbody></table></div>
       </div>
       <div className="expensive-card p-5">
         <div className="flex items-center justify-between mb-3">
@@ -435,12 +590,12 @@ export default function DaybookPage() {
         <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Expense</th><th className="pb-2">Category</th><th className="pb-2">Payee</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
             {expenses.length === 0 && <tr><td colSpan={5} className="py-4 text-muted-foreground">No expenses recorded yet.</td></tr>}
-            {expenses.map((e: any) => (<tr key={e.id}><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.status === "posted" && (<button type="button" onClick={() => setExpReverseTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
+            {expenses.map((e: any) => (<tr key={e.id}><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.settlement ? ` (${e.settlement})` : ""}{e.status === "posted" && (<button type="button" onClick={() => setExpReverseTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
           </tbody></table></div>
         {daybook && (
           <div className="hidden print:block mt-2">
             <DaybookPrint
-              accountName="Cash + Bank"
+              accountName="Cash + Bank + Online"
               dateFrom={fromDate}
               dateTo={toDate}
               openingBalance={daybook.opening}
@@ -454,7 +609,7 @@ export default function DaybookPage() {
       <ConfirmDialog
         open={showConfirm}
         title="Post this expense?"
-        description={draftExpense ? `${draftExpense.expense_no}: ${formatCurrency(draftExpense.amount)} to ${draftExpense.payee} for ${draftExpense.category_name} via ${draftExpense.payment_method}.` : ""}
+        description={draftExpense ? `${draftExpense.expense_no}: ${formatCurrency(draftExpense.amount)} to ${draftExpense.payee} for ${draftExpense.category_name} (${expSettlement === "credit" ? "credit, unpaid" : `paid via ${draftExpense.payment_method}`}).` : ""}
         confirmLabel="Post Expense to Cashbook"
         pending={isPending}
         onConfirm={handleConfirmExpense}
