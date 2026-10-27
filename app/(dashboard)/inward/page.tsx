@@ -38,6 +38,8 @@ export default function InwardPage() {
   const [godowns, setGodowns] = React.useState<Godown[]>([])
   const [products, setProducts] = React.useState<Product[]>([])
   const [parties, setParties] = React.useState<Party[]>([])
+  const [owners, setOwners] = React.useState<Party[]>([])
+  const [ownerId, setOwnerId] = React.useState("")
 
   // Modal / Form state
   const [isFormOpen, setIsFormOpen] = React.useState(false)
@@ -70,7 +72,7 @@ export default function InwardPage() {
     tareWeight: number
     rate: number
   }[]>([
-    { productId: "", bags: 100, grossWeight: 5050, tareWeight: 50, rate: 120 },
+    { productId: "", bags: 0, grossWeight: 0, tareWeight: 0, rate: 0 },
   ])
 
   // Supabase-backed load: DB rows (incoming_goods + incoming_goods_items)
@@ -93,6 +95,7 @@ export default function InwardPage() {
       setGodowns(godownList)
       setProducts(productList)
       setParties(partyList.filter((pt) => pt.type === "supplier" || pt.type === "both" || pt.type === "source"))
+      setOwners(partyList)
       setVouchers((Array.isArray(v.data) ? v.data : []).map((row: any) => ({
         ...row,
         party_name: partyList.find((x) => x.id === row.party_id)?.name ?? row.party_id,
@@ -118,7 +121,7 @@ export default function InwardPage() {
     if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
     if (parties.length > 0 && !partyId) setPartyId(parties[0].id)
     if (products.length > 0 && items[0].productId === "") {
-      setItems([{ productId: products[0].id, bags: 200, grossWeight: 10100, tareWeight: 100, rate: 125 }])
+      setItems((prev) => [{ ...prev[0], productId: products[0].id }])
     }
   }, [godowns, parties, products, godownId, partyId, items])
 
@@ -127,10 +130,10 @@ export default function InwardPage() {
       ...prev,
       {
         productId: products[0]?.id || "",
-        bags: 100,
-        grossWeight: 5050,
-        tareWeight: 50,
-        rate: 120,
+        bags: 0,
+        grossWeight: 0,
+        tareWeight: 0,
+        rate: 0,
       },
     ])
   }
@@ -178,7 +181,6 @@ export default function InwardPage() {
 
     const selectedParty = parties.find((p) => p.id === partyId)
     const selectedGodown = godowns.find((g) => g.id === godownId)
-    const voucherNo = `INW-2026-${String(vouchers.length + 1).padStart(3, "0")}`
     const voucherItems: IncomingGoodsItem[] = items.map((item, idx) => {
       const prod = products.find((p) => p.id === item.productId)
       const netWeight = Math.max(0, item.grossWeight - item.tareWeight)
@@ -195,9 +197,10 @@ export default function InwardPage() {
         total_value: netWeight * Number(item.rate),
       }
     })
+    // No voucher number is shown before posting: the server assigns it.
     setDraftVoucher({
       id: `inw-${Date.now()}`,
-      voucher_no: voucherNo,
+      voucher_no: "", 
       date: new Date().toISOString(),
       party_id: partyId,
       party_name: selectedParty?.name,
@@ -228,6 +231,7 @@ export default function InwardPage() {
       const created = await createInwardDraft({
         partyId, godownId, biltyNo: biltyNo || undefined, vehicleNo: vehicleNo || undefined,
         driverName: driverName || undefined, driverPhone: driverPhone || undefined, notes: notes || undefined,
+        isCustomerOwned: ownerId ? true : false, ownerPartyId: ownerId || undefined,
         items: items.map((it) => ({
           productId: it.productId, bags: Number(it.bags), grossWeightKg: Number(it.grossWeight),
           tareWeightKg: Number(it.tareWeight), ratePerUnit: Number(it.rate),
@@ -243,8 +247,18 @@ export default function InwardPage() {
         return
       }
       const row: any = posted.data ?? created.data
-      setFormNotice(`${row.voucher_no ?? draftVoucher.voucher_no} posted — ${formatWeight(row.total_net_weight_kg ?? draftVoucher.total_net_weight_kg)} added to ${draftVoucher.godown_name || "the godown"}.`)
-      setSelectedVoucherForPrint({ ...draftVoucher, voucher_no: row.voucher_no ?? draftVoucher.voucher_no, status: "posted" })
+      setFormNotice(`${row.voucher_no} posted — ${formatWeight(row.total_net_weight_kg ?? draftVoucher.total_net_weight_kg)} added to ${draftVoucher.godown_name || "the godown"}.`)
+      const fresh = await getInward((created.data as any).id)
+      const serverRow: any = fresh.success ? fresh.data : row
+      setSelectedVoucherForPrint({
+        ...serverRow,
+        party_name: parties.find((x) => x.id === serverRow.party_id)?.name ?? serverRow.party_id,
+        godown_name: godowns.find((x) => x.id === serverRow.godown_id)?.name ?? serverRow.godown_id,
+        items: (serverRow.incoming_goods_items ?? serverRow.items ?? []).map((it: any) => ({
+          ...it,
+          product_name: products.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+        })),
+      })
       setShowPostConfirm(false)
       setIsFormOpen(false)
       setDraftVoucher(null)
@@ -351,8 +365,8 @@ export default function InwardPage() {
                   <td className="py-3 font-bold text-foreground">
                     <div className="flex items-center gap-1.5">
                       <span>{v.voucher_no}</span>
-                      <span className={v.status === "reversed" ? "px-1.5 py-0.2 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase" : "px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase"}>
-                        {v.status === "reversed" ? "Reversed" : "Posted"}
+                      <span className={v.status === "reversed" ? "px-1.5 py-0.2 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase" : v.status === "draft" ? "px-1.5 py-0.2 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[9px] font-bold uppercase" : "px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase"}>
+                        {v.status === "draft" ? "Draft" : v.status === "reversed" ? "Reversed" : "Posted"}
                       </span>
                     </div>
                   </td>
@@ -452,6 +466,22 @@ export default function InwardPage() {
                     {godowns.map((g) => (
                       <option key={g.id} value={g.id}>
                         {g.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1">Stock owner</label>
+                  <select
+                    value={ownerId}
+                    onChange={(e) => setOwnerId(e.target.value)}
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  >
+                    <option value="">Company stock</option>
+                    {owners.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
                       </option>
                     ))}
                   </select>
@@ -764,7 +794,7 @@ export default function InwardPage() {
       <ConfirmDialog
         open={showPostConfirm}
         title="Post this inward voucher?"
-        description={draftVoucher ? `${draftVoucher.voucher_no} will add ${formatWeight(draftVoucher.total_net_weight_kg)} (${formatBags(draftVoucher.total_bags)}) to ${draftVoucher.godown_name || "the selected godown"}. Posted vouchers can only be changed by reversal.` : ""}
+        description={draftVoucher ? `Posting will add ${formatWeight(draftVoucher.total_net_weight_kg)} (${formatBags(draftVoucher.total_bags)}) to ${draftVoucher.godown_name || "the selected godown"}. A voucher number is assigned on posting. Posted vouchers can only be changed by reversal.` : ""}
         confirmLabel="Post & Update Stock Ledger"
         pending={isPending}
         onConfirm={handleConfirmPost}

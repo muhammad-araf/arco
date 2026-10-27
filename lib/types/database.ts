@@ -9,7 +9,7 @@ export type ProductUnit = "kg" | "bag" | "maund"
 
 export type PartyType = "customer" | "supplier" | "both" | "source"
 
-export type VoucherStatus = "draft" | "posted" | "reversed" | "returned"
+export type VoucherStatus = "draft" | "posted" | "reversed" | "returned" | "partially_returned"
 
 export type RateBasis = "per_bag" | "per_50kg" | "per_kg" | "per_maund" | "fixed"
 

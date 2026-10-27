@@ -15,9 +15,9 @@ import {
   Plus,
   Download,
 } from "lucide-react"
-import { getStockSummary, getStockLedger, createTransfer, postTransfer, createAdjustment, postAdjustment, reverseAdjustment } from "@/app/actions/inventory"
-import { listGodowns, listProducts } from "@/app/actions/masters"
-import { StockLedgerEntry, Godown, Product } from "@/lib/types/database"
+import { getStockSummary, getStockLedger, createTransfer, postTransfer, reverseTransfer, createAdjustment, postAdjustment, reverseAdjustment, listTransfers, listAdjustments } from "@/app/actions/inventory"
+import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
+import { StockLedgerEntry, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDateTime } from "@/lib/utils"
 import { exportToCSV } from "@/lib/export-utils"
 import {
@@ -33,18 +33,24 @@ import {
 } from "@/components/erp-ui"
 
 export default function InventoryPage() {
-  const [activeTab, setActiveTab] = React.useState<"summary" | "ledger">("summary")
-  const [stockSummary, setStockSummary] = React.useState<any[]>([])
+  const [activeTab, setActiveTab] = React.useState<"summary" | "ledger" | "transfers" | "adjustments">("summary")
   const [rawSummary, setRawSummary] = React.useState<any[]>([])
+  const [transfers, setTransfers] = React.useState<any[]>([])
+  const [adjustments, setAdjustments] = React.useState<any[]>([])
+  const [parties, setParties] = React.useState<Party[]>([])
+  const [collapsedGodowns, setCollapsedGodowns] = React.useState<string[]>([])
+  const [ledgerPage, setLedgerPage] = React.useState(1)
+  const [ledgerTotal, setLedgerTotal] = React.useState(0)
   const [adjGodown, setAdjGodown] = React.useState("")
   const [adjProduct, setAdjProduct] = React.useState("")
-  const [adjAfter, setAdjAfter] = React.useState<number>(0)
+  const [adjOwner, setAdjOwner] = React.useState("")
+  const [adjAfter, setAdjAfter] = React.useState("")
   const [adjReason, setAdjReason] = React.useState("")
   const [adjApprover, setAdjApprover] = React.useState("")
   const [adjPending, setAdjPending] = React.useState(false)
-  const [postedAdjId, setPostedAdjId] = React.useState<string | null>(null)
-  const [adjReverseOpen, setAdjReverseOpen] = React.useState(false)
-  const [adjReversing, setAdjReversing] = React.useState(false)
+  const [revTransfer, setRevTransfer] = React.useState<any | null>(null)
+  const [revAdjustment, setRevAdjustment] = React.useState<any | null>(null)
+  const [revPending, setRevPending] = React.useState(false)
   const [ledgerEntries, setLedgerEntries] = React.useState<StockLedgerEntry[]>([])
   const [godowns, setGodowns] = React.useState<Godown[]>([])
   const [products, setProducts] = React.useState<Product[]>([])
@@ -59,7 +65,8 @@ export default function InventoryPage() {
   const [transferFromGodown, setTransferFromGodown] = React.useState("")
   const [transferToGodown, setTransferToGodown] = React.useState("")
   const [transferProductId, setTransferProductId] = React.useState("")
-  const [transferQty, setTransferQty] = React.useState<number>(1000)
+  const [transferQty, setTransferQty] = React.useState<number>(0)
+  const [transferOwner, setTransferOwner] = React.useState("")
   const [transferNotes, setTransferNotes] = React.useState("")
   const [isLoading, setIsLoading] = React.useState(true)
   const [transferError, setTransferError] = React.useState("")
@@ -69,45 +76,46 @@ export default function InventoryPage() {
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
   const transferGuard = React.useRef(false)
 
+  const applyLedgerPage = React.useCallback((le: any, godownList: Godown[], productList: Product[]) => {
+    const rows = Array.isArray(le.data?.rows) ? le.data.rows : []
+    setLedgerTotal(Number(le.data?.total) || 0)
+    setLedgerEntries(rows.map((e: any) => ({
+      ...e,
+      godown_name: godownList.find((x) => x.id === e.godown_id)?.name ?? e.godown_id,
+      product_name: productList.find((x) => x.id === e.product_id)?.name ?? e.product_id,
+    })))
+  }, [])
+
+  const loadLedgerPage = React.useCallback(async (page: number, godown: string, godownList: Godown[], productList: Product[]) => {
+    const le = await getStockLedger({ page, pageSize: 50, godownId: godown !== "all" ? godown : undefined })
+    if (!le.success) setTransferError(le.error ?? "Could not load the ledger.")
+    else applyLedgerPage(le, godownList, productList)
+    setLedgerPage(page)
+  }, [applyLedgerPage])
+
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [sm, le, g, pr] = await Promise.all([getStockSummary(), getStockLedger(), listGodowns(), listProducts()])
-      const failed = [sm, le, g, pr].find((r) => !r.success)
+      const [sm, le, g, pr, pa, tr, ad] = await Promise.all([getStockSummary(), getStockLedger({ page: 1, pageSize: 50 }), listGodowns(), listProducts(), listParties(), listTransfers(), listAdjustments()])
+      const failed = [sm, le, g, pr, pa, tr, ad].find((r) => !r.success)
       if (failed) setTransferError(failed.error ?? "Could not load inventory data.")
       const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
       const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-      const rows = Array.isArray(sm.data) ? sm.data : []
-      setRawSummary(rows)
+      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+      setRawSummary(Array.isArray(sm.data) ? sm.data : [])
       setGodowns(godownList)
       setProducts(productList)
-      const grouped = new Map<string, any>()
-      for (const r of rows) {
-        const prod = productList.find((x) => x.id === r.product_id)
-        const cur = grouped.get(r.product_id) ?? {
-          id: r.product_id, code: prod?.code ?? "", name: r.product_name, category: prod?.category ?? "",
-          totalStock: 0, bagsCount: 0, min_stock: prod?.min_stock ?? r.min_stock_kg ?? 0, isLowStock: false,
-        }
-        cur.totalStock += Number(r.balance_kg) || 0
-        cur.isLowStock = cur.isLowStock || !!r.below_min_stock
-        grouped.set(r.product_id, cur)
-      }
-      for (const cur of grouped.values()) {
-        const prod = productList.find((x) => x.id === cur.id)
-        cur.bagsCount = prod?.weight_per_bag ? Math.round(cur.totalStock / prod.weight_per_bag) : 0
-      }
-      setStockSummary([...grouped.values()])
-      setLedgerEntries((Array.isArray(le.data) ? le.data : []).map((e: any) => ({
-        ...e,
-        godown_name: godownList.find((x) => x.id === e.godown_id)?.name ?? e.godown_id,
-        product_name: productList.find((x) => x.id === e.product_id)?.name ?? e.product_id,
-      })))
+      setParties(partyList)
+      setTransfers(Array.isArray(tr.data) ? tr.data : [])
+      setAdjustments(Array.isArray(ad.data) ? ad.data : [])
+      setLedgerPage(1)
+      applyLedgerPage(le, godownList, productList)
     } catch (err) {
       setTransferError(err instanceof Error ? err.message : "Could not load inventory data.")
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [applyLedgerPage])
 
   // Mount load: without this the page never leaves its skeleton —
   // isLoading starts true and only post-action handlers reloaded before.
@@ -123,20 +131,20 @@ export default function InventoryPage() {
     }
   }, [godowns, products, transferFromGodown, transferToGodown, transferProductId])
 
-  const filteredSummary = stockSummary.filter((p) => {
-    const matchesSearch = (p.name ?? "").toLowerCase().includes(searchQuery.toLowerCase()) || (p.code ?? "").toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesCategory = selectedCategory === "all" || (p.category ?? "") === selectedCategory
-    const matchesDrill = drillFilter === "low" ? p.isLowStock : true
+  const filteredSummary = rawSummary.filter((r) => {
+    const prod = products.find((x) => x.id === r.product_id)
+    const matchesSearch = (r.product_name ?? "").toLowerCase().includes(searchQuery.toLowerCase()) || (prod?.code ?? "").toLowerCase().includes(searchQuery.toLowerCase())
+    const matchesCategory = selectedCategory === "all" || (prod?.category ?? "") === selectedCategory
+    const matchesDrill = drillFilter === "low" ? !!r.below_min_stock : true
     return matchesSearch && matchesCategory && matchesDrill
   })
 
   const filteredLedger = ledgerEntries.filter((entry) => {
-    const matchesGodown = selectedGodown === "all" || entry.godown_id === selectedGodown
     const matchesSearch =
       (entry.product_name || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
       entry.voucher_no.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (entry.notes || "").toLowerCase().includes(searchQuery.toLowerCase())
-    return matchesGodown && matchesSearch
+    return matchesSearch
   })
 
   const handleExecuteTransfer = (e: React.FormEvent) => {
@@ -148,7 +156,8 @@ export default function InventoryPage() {
     if (transferFromGodown === transferToGodown) return setTransferError("Source and destination must be different.")
     if (!isPositive(transferQty)) return setTransferError("Transfer quantity must be greater than zero.")
     if (!transferNotes.trim()) return setTransferError("A reason is required. Write why this stock is moving.")
-    const availableStock = rawSummary.filter((r) => r.product_id === transferProductId && r.godown_id === transferFromGodown).reduce((a, r) => a + (Number(r.balance_kg) || 0), 0)
+    const ownerRow = rawSummary.find((r) => r.product_id === transferProductId && r.godown_id === transferFromGodown && (r.party_id ?? null) === (transferOwner || null))
+    const availableStock = Number(ownerRow?.balance_kg) || 0
     if (transferQty > availableStock) return setTransferError(`Insufficient stock in the source godown: ${availableStock} kg available, but ${transferQty} kg requested. Reduce the quantity.`)
     setTransferError("")
     setShowTransferConfirm(true)
@@ -162,6 +171,7 @@ export default function InventoryPage() {
       const created = await createTransfer({
         fromGodownId: transferFromGodown, toGodownId: transferToGodown, productId: transferProductId,
         quantityKg: transferQty, reason: transferNotes.trim(), notes: transferNotes.trim(),
+        partyId: transferOwner || undefined,
       })
       if (!created.success || !(created.data as any)?.id) {
         setTransferError(created.error ?? "Could not create the transfer draft.")
@@ -184,18 +194,20 @@ export default function InventoryPage() {
     }
   }
 
-  const adjBefore = rawSummary.filter((r) => r.product_id === adjProduct && r.godown_id === adjGodown).reduce((a, r) => a + (Number(r.balance_kg) || 0), 0)
+  const adjBeforeRow = rawSummary.find((r) => r.product_id === adjProduct && r.godown_id === adjGodown && (r.party_id ?? null) === (adjOwner || null))
+  const adjBefore = Number(adjBeforeRow?.balance_kg) || 0
   const handleAdjustment = async (e: React.FormEvent) => {
     e.preventDefault()
     if (adjPending) return
     if (!adjGodown || !adjProduct) return setTransferError("Select a godown and product for the adjustment.")
+    if (adjAfter === "" || Number.isNaN(Number(adjAfter))) return setTransferError("Enter the quantity after (kg) — it is left blank on purpose so a careless submit cannot zero stock.")
     if (!adjReason.trim()) return setTransferError("An adjustment reason is required.")
     if (!adjApprover.trim()) return setTransferError("An approver is required for a stock adjustment.")
     setAdjPending(true)
     try {
       const created = await createAdjustment({
-        godownId: adjGodown, productId: adjProduct, quantityBeforeKg: adjBefore, quantityAfterKg: adjAfter,
-        reason: adjReason.trim(), approver: adjApprover.trim(),
+        godownId: adjGodown, productId: adjProduct, quantityBeforeKg: adjBefore, quantityAfterKg: Number(adjAfter),
+        reason: adjReason.trim(), approver: adjApprover.trim(), partyId: adjOwner || undefined,
       })
       if (!created.success || !(created.data as any)?.id) {
         setTransferError(created.error ?? "Could not create the adjustment.")
@@ -206,29 +218,44 @@ export default function InventoryPage() {
         setTransferError(posted.error ?? "Could not post the adjustment.")
         return
       }
-      setPostedAdjId((created.data as any).id)
-      setTransferNotice(`Stock adjustment posted: ${adjBefore} kg → ${adjAfter} kg, approved by ${adjApprover.trim()}.`)
+      setTransferNotice(`Stock adjustment posted: ${adjBefore} kg → ${Number(adjAfter)} kg, approved by ${adjApprover.trim()}.`)
       await loadData()
     } finally {
       setAdjPending(false)
     }
   }
 
-  const handleAdjReversal = async (reasonCode: string, reason: string) => {
-    if (!postedAdjId || adjReversing) return
-    setAdjReversing(true)
+  const handleTransferReversal = async (reasonCode: string, reason: string) => {
+    if (!revTransfer || revPending) return
+    setRevPending(true)
     try {
-      const res = await reverseAdjustment(postedAdjId, `${reasonCode}: ${reason}`, `adjustment-rev-${Date.now()}`)
+      const res = await reverseTransfer(revTransfer.id, `${reasonCode}: ${reason}`, `transfer-rev-${Date.now()}`)
+      if (!res.success) {
+        setTransferError(res.error ?? "Could not reverse the transfer.")
+        return
+      }
+      setTransferNotice(`Transfer ${revTransfer.transfer_no} reversed.`)
+      setRevTransfer(null)
+      await loadData()
+    } finally {
+      setRevPending(false)
+    }
+  }
+
+  const handleAdjReversal = async (reasonCode: string, reason: string) => {
+    if (!revAdjustment || revPending) return
+    setRevPending(true)
+    try {
+      const res = await reverseAdjustment(revAdjustment.id, `${reasonCode}: ${reason}`, `adjustment-rev-${Date.now()}`)
       if (!res.success) {
         setTransferError(res.error ?? "Could not reverse the adjustment.")
         return
       }
-      setTransferNotice("Stock adjustment reversed.")
-      setPostedAdjId(null)
-      setAdjReverseOpen(false)
+      setTransferNotice(`Adjustment ${revAdjustment.adjustment_no} reversed.`)
+      setRevAdjustment(null)
       await loadData()
     } finally {
-      setAdjReversing(false)
+      setRevPending(false)
     }
   }
 
@@ -253,15 +280,34 @@ export default function InventoryPage() {
             onClick={() => {
               if (activeTab === "summary") {
                 exportToCSV(
-                  filteredSummary.map((p) => ({
-                    code: p.code,
-                    name: p.name,
-                    category: p.category,
-                    stock_kg: p.totalStock,
-                    bags: p.bagsCount,
-                    min_stock: p.min_stock || 0,
+                  filteredSummary.map((r) => ({
+                    godown: r.godown_name,
+                    product: r.product_name,
+                    owner: r.party_name || "Company",
+                    stock_kg: r.balance_kg,
+                    min_stock: r.min_stock_kg || 0,
+                    below_min: r.below_min_stock ? "yes" : "no",
                   })),
                   "godown_stock_summary"
+                )
+              } else if (activeTab === "transfers") {
+                exportToCSV(
+                  transfers.map((t: any) => ({
+                    transfer_no: t.transfer_no, date: t.date, from: godowns.find((g) => g.id === t.from_godown_id)?.name ?? t.from_godown_id,
+                    to: godowns.find((g) => g.id === t.to_godown_id)?.name ?? t.to_godown_id,
+                    product: products.find((x) => x.id === t.product_id)?.name ?? t.product_id,
+                    quantity_kg: t.quantity, status: t.status,
+                  })),
+                  "transfers"
+                )
+              } else if (activeTab === "adjustments") {
+                exportToCSV(
+                  adjustments.map((a: any) => ({
+                    adjustment_no: a.adjustment_no, date: a.date, godown: godowns.find((g) => g.id === a.godown_id)?.name ?? a.godown_id,
+                    product: products.find((x) => x.id === a.product_id)?.name ?? a.product_id,
+                    before_kg: a.quantity_before, after_kg: a.quantity_after, status: a.status,
+                  })),
+                  "adjustments"
                 )
               } else {
                 exportToCSV(
@@ -321,7 +367,29 @@ export default function InventoryPage() {
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            Movement Ledger ({ledgerEntries.length})
+            Movement Ledger ({ledgerTotal})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("transfers")}
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === "transfers"
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Transfers ({transfers.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("adjustments")}
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === "adjustments"
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Adjustments ({adjustments.length})
           </button>
         </div>
 
@@ -352,7 +420,7 @@ export default function InventoryPage() {
           ) : (
             <select
               value={selectedGodown}
-              onChange={(e) => setSelectedGodown(e.target.value)}
+              onChange={(e) => { setSelectedGodown(e.target.value); void loadLedgerPage(1, e.target.value, godowns, products) }}
               className="px-2.5 py-1.5 rounded-lg bg-background border border-border text-xs text-foreground"
             >
               <option value="all">All Godowns</option>
@@ -366,70 +434,84 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* Tab 1: Live Stock Summary Table */}
+      {/* Tab 1: Live Stock Summary, grouped per godown. Low stock is
+          evaluated per godown row, never from an enterprise total. */}
       {activeTab === "summary" && (
-        <div className="expensive-card p-5">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
-                  <th className="pb-3 font-bold">Code</th>
-                  <th className="pb-3 font-bold">Product / Grain</th>
-                  <th className="pb-3 font-bold">Category</th>
-                  <th className="pb-3 font-bold text-right">Available Weight</th>
-                  <th className="pb-3 font-bold text-right">Estimated Bags</th>
-                  <th className="pb-3 font-bold text-right">Min Threshold</th>
-                  <th className="pb-3 font-bold text-center">Status</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {filteredSummary.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="py-4">
-                      <EmptyState
-                        title={drillFilter === "low" ? "No low-stock items" : "No stock rows match these filters"}
-                        hint={drillFilter === "low" ? "Every product is above its minimum stock right now." : "Try a different search, or post an inward voucher."}
-                      />
-                    </td>
-                  </tr>
+        <div className="space-y-4">
+          {godowns.map((g) => {
+            const rows = filteredSummary.filter((r) => r.godown_id === g.id)
+            if (!rows.length) return null
+            const lowCount = rows.filter((r) => r.below_min_stock).length
+            return (
+              <div key={g.id} className="expensive-card p-5">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-bold text-foreground">{g.name}</h2>
+                  <span className="flex items-center gap-3">
+                    <span className="text-xs text-muted-foreground">
+                      {rows.length} product pools{lowCount > 0 ? ` · ${lowCount} below minimum` : ""}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setCollapsedGodowns((prev) => prev.includes(g.id) ? prev.filter((id) => id !== g.id) : [...prev, g.id])}
+                      className="text-xs font-semibold text-primary hover:underline cursor-pointer"
+                    >
+                      {collapsedGodowns.includes(g.id) ? "Expand" : "Collapse"}
+                    </button>
+                  </span>
+                </div>
+                {!collapsedGodowns.includes(g.id) && (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
+                        <th className="pb-3 font-bold">Product / Grain</th>
+                        <th className="pb-3 font-bold">Owner</th>
+                        <th className="pb-3 font-bold text-right">Available Weight</th>
+                        <th className="pb-3 font-bold text-right">Min Threshold</th>
+                        <th className="pb-3 font-bold text-center">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {rows.map((item: any) => (
+                        <tr key={`${item.godown_id}-${item.product_id}-${item.party_id ?? ""}`} className="hover:bg-muted transition-colors">
+                          <td className="py-3 font-bold text-foreground">{item.product_name}</td>
+                          <td className="py-3 text-muted-foreground">{item.party_name || "Company"}</td>
+                          <td className="py-3 text-right font-black text-emerald-600 dark:text-emerald-400 text-sm">
+                            {formatWeight(item.balance_kg)}
+                          </td>
+                          <td className="py-3 text-right text-muted-foreground font-mono">
+                            {formatWeight(item.min_stock_kg || 0)}
+                          </td>
+                          <td className="py-3 text-center">
+                            {item.below_min_stock ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-semibold border border-amber-500/20">
+                                <AlertTriangle className="h-3 w-3" />
+                                Low Stock
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-semibold border border-emerald-500/20">
+                                <CheckCircle2 className="h-3 w-3" />
+                                In Stock
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
                 )}
-                {filteredSummary.map((item) => (
-                  <tr key={item.id} className="hover:bg-muted transition-colors">
-                    <td className="py-3 font-mono font-bold text-muted-foreground">{item.code}</td>
-                    <td className="py-3 font-bold text-foreground">
-                      <div>{item.name}</div>
-                      {item.notes && <div className="text-[10px] text-muted-foreground">{item.notes}</div>}
-                    </td>
-                    <td className="py-3 text-muted-foreground capitalize">
-                      {String(item.category ?? "").replace("_", " ")}
-                    </td>
-                    <td className="py-3 text-right font-black text-emerald-600 dark:text-emerald-400 text-sm">
-                      {formatWeight(item.totalStock)}
-                    </td>
-                    <td className="py-3 text-right font-semibold text-foreground">
-                      {item.bagsCount ? formatBags(item.bagsCount) : "—"}
-                    </td>
-                    <td className="py-3 text-right text-muted-foreground font-mono">
-                      {formatWeight(item.min_stock || 0)}
-                    </td>
-                    <td className="py-3 text-center">
-                      {item.isLowStock ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-semibold border border-amber-500/20">
-                          <AlertTriangle className="h-3 w-3" />
-                          Low Stock
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-semibold border border-emerald-500/20">
-                          <CheckCircle2 className="h-3 w-3" />
-                          In Stock
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              </div>
+            )
+          })}
+          {filteredSummary.length === 0 && (
+            <div className="expensive-card p-5">
+              <EmptyState
+                title={drillFilter === "low" ? "No low-stock items" : "No stock rows match these filters"}
+                hint={drillFilter === "low" ? "Every godown pool is above its minimum stock right now." : "Try a different search, or post an inward voucher."}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -493,19 +575,121 @@ export default function InventoryPage() {
         </div>
       )}
 
+      {activeTab === "ledger" && (
+        <div className="expensive-card p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <span className="text-muted-foreground">
+            {ledgerPage === 1
+              ? `Showing latest ${ledgerEntries.length} of ${ledgerTotal} ledger rows`
+              : `Showing rows ${(ledgerPage - 1) * 50 + 1}–${(ledgerPage - 1) * 50 + ledgerEntries.length} of ${ledgerTotal} ledger rows`}
+            {searchQuery ? ` (search filters this page only)` : ""}
+          </span>
+          <span className="flex items-center gap-2">
+            <button type="button" disabled={ledgerPage <= 1} onClick={() => void loadLedgerPage(ledgerPage - 1, selectedGodown, godowns, products)} className="px-3 py-1.5 rounded-lg bg-muted text-foreground font-semibold cursor-pointer disabled:opacity-50">Previous</button>
+            <span className="font-mono">Page {ledgerPage} of {Math.max(1, Math.ceil(ledgerTotal / 50))}</span>
+            <button type="button" disabled={ledgerPage * 50 >= ledgerTotal} onClick={() => void loadLedgerPage(ledgerPage + 1, selectedGodown, godowns, products)} className="px-3 py-1.5 rounded-lg bg-muted text-foreground font-semibold cursor-pointer disabled:opacity-50">Next</button>
+          </span>
+        </div>
+      )}
+
+      {/* Transfers register */}
+      {activeTab === "transfers" && (
+        <div className="expensive-card p-5">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
+                  <th className="pb-3 font-bold">Transfer No</th>
+                  <th className="pb-3 font-bold">Date</th>
+                  <th className="pb-3 font-bold">From → To</th>
+                  <th className="pb-3 font-bold">Product</th>
+                  <th className="pb-3 font-bold">Owner</th>
+                  <th className="pb-3 font-bold text-right">Quantity</th>
+                  <th className="pb-3 font-bold text-center">Status</th>
+                  <th className="pb-3 font-bold text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {transfers.length === 0 && (
+                  <tr><td colSpan={8} className="py-4"><EmptyState title="No transfers yet" hint="Use the Transfer button to move stock between godowns." /></td></tr>
+                )}
+                {transfers.map((t: any) => (
+                  <tr key={t.id} className="hover:bg-muted transition-colors">
+                    <td className="py-3 font-bold text-foreground font-mono">{t.transfer_no}</td>
+                    <td className="py-3 text-muted-foreground">{formatDateTime(t.date)}</td>
+                    <td className="py-3 text-muted-foreground">{godowns.find((g) => g.id === t.from_godown_id)?.name ?? t.from_godown_id} → {godowns.find((g) => g.id === t.to_godown_id)?.name ?? t.to_godown_id}</td>
+                    <td className="py-3 font-semibold text-foreground">{products.find((x) => x.id === t.product_id)?.name ?? t.product_id}</td>
+                    <td className="py-3 text-muted-foreground">{t.party_id ? (parties.find((x) => x.id === t.party_id)?.name ?? t.party_id) : "Company"}</td>
+                    <td className="py-3 text-right font-bold text-foreground">{formatWeight(t.quantity)}</td>
+                    <td className="py-3 text-center">{t.status === "draft" ? "Draft" : t.status === "reversed" ? "Reversed" : "Posted"}</td>
+                    <td className="py-3 text-center">
+                      {t.status === "posted" && (
+                        <button type="button" onClick={() => setRevTransfer(t)} className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Adjustments register: every posted row reversible, not just the latest. */}
+      {activeTab === "adjustments" && (
+        <div className="expensive-card p-5">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
+                  <th className="pb-3 font-bold">Adjustment No</th>
+                  <th className="pb-3 font-bold">Date</th>
+                  <th className="pb-3 font-bold">Godown</th>
+                  <th className="pb-3 font-bold">Product</th>
+                  <th className="pb-3 font-bold">Owner</th>
+                  <th className="pb-3 font-bold text-right">Before → After</th>
+                  <th className="pb-3 font-bold text-center">Status</th>
+                  <th className="pb-3 font-bold text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {adjustments.length === 0 && (
+                  <tr><td colSpan={8} className="py-4"><EmptyState title="No adjustments yet" hint="Adjustments appear here after you post one below." /></td></tr>
+                )}
+                {adjustments.map((a: any) => (
+                  <tr key={a.id} className="hover:bg-muted transition-colors">
+                    <td className="py-3 font-bold text-foreground font-mono">{a.adjustment_no}</td>
+                    <td className="py-3 text-muted-foreground">{formatDateTime(a.date)}</td>
+                    <td className="py-3 text-muted-foreground">{godowns.find((g) => g.id === a.godown_id)?.name ?? a.godown_id}</td>
+                    <td className="py-3 font-semibold text-foreground">{products.find((x) => x.id === a.product_id)?.name ?? a.product_id}</td>
+                    <td className="py-3 text-muted-foreground">{a.party_id ? (parties.find((x) => x.id === a.party_id)?.name ?? a.party_id) : "Company"}</td>
+                    <td className="py-3 text-right font-bold text-foreground">{a.quantity_before} kg → {a.quantity_after} kg</td>
+                    <td className="py-3 text-center">{a.status === "draft" ? "Draft" : a.status === "reversed" ? "Reversed" : "Posted"}</td>
+                    <td className="py-3 text-center">
+                      {a.status === "posted" && (
+                        <button type="button" onClick={() => setRevAdjustment(a)} className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Stock Adjustment (reason + approver, create → post → reversible) */}
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Stock Adjustment</h2>
-        <p className="text-xs text-muted-foreground mb-4">Fix a physical count with a reason and an approver. Only the latest posted adjustment can be reversed here.</p>
+        <p className="text-xs text-muted-foreground mb-4">Fix a physical count with a reason and an approver. Every posted adjustment can be reversed from the Adjustments register above.</p>
         <form onSubmit={handleAdjustment} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
           <div><label className="block font-medium text-foreground mb-1">Godown</label><select value={adjGodown} onChange={(e) => setAdjGodown(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select godown</option>{godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
           <div><label className="block font-medium text-foreground mb-1">Product</label><select value={adjProduct} onChange={(e) => setAdjProduct(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select product</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">Quantity after (kg)</label><input type="number" value={adjAfter} onChange={(e) => setAdjAfter(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Stock owner</label><select value={adjOwner} onChange={(e) => setAdjOwner(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Company stock</option>{parties.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1">Quantity after (kg)</label><div className="flex gap-2"><input type="number" value={adjAfter} onChange={(e) => setAdjAfter(e.target.value)} min="0" placeholder="Enter quantity after" className="flex-1 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /><button type="button" onClick={() => setAdjAfter(String(adjBefore))} className="px-2 py-2 rounded-lg bg-muted text-muted-foreground text-[11px] font-semibold cursor-pointer" title="Fill with the current balance">Use current</button></div></div>
           <div><label className="block font-medium text-foreground mb-1">Reason *</label><input value={adjReason} onChange={(e) => setAdjReason(e.target.value)} placeholder="e.g. Physical recount variance" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
           <div><label className="block font-medium text-foreground mb-1">Approver *</label><input value={adjApprover} onChange={(e) => setAdjApprover(e.target.value)} placeholder="Approver name" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
           <div className="flex items-end gap-2"><span className="text-muted-foreground">Current balance: {adjGodown && adjProduct ? `${adjBefore} kg` : "—"}</span><button type="submit" disabled={adjPending} className="ml-auto px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{adjPending ? "Posting…" : "Create & Post Adjustment"}</button></div>
         </form>
-        {postedAdjId && (<button type="button" onClick={() => setAdjReverseOpen(true)} className="mt-3 px-3 py-1.5 rounded-lg bg-card hover:bg-red-500/10 text-red-600 dark:text-red-400 border border-border text-xs font-semibold cursor-pointer">Reverse last posted adjustment</button>)}
       </div>
 
       {/* Inter-Godown Transfer Modal */}
@@ -576,6 +760,22 @@ export default function InventoryPage() {
               </div>
 
               <div>
+                <label className="block font-medium text-foreground mb-1">Stock owner</label>
+                <select
+                  value={transferOwner}
+                  onChange={(e) => setTransferOwner(e.target.value)}
+                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                >
+                  <option value="">Company stock</option>
+                  {parties.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
                 <label className="block font-medium text-foreground mb-1">Transfer Quantity (kg)</label>
                 <input
                   type="number"
@@ -629,11 +829,18 @@ export default function InventoryPage() {
         onCancel={() => setShowTransferConfirm(false)}
       />
       <ReversalDialog
-        open={adjReverseOpen}
-        voucherLabel="last posted adjustment"
-        pending={adjReversing}
+        open={!!revTransfer}
+        voucherLabel={revTransfer?.transfer_no ?? ""}
+        pending={revPending}
+        onConfirm={handleTransferReversal}
+        onCancel={() => setRevTransfer(null)}
+      />
+      <ReversalDialog
+        open={!!revAdjustment}
+        voucherLabel={revAdjustment?.adjustment_no ?? ""}
+        pending={revPending}
         onConfirm={handleAdjReversal}
-        onCancel={() => setAdjReverseOpen(false)}
+        onCancel={() => setRevAdjustment(null)}
       />
     </div>
   )

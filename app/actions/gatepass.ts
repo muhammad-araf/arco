@@ -507,7 +507,7 @@ export async function returnGatePass(
   input: {
     reason: string;
     /** If omitted, the whole remaining (not yet returned) quantity is returned. Quantities are kg. */
-    items?: { productId: string; qtyKg: number; partyId?: string }[];
+    items?: { productId: string; qtyKg: number; partyId?: string | null }[];
   },
   clientToken?: string,
 ): Promise<ActionResult> {

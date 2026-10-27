@@ -16,7 +16,7 @@ import {
   Boxes,
   Download,
 } from "lucide-react"
-import { listGatePasses, createGatePassDraft, postGatePass, reverseGatePass, returnGatePass } from "@/app/actions/gatepass"
+import { listGatePasses, getGatePass, createGatePassDraft, postGatePass, reverseGatePass, returnGatePass } from "@/app/actions/gatepass"
 import { getStockSummary } from "@/app/actions/inventory"
 import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
 import { GatePassPrint } from "@/components/print/gate-pass-print"
@@ -42,9 +42,14 @@ export default function GatePassPage() {
   const [godowns, setGodowns] = React.useState<Godown[]>([])
   const [products, setProducts] = React.useState<Product[]>([])
   const [customers, setCustomers] = React.useState<Party[]>([])
+  const [owners, setOwners] = React.useState<Party[]>([])
   const [summaryRows, setSummaryRows] = React.useState<any[]>([])
   const [returnTarget, setReturnTarget] = React.useState<any | null>(null)
   const [returnPending, setReturnPending] = React.useState(false)
+  const [returnLines, setReturnLines] = React.useState<{
+    productId: string; productName: string; partyId: string | null; ownerName: string; remainingKg: number; qtyKg: number
+  }[]>([])
+  const [returnReason, setReturnReason] = React.useState("")
 
   // Modal / Print State
   const [isModalOpen, setIsModalOpen] = React.useState(false)
@@ -77,8 +82,9 @@ export default function GatePassPage() {
     bags: number
     netWeight: number
     remarks: string
+    ownerId: string
   }[]>([
-    { productId: "", bags: 100, netWeight: 5000, remarks: "50kg Packed Certified Bags" },
+    { productId: "", bags: 0, netWeight: 0, remarks: "", ownerId: "" },
   ])
 
   // "Today" for the today-only filter, from client-side effect state (see
@@ -95,7 +101,7 @@ export default function GatePassPage() {
       const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
       const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
       const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
-      setGodowns(godownList); setProducts(productList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both"))
+      setGodowns(godownList); setProducts(productList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both")); setOwners(partyList)
       setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
       setGatePasses((Array.isArray(gp.data) ? gp.data : []).map((row: any) => ({
         ...row,
@@ -121,7 +127,7 @@ export default function GatePassPage() {
     if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
     const finishedProds = products.filter((p) => p.category === "finished_seed" || p.category === "by_product")
     if (finishedProds.length > 0 && items[0].productId === "") {
-      setItems([{ productId: finishedProds[0].id, bags: 100, netWeight: 5000, remarks: "" }])
+      setItems((prev) => [{ ...prev[0], productId: finishedProds[0].id }])
     }
   }, [godowns, customers, products, godownId, customerId, items])
 
@@ -130,9 +136,10 @@ export default function GatePassPage() {
       ...prev,
       {
         productId: products[0]?.id || "",
-        bags: 50,
-        netWeight: 2500,
-        remarks: "Packed seed bags",
+        bags: 0,
+        netWeight: 0,
+        remarks: "",
+        ownerId: "",
       },
     ])
   }
@@ -166,7 +173,8 @@ export default function GatePassPage() {
       if (!item.productId) return setFormError(`Line ${i + 1}: select a product.`)
       if (!isPositive(Number(item.bags))) return setFormError(`Line ${i + 1}: bags must be greater than zero.`)
       if (!isPositive(Number(item.netWeight))) return setFormError(`Line ${i + 1}: net weight must be greater than zero.`)
-      const available = summaryRows.filter((r) => r.product_id === item.productId && r.godown_id === godownId).reduce((a, r) => a + (Number(r.balance_kg) || 0), 0)
+      const ownerRow = summaryRows.find((r) => r.product_id === item.productId && r.godown_id === godownId && (r.party_id ?? null) === (item.ownerId || null))
+      const available = Number(ownerRow?.balance_kg) || 0
       if (item.netWeight > available) {
         const prod = products.find((p) => p.id === item.productId)
         return setFormError(`Insufficient stock for ${prod?.name || "Product"}: ${available} kg available in this godown, but ${item.netWeight} kg requested. Reduce the quantity or pick another godown.`)
@@ -175,7 +183,6 @@ export default function GatePassPage() {
     setFormError("")
     const selectedCust = customers.find((c) => c.id === customerId)
     const selectedGodown = godowns.find((g) => g.id === godownId)
-    const passNo = `GP-2026-${String(gatePasses.length + 85).padStart(4, "0")}`
     const gatePassItems: GatePassItem[] = items.map((item, idx) => {
       const prod = products.find((p) => p.id === item.productId)
       return {
@@ -185,13 +192,14 @@ export default function GatePassPage() {
         product_name: prod?.name || "Seed",
         bags_count: Number(item.bags),
         net_weight_kg: Number(item.netWeight),
-        gross_weight_kg: Number(item.netWeight) + Number(item.bags) * 0.5,
+        gross_weight_kg: Number(item.netWeight),
         remarks: item.remarks,
       }
     })
+    // No pass number is shown before posting: the server assigns it.
     setDraftPass({
       id: `gp-${Date.now()}`,
-      pass_no: passNo,
+      pass_no: "", 
       date: new Date().toISOString(),
       customer_id: customerId,
       customer_name: selectedCust?.name,
@@ -223,7 +231,7 @@ export default function GatePassPage() {
         customerId, godownId, vehicleNo: vehicleNo.trim(), driverName: driverName.trim(),
         driverPhone: driverPhone || undefined, transporter: transporter || undefined,
         destination: destination.trim() || undefined, orderRef: orderRef || undefined, notes: notes || undefined,
-        items: items.map((it) => ({ productId: it.productId, bags: Number(it.bags), netWeightKg: Number(it.netWeight), remarks: it.remarks })),
+        items: items.map((it) => ({ productId: it.productId, bags: Number(it.bags), netWeightKg: Number(it.netWeight), remarks: it.remarks, partyId: it.ownerId || undefined })),
       })
       if (!created.success || !(created.data as any)?.id) {
         setFormError(created.error ?? "Could not create the gate pass draft.")
@@ -235,8 +243,18 @@ export default function GatePassPage() {
         return
       }
       const row: any = posted.data ?? created.data
-      setFormNotice(`${row.pass_no ?? draftPass.pass_no} dispatched — ${formatWeight(row.total_weight_kg ?? draftPass.total_weight_kg)} deducted from ${draftPass.godown_name || "the godown"}.`)
-      setSelectedPassForPrint({ ...draftPass, pass_no: row.pass_no ?? draftPass.pass_no, status: "posted" })
+      setFormNotice(`${row.pass_no} dispatched — ${formatWeight(row.total_weight_kg ?? draftPass.total_weight_kg)} deducted from ${draftPass.godown_name || "the godown"}.`)
+      const fresh = await getGatePass((created.data as any).id)
+      const serverRow: any = fresh.success ? fresh.data : row
+      setSelectedPassForPrint({
+        ...serverRow,
+        customer_name: customers.find((x) => x.id === serverRow.customer_id)?.name ?? serverRow.customer_id,
+        godown_name: godowns.find((x) => x.id === serverRow.godown_id)?.name ?? serverRow.godown_id,
+        items: (serverRow.gate_pass_items ?? serverRow.items ?? []).map((it: any) => ({
+          ...it,
+          product_name: products.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+        })),
+      })
       setShowPostConfirm(false)
       setIsModalOpen(false)
       setDraftPass(null)
@@ -247,17 +265,78 @@ export default function GatePassPage() {
     }
   }
 
-  const handleFullReturn = async () => {
+  // Opens the return modal with the quantity still returnable per
+  // (product, owner) pool: dispatched minus already-returned rows.
+  const openReturnModal = async (gp: any) => {
+    const fresh = await getGatePass(gp.id)
+    if (!fresh.success) {
+      setFormError(fresh.error ?? "Could not load the gate pass.")
+      return
+    }
+    const row: any = fresh.data
+    const dispatched = (row.gate_pass_items ?? []) as any[]
+    const prior = (row.gate_pass_returns ?? []) as any[]
+    const byKey = new Map<string, any>()
+    for (const d of dispatched) {
+      const key = `${d.product_id}|${d.party_id ?? ""}`
+      const cur = byKey.get(key) ?? { productId: d.product_id, partyId: d.party_id ?? null, remainingKg: 0 }
+      cur.remainingKg += Number(d.net_weight_kg) || 0
+      byKey.set(key, cur)
+    }
+    for (const r of prior) {
+      const key = `${r.product_id}|${r.party_id ?? ""}`
+      const cur = byKey.get(key)
+      if (cur) cur.remainingKg -= Number(r.qty_kg) || 0
+    }
+    const lines = [...byKey.values()]
+      .filter((l) => l.remainingKg > 0)
+      .map((l) => ({
+        ...l,
+        remainingKg: Math.round(l.remainingKg * 100) / 100,
+        qtyKg: Math.round(l.remainingKg * 100) / 100,
+        productName: products.find((p) => p.id === l.productId)?.name ?? l.productId,
+        ownerName: l.partyId ? (owners.find((o) => o.id === l.partyId)?.name ?? l.partyId) : "Company",
+      }))
+    if (!lines.length) {
+      setFormError(`${gp.pass_no} has nothing left to return.`)
+      return
+    }
+    setReturnTarget(gp)
+    setReturnLines(lines)
+    setReturnReason("")
+  }
+
+  const handlePartialReturn = async () => {
     if (!returnTarget || returnPending) return
+    if (!returnReason.trim()) {
+      setFormError("A return reason is required.")
+      return
+    }
+    const entries = returnLines.filter((l) => Number(l.qtyKg) > 0)
+    if (!entries.length) {
+      setFormError("Enter a return quantity greater than zero on at least one line.")
+      return
+    }
+    for (const l of entries) {
+      if (Number(l.qtyKg) > l.remainingKg) {
+        setFormError(`Return for ${l.productName} (${l.ownerName}) exceeds the ${l.remainingKg} kg still returnable.`)
+        return
+      }
+    }
     setReturnPending(true)
     try {
-      const res = await returnGatePass(returnTarget.id, { reason: "Full return of dispatched goods" }, `gatepass-return-${Date.now()}`)
+      const res = await returnGatePass(returnTarget.id, {
+        reason: returnReason.trim(),
+        items: entries.map((l) => ({ productId: l.productId, qtyKg: Number(l.qtyKg), partyId: l.partyId })),
+      }, `gatepass-return-${Date.now()}`)
       if (!res.success) {
         setFormError(res.error ?? "Could not return the gate pass.")
         return
       }
-      setFormNotice(`${returnTarget.pass_no} returned in full — stock restored.`)
+      const newStatus = (res.data as any)?.status
+      setFormNotice(`${returnTarget.pass_no} ${newStatus === "returned" ? "returned in full" : "partially returned"} — stock restored for the returned quantities.`)
       setReturnTarget(null)
+      setReturnLines([])
       await loadData()
     } finally {
       setReturnPending(false)
@@ -406,8 +485,8 @@ export default function GatePassPage() {
                     {formatWeight(gp.total_weight_kg)}
                   </td>
                   <td className="py-3 text-center">
-                    <span className={gp.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase border border-red-500/20" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20"}>
-                      {gp.status === "reversed" ? "Reversed" : "Dispatched"}
+                    <span className={gp.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase border border-red-500/20" : gp.status === "draft" ? "px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase border border-amber-500/20" : gp.status === "returned" || gp.status === "partially_returned" ? "px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-600 dark:text-blue-400 text-[10px] font-bold uppercase border border-blue-500/20" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20"}>
+                      {gp.status === "draft" ? "Draft" : gp.status === "reversed" ? "Reversed" : gp.status === "returned" ? "Returned" : gp.status === "partially_returned" ? "Partially Returned" : "Posted"}
                     </span>
                   </td>
                   <td className="py-3 text-center">
@@ -420,17 +499,17 @@ export default function GatePassPage() {
                       >
                         <Printer className="h-4 w-4" />
                       </button>
-                      {gp.status === "posted" && (
+                      {(gp.status === "posted" || gp.status === "partially_returned") && (
                         <button
                           type="button"
-                          onClick={() => setReturnTarget(gp)}
+                          onClick={() => openReturnModal(gp)}
                           className="px-2 py-1 rounded-md hover:bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[11px] font-semibold cursor-pointer"
-                          title="Return this pass in full"
+                          title="Return part or all of this pass"
                         >
                           Return
                         </button>
                       )}
-                      {gp.status === "posted" && (
+                      {(gp.status === "posted" || gp.status === "partially_returned") && (
                         <button
                           type="button"
                           onClick={() => setReversalTarget(gp)}
@@ -572,7 +651,8 @@ export default function GatePassPage() {
 
                 <div className="space-y-2">
                   {items.map((item, idx) => {
-                    const available = item.productId ? summaryRows.filter((r) => r.product_id === item.productId && r.godown_id === godownId).reduce((a, r) => a + (Number(r.balance_kg) || 0), 0) : 0
+                    const ownerRow = item.productId ? summaryRows.find((r) => r.product_id === item.productId && r.godown_id === godownId && (r.party_id ?? null) === (item.ownerId || null)) : undefined
+                    const available = Number(ownerRow?.balance_kg) || 0
                     return (
                       <div
                         key={idx}
@@ -615,6 +695,22 @@ export default function GatePassPage() {
                             className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
                             min="1"
                           />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] text-muted-foreground mb-0.5">Stock owner</label>
+                          <select
+                            value={item.ownerId}
+                            onChange={(e) => handleItemChange(idx, "ownerId", e.target.value)}
+                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                          >
+                            <option value="">Company stock</option>
+                            {owners.map((o) => (
+                              <option key={o.id} value={o.id}>
+                                {o.name}
+                              </option>
+                            ))}
+                          </select>
                         </div>
 
                         <div className="sm:col-span-2 flex items-center gap-2">
@@ -688,7 +784,6 @@ export default function GatePassPage() {
               <div>
                 <h1 className="text-2xl font-black tracking-tight uppercase">ARCO SEED GODOWN</h1>
                 <div className="text-xs text-gray-600">OFFICIAL OUTGOING GOODS GATE PASS & DISPATCH VOUCHER</div>
-                <div className="text-[10px] text-gray-500 mt-1">Plot 14-B, Grain Market Industrial Area</div>
               </div>
               <div className="text-right">
                 <div className="text-xl font-mono font-black text-gray-900 border-2 border-black px-3 py-1 inline-block">
@@ -800,19 +895,42 @@ export default function GatePassPage() {
           />
         </div>
       )}
-      <ConfirmDialog
-        open={returnTarget !== null}
-        title={`Return ${returnTarget?.pass_no ?? ""} in full?`}
-        description="The full dispatched quantity is returned to stock."
-        confirmLabel="Return in full"
-        pending={returnPending}
-        onConfirm={handleFullReturn}
-        onCancel={() => setReturnTarget(null)}
-      />
+      {returnTarget !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
+          <div className="expensive-card w-full max-w-2xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-8 max-h-[90dvh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
+              <h3 className="text-sm font-bold text-foreground">Return {returnTarget.pass_no}</h3>
+              <button type="button" onClick={() => setReturnTarget(null)} className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer">✕</button>
+            </div>
+            <p className="text-xs text-muted-foreground">Reduce a quantity for a partial return. The remainder stays returnable, and the pass stays reversible until it is fully returned.</p>
+            <div className="space-y-2 text-xs">
+              {returnLines.map((line, idx) => (
+                <div key={idx} className="grid grid-cols-1 sm:grid-cols-4 gap-2 p-2.5 rounded-lg bg-muted border border-border items-center">
+                  <div><div className="font-bold text-foreground">{line.productName}</div><div className="text-muted-foreground">Owner: {line.ownerName}</div></div>
+                  <div className="text-muted-foreground">Still returnable: <strong className="text-foreground">{line.remainingKg} kg</strong></div>
+                  <div>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5">Return qty (kg)</label>
+                    <input type="number" min="0" max={line.remainingKg} value={line.qtyKg} onChange={(e) => setReturnLines((prev) => prev.map((l, i) => (i === idx ? { ...l, qtyKg: Number(e.target.value) } : l)))} className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono" />
+                  </div>
+                  <div className="text-muted-foreground">Left after return: <strong className="text-foreground">{Math.max(0, Math.round((line.remainingKg - (Number(line.qtyKg) || 0)) * 100) / 100)} kg</strong></div>
+                </div>
+              ))}
+            </div>
+            <div>
+              <label className="block font-medium text-foreground mb-1 text-xs">Return reason *</label>
+              <input value={returnReason} onChange={(e) => setReturnReason(e.target.value)} placeholder="Why is this stock coming back?" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground text-xs" required />
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button type="button" onClick={() => setReturnTarget(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>
+              <button type="button" onClick={handlePartialReturn} disabled={returnPending} className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer disabled:opacity-60">{returnPending ? "Returning…" : "Confirm Return"}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <ConfirmDialog
         open={showPostConfirm}
         title="Authorize this gate pass?"
-        description={draftPass ? `${draftPass.pass_no} will deduct ${formatWeight(draftPass.total_weight_kg)} (${formatBags(draftPass.total_bags)}) from ${draftPass.godown_name || "the dispatch godown"} for vehicle ${draftPass.vehicle_no}. A posted pass can only be changed by reversal.` : ""}
+        description={draftPass ? `Posting will deduct ${formatWeight(draftPass.total_weight_kg)} (${formatBags(draftPass.total_bags)}) from ${draftPass.godown_name || "the dispatch godown"} for vehicle ${draftPass.vehicle_no}. A pass number is assigned on posting. A posted pass can only be changed by reversal.` : ""}
         confirmLabel="Authorize & Deduct Stock"
         pending={isPending}
         onConfirm={handleConfirmPost}

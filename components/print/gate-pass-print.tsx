@@ -60,6 +60,20 @@ export interface GatePassPrintProps {
  */
 export function GatePassPrint(props: GatePassPrintProps) {
   const items = Array.isArray(props.items) ? props.items : []
+  // Actual status, never collapsed: a partially returned pass is not
+  // "Dispatched", and a draft is not "Posted".
+  const statusLabel =
+    props.status === "draft"
+      ? "Draft"
+      : props.status === "reversed"
+        ? "Reversed"
+        : props.status === "returned"
+          ? "Returned"
+          : props.status === "partially_returned"
+            ? "Partially Returned"
+            : props.status === "posted"
+              ? "Posted"
+              : props.status
   const totalQuantity =
     props.totalQuantity !== undefined && props.totalQuantity !== null
       ? props.totalQuantity
@@ -80,7 +94,7 @@ export function GatePassPrint(props: GatePassPrintProps) {
       docNumber={text(props.passNo, "—")}
       meta={[
         { label: "Date / Time", value: dateTime || undefined },
-        { label: "Status", value: props.status },
+        { label: "Status", value: statusLabel },
         { label: "Godown", value: props.godown },
         { label: "Order / Ref", value: props.orderRef },
       ]}
