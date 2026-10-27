@@ -65,3 +65,59 @@ export function variance(
   const pct = planned === 0 ? 0 : roundWeight((qty / planned) * 100);
   return { qty, pct };
 }
+
+/**
+ * Server-side mass-balance check for a production batch (or a grading
+ * job's output + waste). The server is the trust boundary: UI checks
+ * alone are not enough, so createBatchDraft and postBatch both run this
+ * on the values they are about to store/post. Returns an error message
+ * or null when the balance is possible.
+ * - No negative input/output/by-product/waste.
+ * - Output + by-product + waste must not exceed input.
+ * - Zero input with any output is impossible (nothing to grade from).
+ */
+export function validateMassBalance(input: {
+  inputKg: number;
+  outputKg: number;
+  byproductKg?: number;
+  wasteKg?: number;
+}): string | null {
+  const { inputKg, outputKg } = input;
+  const byproductKg = input.byproductKg ?? 0;
+  const wasteKg = input.wasteKg ?? 0;
+  for (const [name, v] of [
+    ["input", inputKg],
+    ["output", outputKg],
+    ["by-product", byproductKg],
+    ["waste", wasteKg],
+  ] as const) {
+    if (!Number.isFinite(v) || v < 0) return `${name} weight cannot be negative`;
+  }
+  if (inputKg === 0 && outputKg > 0) {
+    return "Output cannot be greater than zero when input is zero";
+  }
+  if (outputKg + byproductKg + wasteKg > inputKg) {
+    return `Output (${outputKg} kg) + by-product (${byproductKg} kg) + waste (${wasteKg} kg) exceeds input (${inputKg} kg)`;
+  }
+  return null;
+}
+
+/**
+ * Aggregate duplicate lines per (product, party) so stock guards see the
+ * combined quantity — the same class of bug as the inward B7 fix. Two
+ * 60 kg lines against a 90 kg balance must fail together, not pass one
+ * at a time against the same pre-post balance.
+ */
+export function aggregateQuantities(
+  items: { productId: string; partyId?: string | null; qtyKg: number }[],
+): { productId: string; partyId: string | null; qtyKg: number }[] {
+  const grouped = new Map<string, { productId: string; partyId: string | null; qtyKg: number }>();
+  for (const item of items) {
+    const partyId = item.partyId ?? null;
+    const key = `${item.productId}::${partyId ?? ""}`;
+    const existing = grouped.get(key);
+    if (existing) existing.qtyKg = roundWeight(existing.qtyKg + item.qtyKg);
+    else grouped.set(key, { productId: item.productId, partyId, qtyKg: roundWeight(item.qtyKg) });
+  }
+  return [...grouped.values()];
+}
