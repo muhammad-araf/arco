@@ -120,7 +120,8 @@ export async function checkProductsActive(
     .select("id, name, is_active")
     .in("id", ids);
   if (error) return error.message;
-  const byId = new Map((data ?? []).map((p) => [p.id, p]));
+  const rows = (data ?? []) as { id: string; name?: string; is_active?: boolean }[];
+  const byId = new Map(rows.map((p) => [p.id, p]));
   for (const id of ids) {
     const row = byId.get(id);
     if (!row) return `Product ${id} does not exist`;

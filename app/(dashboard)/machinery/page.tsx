@@ -13,8 +13,11 @@ import {
   Building2,
   Boxes,
 } from "lucide-react"
-import { listJobs, createJobDraft, postJob, reverseJob, deleteJobDraft } from "@/app/actions/machinery"
+import { listJobs, getJob, createJobDraft, postJob, reverseJob, deleteJobDraft } from "@/app/actions/machinery"
 import { listMachines, listParties, listProducts, listGodowns } from "@/app/actions/masters"
+import { listProcessingTypes } from "@/app/actions/processing-types"
+import { MachineryJobPrint } from "@/components/print/machinery-job-print"
+import { PrintButton } from "@/components/print/print-button"
 import { MachineryJob, Machine, Party, Product, RateBasis } from "@/lib/types/database"
 import { machineryCharge } from "@/lib/calc"
 import { formatCurrency, formatWeight, formatDate } from "@/lib/utils"
@@ -53,11 +56,14 @@ export default function MachineryJobsPage() {
   const [isDeleting, setIsDeleting] = React.useState(false)
   const [isPostingDraft, setIsPostingDraft] = React.useState(false)
   const [processingType, setProcessingType] = React.useState("Grading & Cleaning")
-  const [inputProductId, setInputProductId] = React.useState("")
-  const [inputWeight, setInputWeight] = React.useState<number>(5000)
-  const [outputProductId, setOutputProductId] = React.useState("")
-  const [outputWeight, setOutputWeight] = React.useState<number>(4600)
+  const [processingTypes, setProcessingTypes] = React.useState<string[]>([])
+  // Multi-line job editor. One line = the legacy single-line job;
+  // extra lines add input / output / by-product rows to the same job.
+  // The charge stays job-level (total input weight, or bag count).
+  const [jobLines, setJobLines] = React.useState<{ key: number; inputProductId: string; inputQty: number; outputProductId: string; outputQty: number; byproductProductId: string; byproductQty: number }[]>([{ key: 1, inputProductId: "", inputQty: 5000, outputProductId: "", outputQty: 4600, byproductProductId: "", byproductQty: 0 }])
+  const [operatorName, setOperatorName] = React.useState("")
   const [wasteWeight, setWasteWeight] = React.useState<number>(0)
+  const [selectedJobForPrint, setSelectedJobForPrint] = React.useState<any | null>(null)
   const [bagCount, setBagCount] = React.useState<number>(0)
   const [maundKg, setMaundKg] = React.useState<number>(0)
   const [rateBasis, setRateBasis] = React.useState<RateBasis>("per_50kg")
@@ -68,9 +74,12 @@ export default function MachineryJobsPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [j, m, pa, pr, g] = await Promise.all([listJobs(), listMachines(), listParties(), listProducts(), listGodowns()])
+      const [j, m, pa, pr, g, pt] = await Promise.all([listJobs(), listMachines(), listParties(), listProducts(), listGodowns(), listProcessingTypes()])
       const failed = [j, m, pa, pr, g].find((x) => !x.success)
       if (failed) setFormError(failed.error ?? "Could not load machinery data.")
+      // Processing types come from the master table; an empty or
+      // failed result means the form falls back to free text.
+      setProcessingTypes(pt.success && Array.isArray(pt.data) ? (pt.data as any[]).map((t) => t.name).filter(Boolean) : [])
       const machineList = (Array.isArray(m.data) ? m.data : []) as Machine[]
       const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
       const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
@@ -96,18 +105,24 @@ export default function MachineryJobsPage() {
   React.useEffect(() => {
     if (machines.length > 0 && !machineId) setMachineId(machines[0].id)
     if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
-    if (products.length > 0 && !inputProductId) setInputProductId(products[0].id)
-    if (products.length > 0 && !outputProductId) setOutputProductId(products[0].id)
+    if (products.length > 0 && !jobLines[0]?.inputProductId) {
+      setJobLines((lines) => lines.map((l, i) => (i === 0 ? { ...l, inputProductId: products[0].id, outputProductId: products[0].id } : l)))
+    }
     if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
-  }, [machines, customers, products, godowns, machineId, customerId, inputProductId, outputProductId, godownId])
+  }, [machines, customers, products, godowns, machineId, customerId, jobLines, godownId])
+
+  const totalInputWeight = jobLines.reduce((s, l) => s + (Number(l.inputQty) || 0), 0)
+  const totalOutputWeight = jobLines.reduce((s, l) => s + (Number(l.outputQty) || 0), 0)
+  const totalByproductWeight = jobLines.reduce((s, l) => s + (Number(l.byproductQty) || 0), 0)
 
   // Preview charge from the same helper the server uses. Per-bag bills
-  // the ENTERED bag count (never weight / 50); per-maund bills with
+  // the ENTERED bag count (never weight / 50); every other basis bills
+  // the TOTAL input weight across all lines; per-maund bills with
   // the ENTERED kg per maund (never a hardcoded value).
   let serviceCharge = 0
   try {
     serviceCharge = machineryCharge(
-      rateBasis === "per_bag" ? bagCount : inputWeight,
+      rateBasis === "per_bag" ? bagCount : totalInputWeight,
       rateBasis,
       rate,
       rateBasis === "per_maund" ? (maundKg > 0 ? maundKg : undefined) : undefined,
@@ -120,15 +135,16 @@ export default function MachineryJobsPage() {
     e.preventDefault()
     if (isPending) return
     // Spec §7: required fields, positive weights, non-negative waste and
-    // rate — output + waste may not exceed input for a grading job.
+    // rate — output + by-product + waste may not exceed input.
     if (!customerId) return setFormError("Select the customer / grain owner for this job.")
     if (!machineId) return setFormError("Select the machine that will run this job.")
-    if (!inputProductId) return setFormError("Select the input product.")
-    if (!outputProductId) return setFormError("Select the output product — posted jobs credit output stock to this product.")
     if (!godownId) return setFormError("Select the godown where this job runs.")
-    if (!isPositive(inputWeight)) return setFormError("Input weight must be greater than zero.")
-    if (outputWeight < 0 || wasteWeight < 0) return setFormError("Output and waste weights cannot be negative.")
-    if (outputWeight + wasteWeight > inputWeight) return setFormError(`Output (${outputWeight} kg) + waste (${wasteWeight} kg) exceeds input (${inputWeight} kg). Correct the weights before saving.`)
+    if (!processingType.trim()) return setFormError("Select or enter the processing type.")
+    if (!jobLines.length) return setFormError("Add at least one job line.")
+    if (jobLines.some((l) => !l.inputProductId)) return setFormError("Every job line needs an input product.")
+    if (!isPositive(totalInputWeight)) return setFormError("Input weight must be greater than zero.")
+    if (totalOutputWeight < 0 || totalByproductWeight < 0 || wasteWeight < 0) return setFormError("Output, by-product and waste weights cannot be negative.")
+    if (totalOutputWeight + totalByproductWeight + wasteWeight > totalInputWeight) return setFormError(`Output (${totalOutputWeight} kg) + by-product (${totalByproductWeight} kg) + waste (${wasteWeight} kg) exceeds input (${totalInputWeight} kg). Correct the weights before saving.`)
     if (rate < 0) return setFormError("Rate cannot be negative.")
     if (rateBasis === "per_bag" && !(bagCount > 0)) return setFormError("Enter the actual bag count for per-bag billing.")
     if (bagCount < 0) return setFormError("Bag count cannot be negative.")
@@ -136,8 +152,9 @@ export default function MachineryJobsPage() {
     setFormError("")
     const selectedCust = customers.find((c) => c.id === customerId)
     const selectedMach = machines.find((m) => m.id === machineId)
-    const selectedProd = products.find((p) => p.id === inputProductId)
-    const selectedOut = products.find((p) => p.id === outputProductId)
+    const first = jobLines[0]
+    const selectedProd = products.find((p) => p.id === first?.inputProductId)
+    const selectedOut = products.find((p) => p.id === first?.outputProductId)
     const jobNo = `JOB-2026-${String(jobs.length + 1).padStart(3, "0")}`
     setDraftJob({
       id: `job-${Date.now()}`,
@@ -148,12 +165,14 @@ export default function MachineryJobsPage() {
       machine_id: machineId,
       machine_name: selectedMach?.name,
       processing_type: processingType,
-      input_product_id: inputProductId,
+      operator_name: operatorName || undefined,
+      input_product_id: first?.inputProductId ?? "",
       input_product_name: selectedProd?.name,
-      input_weight_kg: inputWeight,
-      output_product_id: outputProductId,
+      input_weight_kg: totalInputWeight,
+      output_product_id: first?.outputProductId,
       output_product_name: selectedOut?.name,
-      output_weight_kg: outputWeight,
+      output_weight_kg: totalOutputWeight,
+      byproduct_weight_kg: totalByproductWeight,
       waste_weight_kg: wasteWeight,
       bags: bagCount > 0 ? bagCount : null,
       maund_kg: maundKg > 0 ? maundKg : null,
@@ -165,7 +184,7 @@ export default function MachineryJobsPage() {
       payment_status: "unbilled",
       notes: notes || undefined,
       created_at: new Date().toISOString(),
-    })
+    } as any)
     setShowConfirm(true)
   }
 
@@ -174,9 +193,19 @@ export default function MachineryJobsPage() {
     jobGuard.current = true
     setIsPending(true)
     try {
+      const first = jobLines[0]
       const created = await createJobDraft({
         customerId, machineId, godownId, processingType,
-        inputProductId, inputWeightKg: inputWeight, outputProductId, outputWeightKg: outputWeight, wasteWeightKg: wasteWeight,
+        operatorName: operatorName || undefined,
+        inputProductId: first?.inputProductId ?? "", inputWeightKg: totalInputWeight,
+        outputProductId: first?.outputProductId || undefined, outputWeightKg: totalOutputWeight,
+        byproductProductId: first?.byproductProductId || undefined, byproductWeightKg: totalByproductWeight,
+        wasteWeightKg: wasteWeight,
+        lines: jobLines.map((l) => ({
+          inputProductId: l.inputProductId, inputQtyKg: Number(l.inputQty) || 0,
+          outputProductId: l.outputProductId || undefined, outputQtyKg: Number(l.outputQty) || 0,
+          byproductProductId: l.byproductProductId || undefined, byproductQtyKg: Number(l.byproductQty) || 0,
+        })),
         bags: bagCount > 0 ? bagCount : undefined,
         maundKg: maundKg > 0 ? maundKg : undefined,
         rateBasis, rate, isCustomerOwned, notes: notes || undefined,
@@ -235,6 +264,34 @@ export default function MachineryJobsPage() {
       await loadData()
     } finally {
       setIsDeleting(false)
+    }
+  }
+
+  // Print from the job's own stored lines, fetched fresh — never the
+  // current form state's products or a fixed badge.
+  const handlePrintJob = async (j: any) => {
+    const res = await getJob(j.id)
+    if (res.success && res.data) {
+      const full: any = res.data
+      const lines = (full.machinery_job_lines ?? []).map((l: any) => ({
+        ...l,
+        input_product_name: products.find((p) => p.id === l.input_product_id)?.name ?? "Not set",
+        output_product_name: l.output_product_id ? products.find((p) => p.id === l.output_product_id)?.name ?? l.output_product_id : undefined,
+        byproduct_product_name: l.byproduct_product_id ? products.find((p) => p.id === l.byproduct_product_id)?.name ?? l.byproduct_product_id : undefined,
+      }))
+      setSelectedJobForPrint({
+        ...j,
+        ...full,
+        customer_name: customers.find((c) => c.id === full.customer_id)?.name ?? j.customer_name,
+        machine_name: machines.find((m) => m.id === full.machine_id)?.name ?? j.machine_name,
+        godown_name: godowns.find((g: any) => g.id === full.godown_id)?.name,
+        input_product_name: products.find((p) => p.id === full.input_product_id)?.name ?? j.input_product_name,
+        output_product_name: full.output_product_id ? products.find((p) => p.id === full.output_product_id)?.name : undefined,
+        byproduct_product_name: full.byproduct_product_id ? products.find((p) => p.id === full.byproduct_product_id)?.name : undefined,
+        machinery_job_lines: lines,
+      })
+    } else {
+      setSelectedJobForPrint(j)
     }
   }
 
@@ -319,6 +376,14 @@ export default function MachineryJobsPage() {
                     {formatCurrency(j.service_charge)}
                   </td>
                   <td className="py-3 text-center">
+                    <button
+                      type="button"
+                      onClick={() => handlePrintJob(j)}
+                      className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer align-middle"
+                      title="Print Machinery Job Ticket"
+                    >
+                      <Printer className="h-4 w-4" />
+                    </button>
                     <span className={j.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase" : j.status === "draft" ? "px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase"}>
                       {j.status ?? "draft"}
                     </span>
@@ -405,7 +470,7 @@ export default function MachineryJobsPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="godown">Godown</label>
                   <select id="godown" value={godownId} onChange={(e) => setGodownId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
@@ -413,71 +478,40 @@ export default function MachineryJobsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="input-grain-type">Input Grain Type</label>
-                  <select id="input-grain-type"
-                    value={inputProductId}
-                    onChange={(e) => setInputProductId(e.target.value)}
+                  <label className="block font-medium text-foreground mb-1" htmlFor="processing-type">Processing Type</label>
+                  {processingTypes.length > 0 ? (
+                    <select id="processing-type"
+                      value={processingTypes.includes(processingType) ? processingType : ""}
+                      onChange={(e) => setProcessingType(e.target.value)}
+                      className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                      required
+                    >
+                      <option value="">Select processing type</option>
+                      {processingTypes.map((t) => (
+                        <option key={t} value={t}>{t}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input id="processing-type"
+                      type="text"
+                      value={processingType}
+                      onChange={(e) => setProcessingType(e.target.value)}
+                      placeholder="e.g. Grading & Cleaning"
+                      className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                      required
+                    />
+                  )}
+                </div>
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="job-operator">Operator</label>
+                  <input id="job-operator"
+                    type="text"
+                    value={operatorName}
+                    onChange={(e) => setOperatorName(e.target.value)}
+                    placeholder="Operator who runs this job"
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  >
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="total-grain-weight-kg">Total Grain Weight (kg)</label>
-                  <input id="total-grain-weight-kg"
-                    type="number"
-                    value={inputWeight}
-                    onChange={(e) => setInputWeight(Number(e.target.value))}
-                    min="1"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
-                    required
                   />
                 </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="graded-output-kg">Graded Output (kg)</label>
-                  <input id="graded-output-kg"
-                    type="number"
-                    value={outputWeight}
-                    onChange={(e) => setOutputWeight(Number(e.target.value))}
-                    min="0"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="output-product-credited-on-post">Output Product (credited on post)</label>
-                  <select id="output-product-credited-on-post"
-                    value={outputProductId}
-                    onChange={(e) => setOutputProductId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                    required
-                  >
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="waste-weight-kg">Waste Weight (kg)</label>
-                  <input id="waste-weight-kg"
-                    type="number"
-                    value={wasteWeight}
-                    onChange={(e) => setWasteWeight(Number(e.target.value))}
-                    min="0"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
-                  />
-                </div>
-
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="ownership">Ownership</label>
                   <select id="ownership"
@@ -488,6 +522,91 @@ export default function MachineryJobsPage() {
                     <option value="customer">Customer-owned</option>
                     <option value="company">Company-owned</option>
                   </select>
+                </div>
+              </div>
+
+              {/* Job lines: one line = the legacy single-line job.
+                  By-product lines are stocked on post; waste below is
+                  job-level and never stocked. */}
+              <div className="p-3 rounded-lg bg-muted border border-border space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-foreground uppercase tracking-wider text-[10px]">
+                    Job Lines
+                  </span>
+                  <span className="text-muted-foreground text-[11px]">
+                    Total input: <strong className="text-foreground">{formatWeight(totalInputWeight)}</strong>
+                  </span>
+                </div>
+                {jobLines.map((line) => (
+                  <div key={line.key} className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-2 rounded-md bg-background border border-border">
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-input-product-${line.key}`}>Input Product</label>
+                      <select id={`job-input-product-${line.key}`}
+                        value={line.inputProductId}
+                        onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, inputProductId: e.target.value } : l)))}
+                        className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                      >
+                        <option value="">Select product</option>
+                        {products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-input-qty-${line.key}`}>Input (kg)</label>
+                      <input id={`job-input-qty-${line.key}`} type="number" value={line.inputQty}
+                        onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, inputQty: Number(e.target.value) } : l)))}
+                        min="0" className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono" required />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-output-product-${line.key}`}>Output Product</label>
+                      <select id={`job-output-product-${line.key}`}
+                        value={line.outputProductId}
+                        onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, outputProductId: e.target.value } : l)))}
+                        className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                      >
+                        <option value="">No output product</option>
+                        {products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-output-qty-${line.key}`}>Output (kg)</label>
+                      <input id={`job-output-qty-${line.key}`} type="number" value={line.outputQty}
+                        onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, outputQty: Number(e.target.value) } : l)))}
+                        min="0" className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-byproduct-product-${line.key}`}>By-Product (stocked)</label>
+                      <select id={`job-byproduct-product-${line.key}`}
+                        value={line.byproductProductId}
+                        onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, byproductProductId: e.target.value } : l)))}
+                        className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                      >
+                        <option value="">No by-product</option>
+                        {products.filter((p) => p.category === "by_product").map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-byproduct-qty-${line.key}`}>By-Product (kg)</label>
+                      <div className="flex gap-2">
+                        <input id={`job-byproduct-qty-${line.key}`} type="number" value={line.byproductQty}
+                          onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, byproductQty: Number(e.target.value) } : l)))}
+                          min="0" className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono" />
+                        {jobLines.length > 1 && (
+                          <button type="button" onClick={() => setJobLines((lines) => lines.filter((l) => l.key !== line.key))} className="px-2 rounded-md bg-muted text-muted-foreground text-xs font-bold cursor-pointer" title="Remove this job line">✕</button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <button type="button" onClick={() => setJobLines((lines) => [...lines, { key: Date.now(), inputProductId: "", inputQty: 0, outputProductId: "", outputQty: 0, byproductProductId: "", byproductQty: 0 }])} className="px-3 py-1.5 rounded-md bg-background border border-border text-foreground text-[11px] font-semibold cursor-pointer">+ Add job line</button>
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="waste-weight-kg">Waste Weight (kg, job-level — never stocked)</label>
+                  <input id="waste-weight-kg"
+                    type="number"
+                    value={wasteWeight}
+                    onChange={(e) => setWasteWeight(Number(e.target.value))}
+                    min="0"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
+                  />
                 </div>
               </div>
 
@@ -604,6 +723,87 @@ export default function MachineryJobsPage() {
         onConfirm={handleConfirmReversal}
         onCancel={() => setReversalTarget(null)}
       />
+      {/* Printable Machinery Job Ticket */}
+      {selectedJobForPrint && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 overflow-y-auto">
+          <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-md rounded-md printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
+            <MachineryJobPrint
+              jobNo={selectedJobForPrint.job_no}
+              date={selectedJobForPrint.date}
+              status={selectedJobForPrint.status}
+              customerName={selectedJobForPrint.customer_name}
+              machine={selectedJobForPrint.machine_name}
+              godown={selectedJobForPrint.godown_name}
+              operator={selectedJobForPrint.operator_name}
+              processingType={selectedJobForPrint.processing_type}
+              ownership={selectedJobForPrint.is_customer_owned ? "Customer-owned" : "Company-owned"}
+              lines={(selectedJobForPrint.machinery_job_lines ?? []).map((l: any) => ({
+                inputProduct: l.input_product_name,
+                inputQtyKg: l.input_qty_kg,
+                outputProduct: l.output_product_name,
+                outputQtyKg: l.output_qty_kg,
+                byproductProduct: l.byproduct_product_name,
+                byproductQtyKg: l.byproduct_qty_kg,
+              }))}
+              inputProduct={selectedJobForPrint.input_product_name}
+              inputWeightKg={selectedJobForPrint.input_weight_kg}
+              outputProduct={selectedJobForPrint.output_product_name}
+              outputWeightKg={selectedJobForPrint.output_weight_kg}
+              byproductProduct={selectedJobForPrint.byproduct_product_name}
+              byproductWeightKg={selectedJobForPrint.byproduct_weight_kg}
+              wasteKg={selectedJobForPrint.waste_weight_kg}
+              rateBasis={selectedJobForPrint.rate_basis?.replace("_", " ")}
+              rate={selectedJobForPrint.rate}
+              serviceCharge={selectedJobForPrint.service_charge}
+              notes={selectedJobForPrint.notes}
+            />
+            <div className="flex items-center justify-end gap-3 pt-4 border-t no-print">
+              <button
+                type="button"
+                onClick={() => setSelectedJobForPrint(null)}
+                className="px-4 py-2 rounded-lg bg-gray-200 text-gray-700 text-xs font-semibold cursor-pointer"
+              >
+                Close
+              </button>
+              <PrintButton label="Print Ticket" className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
+            </div>
+          </div>
+        </div>
+      )}
+      {selectedJobForPrint && (
+        <div className="hidden print:block">
+          <MachineryJobPrint
+            jobNo={selectedJobForPrint.job_no}
+            date={selectedJobForPrint.date}
+            status={selectedJobForPrint.status}
+            customerName={selectedJobForPrint.customer_name}
+            machine={selectedJobForPrint.machine_name}
+            godown={selectedJobForPrint.godown_name}
+            operator={selectedJobForPrint.operator_name}
+            processingType={selectedJobForPrint.processing_type}
+            ownership={selectedJobForPrint.is_customer_owned ? "Customer-owned" : "Company-owned"}
+            lines={(selectedJobForPrint.machinery_job_lines ?? []).map((l: any) => ({
+              inputProduct: l.input_product_name,
+              inputQtyKg: l.input_qty_kg,
+              outputProduct: l.output_product_name,
+              outputQtyKg: l.output_qty_kg,
+              byproductProduct: l.byproduct_product_name,
+              byproductQtyKg: l.byproduct_qty_kg,
+            }))}
+            inputProduct={selectedJobForPrint.input_product_name}
+            inputWeightKg={selectedJobForPrint.input_weight_kg}
+            outputProduct={selectedJobForPrint.output_product_name}
+            outputWeightKg={selectedJobForPrint.output_weight_kg}
+            byproductProduct={selectedJobForPrint.byproduct_product_name}
+            byproductWeightKg={selectedJobForPrint.byproduct_weight_kg}
+            wasteKg={selectedJobForPrint.waste_weight_kg}
+            rateBasis={selectedJobForPrint.rate_basis?.replace("_", " ")}
+            rate={selectedJobForPrint.rate}
+            serviceCharge={selectedJobForPrint.service_charge}
+            notes={selectedJobForPrint.notes}
+          />
+        </div>
+      )}
     </div>
   )
 }
