@@ -20,14 +20,16 @@ import type { RateBasis } from "@/lib/types/database";
  * Posting (exactly once, status guard + clientToken):
  *   1. Keeps the service charge computed at draft time with
  *      machineryCharge() for the job's rate basis — per_bag bills
- *      the bag count, per_50kg / per_kg / per_maund bill kg, fixed
- *      returns the rate, and per_maund REQUIRES the explicit
- *      client-approved maundKg (no universal maund value is assumed
- *      anywhere). The charge is NOT recomputed at posting because
- *      machinery_jobs stores neither the bag count nor maundKg, so
- *      posting has no faithful inputs to recompute per_bag /
- *      per_maund from — that is a schema gap, flagged for the
- *      parent, not something posting should guess at.
+ *      the ACTUAL bag count entered on the job (never weight / 50),
+ *      per_50kg / per_kg / per_maund bill kg, fixed returns the
+ *      rate, and per_maund REQUIRES the explicit client-approved
+ *      maundKg (no universal maund value is assumed anywhere).
+ *      The bag count and maundKg are stored on the job
+ *      (machinery_jobs.bags / maund_kg), so the stored charge is
+ *      recomputable and auditable after posting. Posting preserves
+ *      the draft-time charge rather than recomputing it, so a job
+ *      created before these columns existed keeps its recorded
+ *      charge instead of being silently rebilled from missing inputs.
  *   2. Stock-guards and consumes the input, and adds the output, in
  *      the job's godown via stock_ledger rows. Waste is recorded on
  *      the job but NEVER added to stock.
@@ -276,6 +278,12 @@ export async function createJobDraft(input: CreateJobDraftInput): Promise<Action
     if (input.rateBasis === "per_bag" && !(input.bags !== undefined && input.bags >= 0)) {
       return fail("bags (bag count) is required when rateBasis is per_bag");
     }
+    if (input.bags !== undefined && (!Number.isFinite(input.bags) || input.bags < 0)) {
+      return fail("bags cannot be negative");
+    }
+    if (input.maundKg !== undefined && (!Number.isFinite(input.maundKg) || input.maundKg <= 0)) {
+      return fail("maundKg must be greater than zero when supplied");
+    }
     let charge: number;
     try {
       charge = machineryCharge(
@@ -305,6 +313,10 @@ export async function createJobDraft(input: CreateJobDraftInput): Promise<Action
         output_product_id: input.outputProductId ?? null,
         output_weight_kg: roundWeight(input.outputWeightKg ?? 0),
         waste_weight_kg: roundWeight(input.wasteWeightKg ?? 0),
+        // Stored (not echoed): the charge inputs, so the posted
+        // charge can be recomputed and audited later.
+        bags: input.bags ?? null,
+        maund_kg: input.maundKg ?? null,
         rate_basis: input.rateBasis,
         rate: input.rate,
         service_charge: charge,
@@ -316,10 +328,31 @@ export async function createJobDraft(input: CreateJobDraftInput): Promise<Action
       .single();
     if (error) return fail(error.message);
     revalidateMachinery();
-    // Echo the charge inputs the table cannot store, so the caller
-    // (and audit) can see what the stored service_charge was built
-    // from. These two fields are NOT columns on machinery_jobs.
-    return ok({ ...job, bags: input.bags ?? null, maundKg: input.maundKg ?? null });
+    return ok(job);
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+// ---------------- Draft delete (orphan drafts) ----------------
+/** Delete a job that never posted (e.g. its post failed). Posted and
+ * reversed jobs are never deleted — they reverse, with a reason. */
+export async function deleteJobDraft(id: string): Promise<ActionResult> {
+  try {
+    if (!id) return fail("id is required");
+    const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
+    const { data, error } = await supabase
+      .from("machinery_jobs")
+      .delete()
+      .eq("id", id)
+      .eq("status", "draft")
+      .select("id")
+      .single();
+    if (error || !data) return fail("Only a draft job can be deleted");
+    revalidateMachinery();
+    return ok({ id });
   } catch (e) {
     return fail(errMessage(e));
   }
@@ -339,10 +372,9 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
     if (job.status === "posted") return fail(`Job ${job.job_no} is already posted`);
     if (job.status !== "draft") return fail(`Only a draft can be posted (status: ${job.status})`);
     if (!job.godown_id) return fail(`Job ${job.job_no} has no godown, so its stock cannot be posted`);
-    // Charge is fixed at draft time (see header note: the table
-    // stores neither bags nor maundKg, so posting cannot recompute
-    // per_bag / per_maund faithfully). Posting preserves the stored
-    // service_charge as the charge record.
+    // Charge is fixed at draft time (see header note). The stored
+    // bags / maund_kg let anyone recompute it afterwards; posting
+    // preserves the stored service_charge as the charge record.
     const ownerParty: string | null = job.is_customer_owned ? job.customer_id : null;
     const inputQty = roundWeight(Number(job.input_weight_kg ?? 0));
     const outputQty = roundWeight(Number(job.output_weight_kg ?? 0));
