@@ -53,7 +53,14 @@ export default function BillingPage() {
   const [amount, setAmount] = React.useState<number>(100000)
   const [paymentMethod, setPaymentMethod] = React.useState<"cash" | "bank" | "online">("bank")
   const [referenceNo, setReferenceNo] = React.useState("")
+  const [purpose, setPurpose] = React.useState("")
+  const [receivedBy, setReceivedBy] = React.useState("")
   const [notes, setNotes] = React.useState("")
+  const [receiptPage, setReceiptPage] = React.useState(1)
+  const [invoicePage, setInvoicePage] = React.useState(1)
+  const [totalReceipts, setTotalReceipts] = React.useState(0)
+  const [totalInvoices, setTotalInvoices] = React.useState(0)
+  const pageSize = 50
   const [invoices, setInvoices] = React.useState<any[]>([])
   const [cashAccounts, setCashAccounts] = React.useState<any[]>([])
   const [receiptCashAccountId, setReceiptCashAccountId] = React.useState("")
@@ -73,14 +80,19 @@ export default function BillingPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [re, inv, pa, ca] = await Promise.all([listReceipts(), listInvoices(), listParties(), listCashAccounts()])
+      const [re, inv, pa, ca] = await Promise.all([listReceipts({ page: receiptPage, pageSize }), listInvoices({ page: invoicePage, pageSize }), listParties(), listCashAccounts()])
       const failed = [re, inv, pa, ca].find((x) => !x.success)
       setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
       if (failed) setFormError(failed.error ?? "Could not load billing data.")
       const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
       setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both"))
-      setInvoices(Array.isArray(inv.data) ? inv.data : [])
-      setReceipts((Array.isArray(re.data) ? re.data : []).map((row: any) => ({
+      // Paged shape { rows, total } or the legacy plain array.
+      const invRows = Array.isArray(inv.data) ? inv.data : ((inv.data as any)?.rows ?? [])
+      const reRows = Array.isArray(re.data) ? re.data : ((re.data as any)?.rows ?? [])
+      setTotalInvoices(Array.isArray(inv.data) ? inv.data.length : Number((inv.data as any)?.total ?? 0))
+      setTotalReceipts(Array.isArray(re.data) ? re.data.length : Number((re.data as any)?.total ?? 0))
+      setInvoices(invRows)
+      setReceipts((reRows as any[]).map((row: any) => ({
         ...row,
         customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? "Not set",
         payment_method: row.account ?? row.payment_method,
@@ -90,11 +102,12 @@ export default function BillingPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [receiptPage, invoicePage])
 
   // Mount load: without this the page never leaves its skeleton —
   // isLoading starts true and only post-action handlers reloaded before.
-  React.useEffect(() => { loadData() }, [loadData])
+  // Dashboard drill-down links (?filter=receivable) apply on mount too.
+  React.useEffect(() => { loadData(); setDrillFilter(getUrlFilter()) }, [loadData])
 
   React.useEffect(() => {
     if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
@@ -166,7 +179,8 @@ export default function BillingPage() {
     try {
       const created = await createReceipt({
         customerId, cashAccountId: receiptCashAccountId, account: paymentMethod, amount,
-        referenceNo: referenceNo || undefined, notes: notes || undefined,
+        referenceNo: referenceNo || undefined, purpose: purpose || undefined,
+        receivedBy: receivedBy || undefined, notes: notes || undefined,
         clientToken: submissionToken(receiptTokenRef, "receipt"),
         allocations: allocInvoiceId && allocAmount > 0 ? [{ invoiceId: allocInvoiceId, amount: allocAmount }] : [],
       })
@@ -182,7 +196,7 @@ export default function BillingPage() {
       const row: any = posted.data ?? created.data
       const selectedCust = customers.find((c) => c.id === customerId)
       setFormNotice(`${row.receipt_no ?? draftReceipt.receipt_no} posted — ${formatCurrency(amount)} received from ${selectedCust?.name} via ${paymentMethod}. Receivable reduced; cash/bank increased.`)
-      setPrintReceipt({ ...draftReceipt, receipt_no: row.receipt_no ?? draftReceipt.receipt_no, status: "posted", customer_name: selectedCust?.name, allocations: allocInvoiceId ? [{ invoice_no: invoices.find((i) => i.id === allocInvoiceId)?.invoice_no, amount: allocAmount }] : [] })
+      setPrintReceipt({ ...draftReceipt, receipt_no: row.receipt_no ?? draftReceipt.receipt_no, status: "posted", customer_name: selectedCust?.name, purpose: purpose || undefined, received_by: receivedBy || undefined, allocations: allocInvoiceId ? [{ invoice_no: invoices.find((i) => i.id === allocInvoiceId)?.invoice_no, amount: allocAmount }] : [] })
       setShowConfirm(false)
       setIsReceiptModalOpen(false)
       resetSubmissionToken(receiptTokenRef)
@@ -379,6 +393,13 @@ export default function BillingPage() {
                 onAction={() => setIsReceiptModalOpen(true)}
               />
             )}
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+              <span>Showing {receipts.length === 0 ? 0 : (receiptPage - 1) * pageSize + 1}–{(receiptPage - 1) * pageSize + receipts.length} of {totalReceipts} receipts</span>
+              <span className="flex gap-2">
+                <button type="button" disabled={receiptPage <= 1} onClick={() => setReceiptPage((p) => Math.max(1, p - 1))} className="px-3 py-1.5 rounded-lg bg-card border border-border font-bold cursor-pointer disabled:opacity-50">Previous</button>
+                <button type="button" disabled={receiptPage * pageSize >= totalReceipts} onClick={() => setReceiptPage((p) => p + 1)} className="px-3 py-1.5 rounded-lg bg-card border border-border font-bold cursor-pointer disabled:opacity-50">Next</button>
+              </span>
+            </div>
           </div>
         </div>
       </div>
@@ -476,6 +497,29 @@ export default function BillingPage() {
                 />
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="receipt-purpose">Purpose (optional)</label>
+                  <input id="receipt-purpose"
+                    type="text"
+                    value={purpose}
+                    onChange={(e) => setPurpose(e.target.value)}
+                    placeholder="e.g. Grading charges for Batch 001"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="received-by">Received by (optional)</label>
+                  <input id="received-by"
+                    type="text"
+                    value={receivedBy}
+                    onChange={(e) => setReceivedBy(e.target.value)}
+                    placeholder="Name of person who received the money"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="remarks-note">Remarks / Note</label>
                 <input id="remarks-note"
@@ -515,7 +559,14 @@ export default function BillingPage() {
           <tbody className="divide-y divide-border">
             {invoices.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No invoices yet.</td></tr>}
             {invoices.map((i) => (<tr key={i.id}><td className="py-2 font-mono font-bold">{i.invoice_no}</td><td className="py-2">{customers.find((c) => c.id === i.customer_id)?.name ?? "Not set"}</td><td className="py-2 text-right">{formatCurrency(Number(i.total_amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(i.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</td><td className="py-2 text-center">{i.status}{i.status === "posted" && (<button type="button" onClick={() => setInvReverseTarget(i)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
-          </tbody></table></div>
+          </tbody></table>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>Showing {invoices.length === 0 ? 0 : (invoicePage - 1) * pageSize + 1}–{(invoicePage - 1) * pageSize + invoices.length} of {totalInvoices} invoices</span>
+            <span className="flex gap-2">
+              <button type="button" disabled={invoicePage <= 1} onClick={() => setInvoicePage((p) => Math.max(1, p - 1))} className="px-3 py-1.5 rounded-lg bg-card border border-border font-bold cursor-pointer disabled:opacity-50">Previous</button>
+              <button type="button" disabled={invoicePage * pageSize >= totalInvoices} onClick={() => setInvoicePage((p) => p + 1)} className="px-3 py-1.5 rounded-lg bg-card border border-border font-bold cursor-pointer disabled:opacity-50">Next</button>
+            </span>
+          </div></div>
         <form onSubmit={handleCreateInvoice} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
           <div><label className="block font-medium text-foreground mb-1" htmlFor="customer">Customer *</label><select id="customer" value={invCustomerId} onChange={(e) => setInvCustomerId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select customer</option>{customers.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}</select></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="description">Description *</label><input id="description" value={invDesc} onChange={(e) => setInvDesc(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
@@ -541,6 +592,8 @@ export default function BillingPage() {
               paymentMethod={printReceipt.payment_method}
               account={receiptAccountLabel(printReceipt)}
               referenceNo={printReceipt.reference_no}
+              purpose={printReceipt.purpose}
+              receivedBy={printReceipt.received_by ?? printReceipt.receivedBy}
               amount={printReceipt.amount}
               amountInWords={amountInWordsPKR(Number(printReceipt.amount || 0))}
               allocations={(printReceipt.invoice_allocations ?? printReceipt.allocations ?? []).map((a: any) => ({ invoiceNo: a.invoice_no, amount: a.amount }))}

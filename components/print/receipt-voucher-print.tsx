@@ -26,6 +26,8 @@ export interface ReceiptVoucherPrintProps {
   /** Cash/bank account the money went into. */
   account?: string
   referenceNo?: string
+  /** Optional: what the receipt is for. */
+  purpose?: string
   amount?: number | string
   /** Amount in words, when the page supplies it. */
   amountInWords?: string
@@ -60,6 +62,7 @@ export function ReceiptVoucherPrint(props: ReceiptVoucherPrintProps) {
         <PrintField label="Payment Method" value={props.paymentMethod} />
         <PrintField label="Account" value={props.account} />
         <PrintField label="Reference No." value={props.referenceNo} />
+        <PrintField label="Purpose" value={props.purpose} />
         <PrintField label="Amount" value={fmtNum(amount)} />
         <PrintField label="Amount in Words" value={props.amountInWords} />
       </PrintInfoGrid>
