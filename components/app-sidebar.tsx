@@ -24,6 +24,7 @@ import {
   X,
   FileCheck2,
   UploadCloud,
+  Settings,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { type AppRole } from "@/app/actions/auth"
@@ -85,6 +86,7 @@ const navSections: NavSection[] = [
       { title: "Masters", href: "/masters", icon: Database },
       { title: "Users", href: "/users", icon: UserCog },
       { title: "Audit", href: "/audit", icon: ShieldCheck },
+      { title: "Settings", href: "/settings", icon: Settings },
     ],
   },
 ]

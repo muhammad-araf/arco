@@ -1,6 +1,8 @@
 import * as React from "react"
 import { redirect } from "next/navigation"
 import { AppSidebar } from "@/components/app-sidebar"
+import { SessionIdleTimeout } from "@/components/session-idle-timeout"
+import { getSettingsSnapshot } from "@/app/actions/settings"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { TodayBadge } from "@/components/today-badge"
 import { createClient } from "@/lib/supabase/server"
@@ -36,8 +38,20 @@ export default async function DashboardLayout({
   // enforcement still happens inside the server actions.
   const actor = supabase ? await getCurrentActor(supabase).catch(() => null) : null
 
+  // Idle sign-out: the configured timeout (default 60 minutes; 0
+  // disables it in the component). A failed settings read keeps the
+  // default rather than disabling the timer or signing anyone out.
+  let timeoutMinutes = 60
+  try {
+    const snap = await getSettingsSnapshot()
+    if (snap.success && snap.data) timeoutMinutes = snap.data.session_timeout_minutes
+  } catch {
+    timeoutMinutes = 60
+  }
+
   return (
     <div className="flex flex-col lg:flex-row min-h-screen bg-background relative overflow-hidden">
+      <SessionIdleTimeout minutes={timeoutMinutes} />
       {/* Main Navigation Sidebar */}
       <AppSidebar
         displayName={actor?.displayName ?? null}
