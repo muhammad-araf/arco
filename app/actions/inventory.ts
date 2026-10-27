@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { requireRole, requireSignedIn, type Actor } from "./auth";
+import { STOCK_WRITE } from "./auth-helpers";
 import { roundWeight, ledgerRunningBalance, stockBalanceFromRows } from "@/lib/calc";
 
 /**
@@ -41,13 +43,12 @@ function revalidateInventory(): void {
   revalidatePath("/dashboard");
 }
 
-async function createdBy(supabase: Db): Promise<string> {
-  try {
-    const { data } = await supabase.auth.getUser();
-    return data.user?.id ?? "operator-admin";
-  } catch {
-    return "operator-admin";
-  }
+async function requireWrite(
+  db: Db,
+): Promise<{ actor: Actor } | { error: string }> {
+  const gate = await requireRole(db, STOCK_WRITE);
+  if (!gate.ok) return { error: gate.error };
+  return { actor: gate.actor };
 }
 
 async function nextDocNumber(supabase: Db, series: string, prefix: string): Promise<string> {
@@ -158,6 +159,8 @@ async function appendLedger(
 export async function getStockSummary(): Promise<ActionResult> {
   try {
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     // Prefer the DB-side aggregate (supabase/migration-stock-summary-rpc.sql):
     // one grouped sum instead of shipping the whole ledger to aggregate here.
     // The RPC is result-identical to the JS path below because every ledger
@@ -251,6 +254,8 @@ export async function getStockLedger(filters?: {
 }): Promise<ActionResult> {
   try {
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     let query = supabase
       .from("stock_ledger")
       .select("*")
@@ -292,6 +297,8 @@ export async function createTransfer(input: {
     if (!input.quantityKg || input.quantityKg <= 0) return fail("Transfer quantity must be > 0");
     if (!input.reason?.trim()) return fail("A transfer reason is required");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const transferNo = await nextDocNumber(supabase, "transfer", "TRF");
     const { data, error } = await supabase
       .from("godown_transfers")
@@ -321,6 +328,8 @@ export async function postTransfer(id: string, clientToken?: string): Promise<Ac
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "transfer:post", clientToken);
     if (replay) return replay;
     const { data: transfer, error } = await supabase
@@ -339,7 +348,7 @@ export async function postTransfer(id: string, clientToken?: string): Promise<Ac
         `Insufficient stock for transfer ${transfer.transfer_no}: available ${available} kg in source godown, requested ${qty} kg`,
       );
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     await appendLedger(
       supabase,
       {
@@ -391,6 +400,8 @@ export async function reverseTransfer(id: string, reason: string, clientToken?: 
     if (!id) return fail("id is required");
     if (!reason?.trim()) return fail("A reversal reason is mandatory");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "transfer:reverse", clientToken);
     if (replay) return replay;
     const { data: transfer, error } = await supabase
@@ -409,7 +420,7 @@ export async function reverseTransfer(id: string, reason: string, clientToken?: 
         `Cannot reverse transfer ${transfer.transfer_no}: destination godown holds only ${available} kg, reversal needs ${qty} kg`,
       );
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     await appendLedger(
       supabase,
       {
@@ -479,6 +490,8 @@ export async function createAdjustment(input: {
       return fail("Adjustment before and after quantities are identical — nothing to adjust");
     }
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const live = await stockBalance(supabase, input.godownId, input.productId, input.partyId ?? null);
     if (roundWeight(input.quantityBeforeKg) !== live) {
       return fail(
@@ -515,6 +528,8 @@ export async function postAdjustment(id: string, clientToken?: string): Promise<
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "adjustment:post", clientToken);
     if (replay) return replay;
     const { data: adj, error } = await supabase.from("stock_adjustments").select("*").eq("id", id).single();
@@ -535,7 +550,7 @@ export async function postAdjustment(id: string, clientToken?: string): Promise<
         return fail(`Insufficient stock for adjustment ${adj.adjustment_no}: available ${available} kg, adjustment removes ${Math.abs(delta)} kg`);
       }
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     await appendLedger(
       supabase,
       {
@@ -572,6 +587,8 @@ export async function reverseAdjustment(id: string, reason: string, clientToken?
     if (!id) return fail("id is required");
     if (!reason?.trim()) return fail("A reversal reason is mandatory");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "adjustment:reverse", clientToken);
     if (replay) return replay;
     const { data: adj, error } = await supabase.from("stock_adjustments").select("*").eq("id", id).single();
@@ -586,7 +603,7 @@ export async function reverseAdjustment(id: string, reason: string, clientToken?
         return fail(`Cannot reverse adjustment ${adj.adjustment_no}: available stock is ${live} kg, reversal removes ${delta} kg`);
       }
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     await appendLedger(
       supabase,
       {

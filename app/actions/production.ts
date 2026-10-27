@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { requireRole, requireSignedIn, type Actor } from "./auth";
+import { PRODUCTION_WRITE } from "./auth-helpers";
 import {
   roundWeight,
   ledgerRunningBalance,
@@ -56,13 +58,12 @@ function revalidateProduction(): void {
   revalidatePath("/dashboard");
 }
 
-async function createdBy(supabase: Db): Promise<string> {
-  try {
-    const { data } = await supabase.auth.getUser();
-    return data.user?.id ?? "operator-admin";
-  } catch {
-    return "operator-admin";
-  }
+async function requireWrite(
+  db: Db,
+): Promise<{ actor: Actor } | { error: string }> {
+  const gate = await requireRole(db, PRODUCTION_WRITE);
+  if (!gate.ok) return { error: gate.error };
+  return { actor: gate.actor };
 }
 
 async function nextDocNumber(supabase: Db, series: string, prefix: string): Promise<string> {
@@ -167,6 +168,8 @@ async function appendLedger(
 export async function listRecipes(includeRetired = false): Promise<ActionResult> {
   try {
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     let query = supabase
       .from("recipes")
       .select("*, recipe_items(*)")
@@ -185,6 +188,8 @@ export async function getRecipe(id: string): Promise<ActionResult> {
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     const { data, error } = await supabase
       .from("recipes")
       .select("*, recipe_items(*)")
@@ -228,6 +233,8 @@ export async function createRecipe(input: {
     const itemError = validateRecipeItems(input.items);
     if (itemError) return fail(itemError);
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const { data: recipe, error } = await supabase
       .from("recipes")
       .insert({
@@ -283,6 +290,8 @@ export async function createRecipeVersion(input: {
     const itemError = validateRecipeItems(input.items);
     if (itemError) return fail(itemError);
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const { data: current, error: cError } = await supabase
       .from("recipes")
       .select("*")
@@ -337,6 +346,8 @@ export async function listBatches(filters?: {
 }): Promise<ActionResult> {
   try {
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     let query = supabase
       .from("production_batches")
       .select("*, production_batch_inputs(*), production_batch_outputs(*)")
@@ -358,6 +369,8 @@ export async function getBatch(id: string): Promise<ActionResult> {
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     const { data, error } = await supabase
       .from("production_batches")
       .select("*, production_batch_inputs(*), production_batch_outputs(*)")
@@ -400,6 +413,8 @@ export async function createBatchDraft(input: {
       if (!item.productId || item.actualQtyKg < 0) return fail("Every input needs a productId and actualQtyKg >= 0");
     }
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     let recipeVersion: number | null = null;
     let recipeItems: { product_id: string; required_ratio_pct: number }[] = [];
     if (input.recipeId) {
@@ -490,6 +505,8 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "batch:post", clientToken);
     if (replay) return replay;
     const { data: batch, error } = await supabase
@@ -538,7 +555,7 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
         );
       }
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     const ownerParty: string | null = batch.is_customer_owned ? batch.owner_party_id ?? null : null;
     for (const item of inputs) {
       await appendLedger(
@@ -624,6 +641,8 @@ export async function reverseBatch(id: string, reason: string, clientToken?: str
     if (!id) return fail("id is required");
     if (!reason?.trim()) return fail("A reversal reason is mandatory");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "batch:reverse", clientToken);
     if (replay) return replay;
     const { data: batch, error } = await supabase
@@ -654,7 +673,7 @@ export async function reverseBatch(id: string, reason: string, clientToken?: str
         );
       }
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     for (const out of outputs) {
       await appendLedger(
         supabase,

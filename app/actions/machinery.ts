@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { requireRole, requireSignedIn, type Actor } from "./auth";
+import { MACHINERY_WRITE } from "./auth-helpers";
 import {
   roundWeight,
   ledgerRunningBalance,
@@ -76,13 +78,12 @@ function revalidateMachinery(): void {
   revalidatePath("/dashboard");
 }
 
-async function createdBy(supabase: Db): Promise<string> {
-  try {
-    const { data } = await supabase.auth.getUser();
-    return data.user?.id ?? "operator-admin";
-  } catch {
-    return "operator-admin";
-  }
+async function requireWrite(
+  db: Db,
+): Promise<{ actor: Actor } | { error: string }> {
+  const gate = await requireRole(db, MACHINERY_WRITE);
+  if (!gate.ok) return { error: gate.error };
+  return { actor: gate.actor };
 }
 
 async function nextDocNumber(supabase: Db, series: string, prefix: string): Promise<string> {
@@ -225,6 +226,8 @@ export async function listJobs(filters?: {
 }): Promise<ActionResult> {
   try {
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     let query = supabase.from("machinery_jobs").select("*").order("date", { ascending: false });
     if (filters?.status) query = query.eq("status", filters.status);
     if (filters?.customerId) query = query.eq("customer_id", filters.customerId);
@@ -244,6 +247,8 @@ export async function getJob(id: string): Promise<ActionResult> {
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     const { data, error } = await supabase.from("machinery_jobs").select("*").eq("id", id).single();
     if (error) return fail(error.message);
     return ok(data);
@@ -283,6 +288,8 @@ export async function createJobDraft(input: CreateJobDraftInput): Promise<Action
       return fail(errMessage(e));
     }
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const jobNo = await nextDocNumber(supabase, "machinery", "JOB");
     const { data: job, error } = await supabase
       .from("machinery_jobs")
@@ -323,6 +330,8 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "machinery:post", clientToken);
     if (replay) return replay;
     const { data: job, error } = await supabase.from("machinery_jobs").select("*").eq("id", id).single();
@@ -347,7 +356,7 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
         `Insufficient stock for job ${job.job_no}: product ${job.input_product_id} has ${available} kg available in this godown${ownerParty ? " for this owner" : ""}, job needs ${inputQty} kg`,
       );
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     await appendLedger(
       supabase,
       {
@@ -407,6 +416,8 @@ export async function reverseJob(id: string, reason: string, clientToken?: strin
     if (!id) return fail("id is required");
     if (!reason?.trim()) return fail("A reversal reason is mandatory");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "machinery:reverse", clientToken);
     if (replay) return replay;
     const { data: job, error } = await supabase.from("machinery_jobs").select("*").eq("id", id).single();
@@ -428,7 +439,7 @@ export async function reverseJob(id: string, reason: string, clientToken?: strin
         );
       }
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     if (job.output_product_id && outputQty > 0) {
       await appendLedger(
         supabase,

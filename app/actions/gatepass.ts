@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { requireRole, requireSignedIn, type Actor } from "./auth";
+import { STOCK_WRITE } from "./auth-helpers";
 import { roundWeight, ledgerRunningBalance, stockBalanceFromRows } from "@/lib/calc";
 
 /**
@@ -43,13 +45,12 @@ function revalidateGatepass(): void {
   revalidatePath("/dashboard");
 }
 
-async function createdBy(supabase: Db): Promise<string> {
-  try {
-    const { data } = await supabase.auth.getUser();
-    return data.user?.id ?? "operator-admin";
-  } catch {
-    return "operator-admin";
-  }
+async function requireWrite(
+  db: Db,
+): Promise<{ actor: Actor } | { error: string }> {
+  const gate = await requireRole(db, STOCK_WRITE);
+  if (!gate.ok) return { error: gate.error };
+  return { actor: gate.actor };
 }
 
 async function nextDocNumber(supabase: Db, series: string, prefix: string): Promise<string> {
@@ -160,6 +161,8 @@ export async function listGatePasses(filters?: {
 }): Promise<ActionResult> {
   try {
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     let query = supabase
       .from("gate_passes")
       .select("*, gate_pass_items(*)")
@@ -181,6 +184,8 @@ export async function getGatePass(id: string): Promise<ActionResult> {
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     const { data, error } = await supabase
       .from("gate_passes")
       .select("*, gate_pass_items(*), gate_pass_returns(*)")
@@ -228,6 +233,8 @@ export async function createGatePassDraft(input: {
       }
     }
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const passNo = await nextDocNumber(supabase, "gatepass", "GP");
     const totalBags = input.items.reduce((s, i) => s + i.bags, 0);
     const totalWeight = roundWeight(input.items.reduce((s, i) => s + i.netWeightKg, 0));
@@ -280,6 +287,8 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "gatepass:post", clientToken);
     if (replay) return replay;
     const { data: pass, error } = await supabase
@@ -317,7 +326,7 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
         );
       }
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     for (const item of items) {
       await appendLedger(
         supabase,
@@ -357,6 +366,8 @@ export async function reverseGatePass(id: string, reason: string, clientToken?: 
     if (!id) return fail("id is required");
     if (!reason?.trim()) return fail("A reversal reason is mandatory");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "gatepass:reverse", clientToken);
     if (replay) return replay;
     const { data: pass, error } = await supabase
@@ -373,7 +384,7 @@ export async function reverseGatePass(id: string, reason: string, clientToken?: 
       net_weight_kg: number;
       party_id: string | null;
     }[];
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     for (const item of items) {
       await appendLedger(
         supabase,
@@ -421,6 +432,8 @@ export async function returnGatePass(
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "gatepass:return", clientToken);
     if (replay) return replay;
     const { data: pass, error } = await supabase
@@ -462,7 +475,7 @@ export async function returnGatePass(
         partyId: d.party_id ?? null,
       }));
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     for (const ret of returns) {
       await appendLedger(
         supabase,

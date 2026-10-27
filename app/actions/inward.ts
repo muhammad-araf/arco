@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { requireRole, requireSignedIn, type Actor } from "./auth";
+import { STOCK_WRITE } from "./auth-helpers";
 import { netWeight, roundMoney, roundWeight, ledgerRunningBalance, stockBalanceFromRows } from "@/lib/calc";
 
 /**
@@ -43,13 +45,12 @@ function revalidateInward(): void {
   revalidatePath("/dashboard");
 }
 
-async function createdBy(supabase: Db): Promise<string> {
-  try {
-    const { data } = await supabase.auth.getUser();
-    return data.user?.id ?? "operator-admin";
-  } catch {
-    return "operator-admin";
-  }
+async function requireWrite(
+  db: Db,
+): Promise<{ actor: Actor } | { error: string }> {
+  const gate = await requireRole(db, STOCK_WRITE);
+  if (!gate.ok) return { error: gate.error };
+  return { actor: gate.actor };
 }
 
 /** Server-side sequential number. Falls back to a timestamp suffix only if the numbering table/RPC is not yet migrated. */
@@ -177,6 +178,8 @@ export async function listInward(filters?: {
 }): Promise<ActionResult> {
   try {
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     let query = supabase
       .from("incoming_goods")
       .select("*, incoming_goods_items(*)")
@@ -198,6 +201,8 @@ export async function getInward(id: string): Promise<ActionResult> {
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     const { data, error } = await supabase
       .from("incoming_goods")
       .select("*, incoming_goods_items(*)")
@@ -241,6 +246,8 @@ export async function createInwardDraft(input: {
     if (!input?.partyId || !input?.godownId) return fail("partyId and godownId are required");
     if (!input.items?.length) return fail("At least one item line is required");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const voucherNo = await nextDocNumber(supabase, "inward", "INW");
 
     const lines = input.items.map((item) => {
@@ -316,6 +323,8 @@ export async function postInward(id: string, clientToken?: string): Promise<Acti
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "inward:post", clientToken);
     if (replay) return replay;
 
@@ -328,7 +337,7 @@ export async function postInward(id: string, clientToken?: string): Promise<Acti
     if (voucher.status === "posted") return fail(`Inward ${voucher.voucher_no} is already posted`);
     if (voucher.status !== "draft") return fail(`Only a draft can be posted (status: ${voucher.status})`);
 
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     // Owner tracking (stock_ledger.party_id = STOCK OWNER, not supplier):
     // company-owned inward -> party_id NULL; customer-owned -> owner party.
     const ledgerPartyId: string | null =
@@ -383,6 +392,8 @@ export async function reverseInward(
     if (!id) return fail("id is required");
     if (!reason?.trim()) return fail("A reversal reason is mandatory");
     const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
     const replay = await checkIdempotency(supabase, "inward:reverse", clientToken);
     if (replay) return replay;
 
@@ -413,7 +424,7 @@ export async function reverseInward(
         );
       }
     }
-    const by = await createdBy(supabase);
+    const by = gate.actor.userId;
     for (const item of items) {
       await appendLedger(
         supabase,
