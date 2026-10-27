@@ -18,9 +18,10 @@ import {
   Boxes,
   Download,
 } from "lucide-react"
-import { listGatePasses, getGatePass, createGatePassDraft, postGatePass, reverseGatePass, returnGatePass } from "@/app/actions/gatepass"
+import { listGatePasses, getGatePass, createGatePassDraft, postGatePass, reverseGatePass, returnGatePass, approveGatePass, rejectGatePass } from "@/app/actions/gatepass"
 import { getStockSummary } from "@/app/actions/inventory"
-import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
+import { listGodowns, listProducts, listParties, listPackagingTypes } from "@/app/actions/masters"
+import { getCompanySettings, getAppSetting } from "@/app/actions/settings"
 import { GatePassPrint } from "@/components/print/gate-pass-print"
 import { PrintButton } from "@/components/print/print-button"
 import { GatePass, GatePassItem, Godown, Product, Party } from "@/lib/types/database"
@@ -40,30 +41,62 @@ import {
 } from "@/components/erp-ui"
 import { GatepassSkeleton } from "@/components/route-skeletons"
 
+/** A gate pass row plus the spec §9 columns (kept local so this page
+ *  does not depend on shared-type edits owned by other teams). */
+type GatePassRow = GatePass & {
+  receiver_name?: string | null
+  receiver_contact?: string | null
+  dispatch_mode?: string | null
+  prepared_by?: string | null
+  approved_by?: string | null
+  rejection_reason?: string | null
+  reversal_reason?: string | null
+  return_reason?: string | null
+  returned_at?: string | null
+  reversed_at?: string | null
+  items: (GatePassItem & { packaging_type_id?: string | null; party_id?: string | null })[]
+}
+
+/** Time-of-day from an ISO date, e.g. "10:35 AM", for the print header. */
+function formatTime(dateString: string | null | undefined): string {
+  if (!dateString) return ""
+  const d = new Date(dateString)
+  if (Number.isNaN(d.getTime())) return ""
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
+}
+
 export default function GatePassPage() {
-  const [gatePasses, setGatePasses] = React.useState<GatePass[]>([])
+  const [gatePasses, setGatePasses] = React.useState<GatePassRow[]>([])
   const [godowns, setGodowns] = React.useState<Godown[]>([])
   const [products, setProducts] = React.useState<Product[]>([])
   const [customers, setCustomers] = React.useState<Party[]>([])
   const [owners, setOwners] = React.useState<Party[]>([])
+  const [packagingTypes, setPackagingTypes] = React.useState<any[]>([])
+  const [approvalRequired, setApprovalRequired] = React.useState(false)
+  const [company, setCompany] = React.useState<{ name?: string; address?: string; phone?: string; email?: string; logoUrl?: string } | undefined>(undefined)
   const [summaryRows, setSummaryRows] = React.useState<any[]>([])
   const [returnTarget, setReturnTarget] = React.useState<any | null>(null)
   const [returnPending, setReturnPending] = React.useState(false)
   const [returnLines, setReturnLines] = React.useState<{
     productId: string; productName: string; partyId: string | null; ownerName: string; remainingKg: number; qtyKg: number
+    condition: string; restockDecision: "accepted" | "rejected"
   }[]>([])
   const [returnReason, setReturnReason] = React.useState("")
 
   // Modal / Print State
   const [isModalOpen, setIsModalOpen] = React.useState(false)
-  const [selectedPassForPrint, setSelectedPassForPrint] = React.useState<GatePass | null>(null)
+  const [selectedPassForPrint, setSelectedPassForPrint] = React.useState<GatePassRow | null>(null)
   const [isLoading, setIsLoading] = React.useState(true)
   const [formError, setFormError] = React.useState("")
   const [formNotice, setFormNotice] = React.useState("")
   const [isPending, setIsPending] = React.useState(false)
   const [showPostConfirm, setShowPostConfirm] = React.useState(false)
-  const [draftPass, setDraftPass] = React.useState<GatePass | null>(null)
-  const [reversalTarget, setReversalTarget] = React.useState<GatePass | null>(null)
+  const [draftPass, setDraftPass] = React.useState<GatePassRow | null>(null)
+  const [reversalTarget, setReversalTarget] = React.useState<GatePassRow | null>(null)
+  const [rejectTarget, setRejectTarget] = React.useState<GatePassRow | null>(null)
+  const [rejectReason, setRejectReason] = React.useState("")
+  const [isRejecting, setIsRejecting] = React.useState(false)
+  const [isApproving, setIsApproving] = React.useState(false)
   const [isReversing, setIsReversing] = React.useState(false)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
   const postGuard = React.useRef(false)
@@ -73,6 +106,9 @@ export default function GatePassPage() {
   const [customerId, setCustomerId] = React.useState("")
   const [godownId, setGodownId] = React.useState("")
   const [destination, setDestination] = React.useState("")
+  const [receiverName, setReceiverName] = React.useState("")
+  const [receiverContact, setReceiverContact] = React.useState("")
+  const [dispatchMode, setDispatchMode] = React.useState("")
   const [vehicleNo, setVehicleNo] = React.useState("")
   const [driverName, setDriverName] = React.useState("")
   const [driverPhone, setDriverPhone] = React.useState("")
@@ -87,9 +123,17 @@ export default function GatePassPage() {
     netWeight: number
     remarks: string
     ownerId: string
+    packagingTypeId: string
   }[]>([
-    { productId: "", bags: 0, netWeight: 0, remarks: "", ownerId: "" },
+    { productId: "", bags: 0, netWeight: 0, remarks: "", ownerId: "", packagingTypeId: "" },
   ])
+
+  // Register filters (combined with the dashboard drill-down filter).
+  const [filterStatus, setFilterStatus] = React.useState("")
+  const [filterCustomer, setFilterCustomer] = React.useState("")
+  const [filterVehicle, setFilterVehicle] = React.useState("")
+  const [filterFrom, setFilterFrom] = React.useState("")
+  const [filterTo, setFilterTo] = React.useState("")
 
   // "Today" for the today-only filter, from client-side effect state (see
   // isTodayISO): never read new Date() during render.
@@ -99,13 +143,29 @@ export default function GatePassPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [gp, g, pr, pa, sm] = await Promise.all([listGatePasses(), listGodowns(), listProducts(), listParties(), getStockSummary()])
+      const [gp, g, pr, pa, sm, pk, co] = await Promise.all([listGatePasses(), listGodowns(), listProducts(), listParties(), getStockSummary(), listPackagingTypes(), getCompanySettings()])
       const failed = [gp, g, pr, pa, sm].find((x) => !x.success)
       if (failed) setFormError(failed.error ?? "Could not load gate pass data.")
       const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
       const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
       const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+      const packagingList = (Array.isArray(pk.data) ? pk.data : []) as any[]
       setGodowns(godownList); setProducts(productList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both")); setOwners(partyList)
+      setPackagingTypes(packagingList)
+      if (co.success && (co.data as any)) {
+        const c = co.data as any
+        setCompany({ name: c.name ?? undefined, address: c.address ?? undefined, phone: c.phone ?? undefined, email: c.email ?? undefined, logoUrl: c.logo_url ?? undefined })
+      }
+      // Approval gate display only: the server re-reads the setting on
+      // every post, so a stale or missing value here only affects the
+      // confirm-dialog wording, never the enforced behaviour.
+      try {
+        const ap = await getAppSetting("gatepass_approval_required")
+        const v = (ap as any)?.data
+        setApprovalRequired(v === true || v === "true" || (v && typeof v === "object" && (v.required === true || v.enabled === true || v.value === true)))
+      } catch {
+        setApprovalRequired(false)
+      }
       setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
       setGatePasses((Array.isArray(gp.data) ? gp.data : []).map((row: any) => ({
         ...row,
@@ -126,6 +186,10 @@ export default function GatePassPage() {
   // isLoading starts true and only post-action handlers reloaded before.
   React.useEffect(() => { loadData() }, [loadData])
 
+  // Dashboard drill-down: apply ?filter= on mount, like the other
+  // register pages (inward, payroll, daybook) already do.
+  React.useEffect(() => { setDrillFilter(getUrlFilter()) }, [])
+
   React.useEffect(() => {
     if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
     if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
@@ -144,6 +208,7 @@ export default function GatePassPage() {
         netWeight: 0,
         remarks: "",
         ownerId: "",
+        packagingTypeId: "",
       },
     ])
   }
@@ -203,11 +268,14 @@ export default function GatePassPage() {
     // No pass number is shown before posting: the server assigns it.
     setDraftPass({
       id: `gp-${Date.now()}`,
-      pass_no: "", 
+      pass_no: "",
       date: new Date().toISOString(),
       customer_id: customerId,
       customer_name: selectedCust?.name,
       destination: destination || undefined,
+      receiver_name: receiverName || undefined,
+      receiver_contact: receiverContact || undefined,
+      dispatch_mode: dispatchMode || undefined,
       godown_id: godownId,
       godown_name: selectedGodown?.name,
       vehicle_no: vehicleNo,
@@ -235,30 +303,41 @@ export default function GatePassPage() {
         customerId, godownId, vehicleNo: vehicleNo.trim(), driverName: driverName.trim(),
         driverPhone: driverPhone || undefined, transporter: transporter || undefined,
         destination: destination.trim() || undefined, orderRef: orderRef || undefined, notes: notes || undefined,
-        items: items.map((it) => ({ productId: it.productId, bags: Number(it.bags), netWeightKg: Number(it.netWeight), remarks: it.remarks, partyId: it.ownerId || undefined })),
+        receiverName: receiverName.trim() || undefined, receiverContact: receiverContact.trim() || undefined,
+        dispatchMode: dispatchMode || undefined,
+        items: items.map((it) => ({ productId: it.productId, bags: Number(it.bags), netWeightKg: Number(it.netWeight), remarks: it.remarks, partyId: it.ownerId || undefined, packagingTypeId: it.packagingTypeId || undefined })),
       })
       if (!created.success || !(created.data as any)?.id) {
         setFormError(created.error ?? "Could not create the gate pass draft.")
         return
       }
+      const duplicateWarning = (created.data as any)?.duplicateOrderRefWarning as string | undefined
       const posted = await postGatePass((created.data as any).id, postToken("gatepass:post", (created.data as any).id))
       if (!posted.success) {
         setFormError(posted.error ?? "Could not post the gate pass.")
         return
       }
       const row: any = posted.data ?? created.data
-      setFormNotice(`${row.pass_no} dispatched — ${formatWeight(row.total_weight_kg ?? draftPass.total_weight_kg)} deducted from ${draftPass.godown_name || "the godown"}.`)
+      if (row.status === "awaiting_approval") {
+        // Approval is on: nothing deducted yet — the pass waits for an
+        // owner_admin approval, which is what deducts stock.
+        setFormNotice(`${row.pass_no} submitted for approval — stock will be deducted when it is approved.${duplicateWarning ? ` ${duplicateWarning}` : ""}`)
+      } else {
+        setFormNotice(`${row.pass_no} dispatched — ${formatWeight(row.total_weight_kg ?? draftPass.total_weight_kg)} deducted from ${draftPass.godown_name || "the godown"}.${duplicateWarning ? ` ${duplicateWarning}` : ""}`)
+      }
       const fresh = await getGatePass((created.data as any).id)
       const serverRow: any = fresh.success ? fresh.data : row
-      setSelectedPassForPrint({
-        ...serverRow,
-        customer_name: customers.find((x) => x.id === serverRow.customer_id)?.name ?? serverRow.customer_id,
-        godown_name: godowns.find((x) => x.id === serverRow.godown_id)?.name ?? serverRow.godown_id,
-        items: (serverRow.gate_pass_items ?? serverRow.items ?? []).map((it: any) => ({
-          ...it,
-          product_name: products.find((x) => x.id === it.product_id)?.name ?? "Not set",
-        })),
-      })
+      if (serverRow.status === "posted") {
+        setSelectedPassForPrint({
+          ...serverRow,
+          customer_name: customers.find((x) => x.id === serverRow.customer_id)?.name ?? serverRow.customer_id,
+          godown_name: godowns.find((x) => x.id === serverRow.godown_id)?.name ?? serverRow.godown_id,
+          items: (serverRow.gate_pass_items ?? serverRow.items ?? []).map((it: any) => ({
+            ...it,
+            product_name: products.find((x) => x.id === it.product_id)?.name ?? "Not set",
+          })),
+        })
+      }
       setShowPostConfirm(false)
       setIsModalOpen(false)
       setDraftPass(null)
@@ -298,6 +377,8 @@ export default function GatePassPage() {
         ...l,
         remainingKg: Math.round(l.remainingKg * 100) / 100,
         qtyKg: Math.round(l.remainingKg * 100) / 100,
+        condition: "",
+        restockDecision: "accepted" as const,
         productName: products.find((p) => p.id === l.productId)?.name ?? l.productId,
         ownerName: l.partyId ? (owners.find((o) => o.id === l.partyId)?.name ?? l.partyId) : "Company",
       }))
@@ -331,20 +412,62 @@ export default function GatePassPage() {
     try {
       const res = await returnGatePass(returnTarget.id, {
         reason: returnReason.trim(),
-        items: entries.map((l) => ({ productId: l.productId, qtyKg: Number(l.qtyKg), partyId: l.partyId })),
+        items: entries.map((l) => ({ productId: l.productId, qtyKg: Number(l.qtyKg), partyId: l.partyId, condition: l.condition.trim() || undefined, restockDecision: l.restockDecision })),
       }, submissionToken(returnTokenRef, "gatepass-return"))
       if (!res.success) {
         setFormError(res.error ?? "Could not return the gate pass.")
         return
       }
       const newStatus = (res.data as any)?.status
-      setFormNotice(`${returnTarget.pass_no} ${newStatus === "returned" ? "returned in full" : "partially returned"} — stock restored for the returned quantities.`)
+      const rejectedKg = entries.filter((l) => l.restockDecision === "rejected").reduce((s, l) => s + (Number(l.qtyKg) || 0), 0)
+      setFormNotice(`${returnTarget.pass_no} ${newStatus === "returned" ? "returned in full" : "partially returned"} — stock restored for the accepted quantities${rejectedKg > 0 ? `; ${rejectedKg} kg rejected and not returned to stock` : ""}.`)
       resetSubmissionToken(returnTokenRef)
       setReturnTarget(null)
       setReturnLines([])
       await loadData()
     } finally {
       setReturnPending(false)
+    }
+  }
+
+  // Spec §9.3 step 4: approval deducts stock; rejection returns the
+  // pass to draft. Both are owner_admin-only on the server (interim —
+  // the client has not yet defined who approves under §19).
+  const handleApprove = async (gp: GatePassRow) => {
+    if (isApproving) return
+    setIsApproving(true)
+    try {
+      const res = await approveGatePass(gp.id, postToken("gatepass:approve", gp.id))
+      if (!res.success) {
+        setFormError(res.error ?? "Could not approve the gate pass.")
+        return
+      }
+      setFormNotice(`${gp.pass_no} approved — ${formatWeight(gp.total_weight_kg)} deducted from stock.`)
+      await loadData()
+    } finally {
+      setIsApproving(false)
+    }
+  }
+
+  const handleConfirmReject = async () => {
+    if (!rejectTarget || isRejecting) return
+    if (!rejectReason.trim()) {
+      setFormError("A rejection reason is required.")
+      return
+    }
+    setIsRejecting(true)
+    try {
+      const res = await rejectGatePass(rejectTarget.id, rejectReason.trim(), postToken("gatepass:reject", rejectTarget.id))
+      if (!res.success) {
+        setFormError(res.error ?? "Could not reject the gate pass.")
+        return
+      }
+      setFormNotice(`${rejectTarget.pass_no} rejected back to draft — no stock was deducted for it.`)
+      setRejectTarget(null)
+      setRejectReason("")
+      await loadData()
+    } finally {
+      setIsRejecting(false)
     }
   }
 
@@ -368,25 +491,40 @@ export default function GatePassPage() {
     }
   }
 
-  const visiblePasses = drillFilter === "today"
+  const drillPasses = drillFilter === "today"
     ? gatePasses.filter((gp) => isTodayISO(gp.date, todayStr))
     : drillFilter === "posted"
       ? gatePasses.filter((gp) => gp.status === "posted")
       : gatePasses
 
+  // Register filters: status, customer, vehicle, and date range, on
+  // top of any dashboard drill-down filter.
+  const visiblePasses = drillPasses.filter((gp) =>
+    (!filterStatus || gp.status === filterStatus) &&
+    (!filterCustomer || gp.customer_id === filterCustomer) &&
+    (!filterVehicle || gp.vehicle_no.toLowerCase().includes(filterVehicle.toLowerCase())) &&
+    (!filterFrom || gp.date.slice(0, 10) >= filterFrom) &&
+    (!filterTo || gp.date.slice(0, 10) <= filterTo),
+  )
+
   // Shared by the CSV / Excel / PDF buttons: one definition of the export
   // rows, columns, title and totals, so all formats agree.
   const getGatepassExport = () => ({
-    rows: gatePasses.map((gp) => ({
+    rows: visiblePasses.map((gp) => ({
       pass_no: gp.pass_no, date: gp.date, customer: gp.customer_name,
+      receiver_name: gp.receiver_name || "", receiver_contact: gp.receiver_contact || "",
+      dispatch_mode: gp.dispatch_mode || "",
       destination: gp.destination || "Direct", godown: gp.godown_name,
       vehicle_no: gp.vehicle_no, driver_name: gp.driver_name,
       driver_phone: gp.driver_phone || "N/A", bags: gp.total_bags,
       weight_kg: gp.total_weight_kg, status: gp.status,
+      prepared_by: gp.prepared_by || "", approved_by: gp.approved_by || "",
+      return_reason: gp.return_reason || "", returned_at: gp.returned_at || "",
+      reversal_reason: gp.reversal_reason || "", reversed_at: gp.reversed_at || "",
     })),
-    filename: "authorized_gate_passes",
-    columns: [{ key: "pass_no", label: "Pass no" }, { key: "date", label: "Date" }, { key: "customer", label: "Customer" }, { key: "destination", label: "Destination" }, { key: "godown", label: "Godown" }, { key: "vehicle_no", label: "Vehicle" }, { key: "driver_name", label: "Driver" }, { key: "driver_phone", label: "Driver phone" }, { key: "bags", label: "Bags" }, { key: "weight_kg", label: "Weight (kg)" }, { key: "status", label: "Status" }],
-    options: { title: "Authorized Gate Passes", totals: { bags: gatePasses.reduce((a, gp) => a + (gp.total_bags || 0), 0), weight_kg: gatePasses.reduce((a, gp) => a + (gp.total_weight_kg || 0), 0) } },
+    filename: "gate_pass_register",
+    columns: [{ key: "pass_no", label: "Pass no" }, { key: "date", label: "Date" }, { key: "customer", label: "Customer" }, { key: "receiver_name", label: "Receiver" }, { key: "receiver_contact", label: "Receiver contact" }, { key: "dispatch_mode", label: "Dispatch mode" }, { key: "destination", label: "Destination" }, { key: "godown", label: "Godown" }, { key: "vehicle_no", label: "Vehicle" }, { key: "driver_name", label: "Driver" }, { key: "driver_phone", label: "Driver phone" }, { key: "bags", label: "Bags" }, { key: "weight_kg", label: "Weight (kg)" }, { key: "status", label: "Status" }, { key: "prepared_by", label: "Prepared by" }, { key: "approved_by", label: "Approved by" }, { key: "return_reason", label: "Return reason" }, { key: "returned_at", label: "Returned at" }, { key: "reversal_reason", label: "Reversal reason" }, { key: "reversed_at", label: "Reversed at" }],
+    options: { title: "Gate Pass Register", dateRange: filterFrom || filterTo ? `${filterFrom || "…"} to ${filterTo || "…"}` : undefined, totals: { bags: visiblePasses.reduce((a, gp) => a + (gp.total_bags || 0), 0), weight_kg: visiblePasses.reduce((a, gp) => a + (gp.total_weight_kg || 0), 0) } },
     report: "gate_passes",
   })
   const handleGatepassExport = async (format: "csv" | "xlsx" | "pdf") => {
@@ -457,6 +595,46 @@ export default function GatePassPage() {
         </div>
       </div>
 
+      {/* Register filters: status / customer / vehicle / date range */}
+      <div className="expensive-card p-4 flex flex-wrap items-end gap-3 text-xs">
+        <div>
+          <label className="block font-medium text-foreground mb-1" htmlFor="filter-status">Status</label>
+          <select id="filter-status" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+            <option value="">All statuses</option>
+            <option value="draft">Draft</option>
+            <option value="awaiting_approval">Awaiting Approval</option>
+            <option value="posted">Posted</option>
+            <option value="partially_returned">Partially Returned</option>
+            <option value="returned">Returned</option>
+            <option value="reversed">Reversed</option>
+          </select>
+        </div>
+        <div>
+          <label className="block font-medium text-foreground mb-1" htmlFor="filter-customer">Customer</label>
+          <select id="filter-customer" value={filterCustomer} onChange={(e) => setFilterCustomer(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+            <option value="">All customers</option>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block font-medium text-foreground mb-1" htmlFor="filter-vehicle">Vehicle</label>
+          <input id="filter-vehicle" type="text" value={filterVehicle} onChange={(e) => setFilterVehicle(e.target.value)} placeholder="e.g. LES-4419" className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" />
+        </div>
+        <div>
+          <label className="block font-medium text-foreground mb-1" htmlFor="filter-from">From</label>
+          <input id="filter-from" type="date" value={filterFrom} onChange={(e) => setFilterFrom(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" />
+        </div>
+        <div>
+          <label className="block font-medium text-foreground mb-1" htmlFor="filter-to">To</label>
+          <input id="filter-to" type="date" value={filterTo} onChange={(e) => setFilterTo(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" />
+        </div>
+        {(filterStatus || filterCustomer || filterVehicle || filterFrom || filterTo) && (
+          <button type="button" onClick={() => { setFilterStatus(""); setFilterCustomer(""); setFilterVehicle(""); setFilterFrom(""); setFilterTo("") }} className="px-3 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Clear filters</button>
+        )}
+      </div>
+
       {/* Dispatched Passes Table */}
       <div className="expensive-card p-5">
         <div className="flex items-center justify-between mb-4">
@@ -504,6 +682,7 @@ export default function GatePassPage() {
                   <td className="py-3 text-muted-foreground">{formatDate(gp.date)}</td>
                   <td className="py-3 font-semibold text-foreground">
                     <div>{gp.customer_name}</div>
+                    {gp.receiver_name && <div className="text-[10px] text-muted-foreground">Receiver: {gp.receiver_name}</div>}
                     {gp.destination && <div className="text-[10px] text-muted-foreground">{gp.destination}</div>}
                   </td>
                   <td className="py-3 text-muted-foreground">
@@ -518,12 +697,33 @@ export default function GatePassPage() {
                     {formatWeight(gp.total_weight_kg)}
                   </td>
                   <td className="py-3 text-center">
-                    <span className={gp.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase border border-red-500/20" : gp.status === "draft" ? "px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase border border-amber-500/20" : gp.status === "returned" || gp.status === "partially_returned" ? "px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-600 dark:text-blue-400 text-[10px] font-bold uppercase border border-blue-500/20" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20"}>
-                      {gp.status === "draft" ? "Draft" : gp.status === "reversed" ? "Reversed" : gp.status === "returned" ? "Returned" : gp.status === "partially_returned" ? "Partially Returned" : "Posted"}
+                    <span className={gp.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase border border-red-500/20" : gp.status === "draft" ? "px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase border border-amber-500/20" : gp.status === "awaiting_approval" ? "px-2 py-0.5 rounded-md bg-violet-500/15 text-violet-600 dark:text-violet-400 text-[10px] font-bold uppercase border border-violet-500/20" : gp.status === "returned" || gp.status === "partially_returned" ? "px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-600 dark:text-blue-400 text-[10px] font-bold uppercase border border-blue-500/20" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase border border-emerald-500/20"}>
+                      {gp.status === "draft" ? "Draft" : gp.status === "awaiting_approval" ? "Awaiting Approval" : gp.status === "reversed" ? "Reversed" : gp.status === "returned" ? "Returned" : gp.status === "partially_returned" ? "Partially Returned" : "Posted"}
                     </span>
                   </td>
                   <td className="py-3 text-center">
                     <div className="flex items-center justify-center gap-1">
+                      {gp.status === "awaiting_approval" && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void handleApprove(gp)}
+                            disabled={isApproving}
+                            className="px-2 py-1 rounded-md hover:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer disabled:opacity-60"
+                            title="Approve: deducts stock (owner_admin only)"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { setRejectTarget(gp); setRejectReason("") }}
+                            className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer"
+                            title="Reject back to draft with a reason"
+                          >
+                            Reject
+                          </button>
+                        </>
+                      )}
                       {gp.status === "posted" ? (
                         <button
                           type="button"
@@ -677,6 +877,76 @@ export default function GatePassPage() {
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                   />
                 </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="receiver-name">Receiver Name</label>
+                  <input id="receiver-name"
+                    type="text"
+                    value={receiverName}
+                    onChange={(e) => setReceiverName(e.target.value)}
+                    placeholder="Person receiving the goods"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="receiver-contact">Receiver Contact</label>
+                  <input id="receiver-contact"
+                    type="text"
+                    value={receiverContact}
+                    onChange={(e) => setReceiverContact(e.target.value)}
+                    placeholder="0300-XXXXXXX"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="dispatch-mode">Dispatch Mode</label>
+                  <select id="dispatch-mode"
+                    value={dispatchMode}
+                    onChange={(e) => setDispatchMode(e.target.value)}
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  >
+                    <option value="">Not specified</option>
+                    <option value="Own Vehicle">Own Vehicle</option>
+                    <option value="Hired Transporter">Hired Transporter</option>
+                    <option value="Courier">Courier</option>
+                    <option value="Self Pickup">Self Pickup</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="transporter-name">Transporter</label>
+                  <input id="transporter-name"
+                    type="text"
+                    value={transporter}
+                    onChange={(e) => setTransporter(e.target.value)}
+                    placeholder="Transport company, if any"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="order-ref">Order Reference</label>
+                  <input id="order-ref"
+                    type="text"
+                    value={orderRef}
+                    onChange={(e) => setOrderRef(e.target.value)}
+                    placeholder="e.g. PO-1234 (a reuse only warns, never blocks)"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="gatepass-notes">Notes</label>
+                  <input id="gatepass-notes"
+                    type="text"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder="Anything the pass should note"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
               </div>
 
               {/* Items Section */}
@@ -759,6 +1029,22 @@ export default function GatePassPage() {
                           </select>
                         </div>
 
+                        <div>
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`bag-type-${idx}`}>Bag type</label>
+                          <select id={`bag-type-${idx}`}
+                            value={item.packagingTypeId}
+                            onChange={(e) => handleItemChange(idx, "packagingTypeId", e.target.value)}
+                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                          >
+                            <option value="">No specific type</option>
+                            {packagingTypes.map((t: any) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
                         <div className="sm:col-span-2 flex items-center gap-2">
                           <div className="flex-1">
                             <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packaging-remarks-${idx}`}>Packaging Remarks</label>
@@ -823,17 +1109,22 @@ export default function GatePassPage() {
       )}
 
       {/* Gate pass preview: the SAME GatePassPrint document that prints,
-          so preview and paper can never drift apart. No company address
-          is passed, so nothing invented appears on the document. */}
+          so preview and paper can never drift apart. Company details
+          come from settings (getCompanySettings); when none are
+          configured the header simply renders without them. */}
       {selectedPassForPrint && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 overflow-y-auto">
           <div className="w-full max-w-2xl bg-white text-black rounded-md shadow-md max-h-[90dvh] overflow-y-auto">
             <div className="p-4 sm:p-6">
               <GatePassPrint
+                company={company}
                 passNo={selectedPassForPrint.pass_no}
-                date={selectedPassForPrint.date}
+                date={formatDate(selectedPassForPrint.date)}
+                time={formatTime(selectedPassForPrint.date)}
                 status={selectedPassForPrint.status}
                 customerName={selectedPassForPrint.customer_name}
+                receiverName={selectedPassForPrint.receiver_name ?? undefined}
+                receiverContact={selectedPassForPrint.receiver_contact ?? undefined}
                 destination={selectedPassForPrint.destination}
                 godown={selectedPassForPrint.godown_name}
                 orderRef={selectedPassForPrint.order_ref}
@@ -841,8 +1132,12 @@ export default function GatePassPage() {
                 vehicleNo={selectedPassForPrint.vehicle_no}
                 driverName={selectedPassForPrint.driver_name}
                 driverPhone={selectedPassForPrint.driver_phone}
+                dispatchMode={selectedPassForPrint.dispatch_mode ?? undefined}
                 notes={selectedPassForPrint.notes}
-                items={selectedPassForPrint.items.map((it) => ({ product: it.product_name, bags: it.bags_count, weightKg: it.net_weight_kg, grossWeightKg: it.gross_weight_kg, remarks: it.remarks }))}
+                preparedBy={selectedPassForPrint.prepared_by ?? undefined}
+                approvedBy={selectedPassForPrint.approved_by ?? undefined}
+                receiverSignName={selectedPassForPrint.receiver_name ?? undefined}
+                items={selectedPassForPrint.items.map((it) => ({ product: it.product_name, bags: it.bags_count, weightKg: it.net_weight_kg, grossWeightKg: it.gross_weight_kg, bagType: it.packaging_type_id ? (packagingTypes.find((t: any) => t.id === it.packaging_type_id)?.name ?? undefined) : undefined, remarks: it.remarks }))}
               />
             </div>
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 px-4 sm:px-6 pb-4 sm:pb-6 pt-4 border-t border-gray-200 no-print">
@@ -869,7 +1164,7 @@ export default function GatePassPage() {
               <h3 className="text-sm font-bold text-foreground">Return {returnTarget.pass_no}</h3>
               <button type="button" onClick={() => setReturnTarget(null)} className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer">✕</button>
             </div>
-            <p className="text-xs text-muted-foreground">Reduce a quantity for a partial return. The remainder stays returnable, and the pass stays reversible until it is fully returned.</p>
+            <p className="text-xs text-muted-foreground">Reduce a quantity for a partial return. The remainder stays returnable, and the pass stays reversible until it is fully returned. Only quantities marked Accepted return to stock — Rejected quantities are recorded but never restocked.</p>
             <div className="space-y-2 text-xs">
               {returnLines.map((line, idx) => (
                 <div key={idx} className="grid grid-cols-1 sm:grid-cols-4 gap-2 p-2.5 rounded-lg bg-muted border border-border items-center">
@@ -880,6 +1175,17 @@ export default function GatePassPage() {
                     <input id={`return-qty-kg-${idx}`} type="number" min="0" max={line.remainingKg} value={line.qtyKg} onChange={(e) => setReturnLines((prev) => prev.map((l, i) => (i === idx ? { ...l, qtyKg: Number(e.target.value) } : l)))} className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono" />
                   </div>
                   <div className="text-muted-foreground">Left after return: <strong className="text-foreground">{Math.max(0, Math.round((line.remainingKg - (Number(line.qtyKg) || 0)) * 100) / 100)} kg</strong></div>
+                  <div>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`return-condition-${idx}`}>Condition</label>
+                    <input id={`return-condition-${idx}`} type="text" value={line.condition} onChange={(e) => setReturnLines((prev) => prev.map((l, i) => (i === idx ? { ...l, condition: e.target.value } : l)))} placeholder="e.g. good, damaged" className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`return-decision-${idx}`}>Restock decision</label>
+                    <select id={`return-decision-${idx}`} value={line.restockDecision} onChange={(e) => setReturnLines((prev) => prev.map((l, i) => (i === idx ? { ...l, restockDecision: e.target.value as "accepted" | "rejected" } : l)))} className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground">
+                      <option value="accepted">Accepted — back to stock</option>
+                      <option value="rejected">Rejected — not restocked</option>
+                    </select>
+                  </div>
                 </div>
               ))}
             </div>
@@ -897,8 +1203,8 @@ export default function GatePassPage() {
       <ConfirmDialog
         open={showPostConfirm}
         title="Authorize this gate pass?"
-        description={draftPass ? `Posting will deduct ${formatWeight(draftPass.total_weight_kg)} (${formatBags(draftPass.total_bags)}) from ${draftPass.godown_name || "the dispatch godown"} for vehicle ${draftPass.vehicle_no}. A pass number is assigned on posting. A posted pass can only be changed by reversal.` : ""}
-        confirmLabel="Authorize & Deduct Stock"
+        description={draftPass ? (approvalRequired ? `Submitting will send ${draftPass.pass_no || "this pass"} for owner_admin approval — no stock moves until it is approved. A pass number is assigned on submission.` : `Posting will deduct ${formatWeight(draftPass.total_weight_kg)} (${formatBags(draftPass.total_bags)}) from ${draftPass.godown_name || "the dispatch godown"} for vehicle ${draftPass.vehicle_no}. A pass number is assigned on posting. A posted pass can only be changed by reversal.`) : ""}
+        confirmLabel={approvalRequired ? "Submit for Approval" : "Authorize & Deduct Stock"}
         pending={isPending}
         onConfirm={handleConfirmPost}
         onCancel={() => { setShowPostConfirm(false); setDraftPass(null) }}
@@ -911,6 +1217,25 @@ export default function GatePassPage() {
         onConfirm={handleConfirmReversal}
         onCancel={() => setReversalTarget(null)}
       />
+      {rejectTarget !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
+          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-8">
+            <div className="flex items-center justify-between pb-3 border-b border-border">
+              <h3 className="text-sm font-bold text-foreground">Reject {rejectTarget.pass_no}?</h3>
+              <button type="button" onClick={() => setRejectTarget(null)} className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer">✕</button>
+            </div>
+            <p className="text-xs text-muted-foreground">The pass returns to draft with no stock deducted, so it can be corrected and re-submitted. Approval is owner_admin-only on the server.</p>
+            <div>
+              <label className="block font-medium text-foreground mb-1 text-xs" htmlFor="reject-reason">Rejection reason *</label>
+              <input id="reject-reason" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Why is this pass rejected?" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground text-xs" required />
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button type="button" onClick={() => setRejectTarget(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>
+              <button type="button" onClick={() => void handleConfirmReject()} disabled={isRejecting} className="px-5 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold cursor-pointer disabled:opacity-60">{isRejecting ? "Rejecting…" : "Reject to Draft"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
