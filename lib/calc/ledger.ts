@@ -129,6 +129,30 @@ export function gatePassStatusAfterReturn(
     : "partially_returned";
 }
 
+/** One return line carrying its restock decision (spec §9 return). */
+export interface ReturnRestockLine extends PoolQuantity {
+  /** 'accepted' restocks, 'rejected' never returns to stock. Null /
+   *  undefined means accepted: rows written before the decision
+   *  column existed always restocked, and that behaviour is kept. */
+  restockDecision?: "accepted" | "rejected" | null;
+}
+
+/**
+ * Quantities that actually return to stock from a return: ONLY the
+ * accepted lines, aggregated per (product, owner) pool. A rejected
+ * line is recorded on gate_pass_returns but contributes nothing here,
+ * so the ledger never credits rejected quantity.
+ */
+export function acceptedRestockQuantities(
+  lines: ReadonlyArray<ReturnRestockLine>,
+): PoolQuantity[] {
+  return aggregatePoolQuantities(
+    lines
+      .filter((l) => l.restockDecision !== "rejected")
+      .map((l) => ({ productId: l.productId, partyId: l.partyId, qtyKg: l.qtyKg })),
+  );
+}
+
 /**
  * Daybook closing (spec §7): closing = opening + receipts - payments.
  * Receipts/payments are totals for the day (or period) being closed.
