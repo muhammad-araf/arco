@@ -16,9 +16,9 @@ import {
   Printer,
   ChevronRight,
 } from "lucide-react"
-import { listBatches, getBatch, createBatchDraft, postBatch, reverseBatch, deleteBatchDraft, listRecipes, createRecipe, createRecipeVersion } from "@/app/actions/production"
+import { listBatches, getBatch, createBatchDraft, postBatch, reverseBatch, deleteBatchDraft, listRecipes, createRecipe, createRecipeVersion, setBatchVarianceReason } from "@/app/actions/production"
 import { getStockSummary } from "@/app/actions/inventory"
-import { listGodowns, listProducts, listMachines, listPackagingTypes } from "@/app/actions/masters"
+import { listGodowns, listProducts, listMachines, listPackagingTypes, listParties } from "@/app/actions/masters"
 import { BatchSheetPrint } from "@/components/print/batch-sheet-print"
 import { PrintButton } from "@/components/print/print-button"
 import { ProductionBatch, Godown, Product, Machine, Recipe } from "@/lib/types/database"
@@ -43,11 +43,13 @@ export default function ProductionPage() {
   const [machines, setMachines] = React.useState<Machine[]>([])
   const [recipes, setRecipes] = React.useState<any[]>([])
   const [packagingTypes, setPackagingTypes] = React.useState<any[]>([])
+  const [parties, setParties] = React.useState<any[]>([])
   const [summaryRows, setSummaryRows] = React.useState<any[]>([])
   const [recipeCode, setRecipeCode] = React.useState("")
   const [recipeName, setRecipeName] = React.useState("")
   const [recipeOutputId, setRecipeOutputId] = React.useState("")
   const [recipeYield, setRecipeYield] = React.useState<number>(92)
+  const [recipeEffectiveFrom, setRecipeEffectiveFrom] = React.useState("")
   const [recipeItems, setRecipeItems] = React.useState<{ key: number; productId: string; ratioPct: number }[]>([{ key: 1, productId: "", ratioPct: 100 }])
   const [recipePending, setRecipePending] = React.useState(false)
 
@@ -83,6 +85,18 @@ export default function ProductionPage() {
   const [packingRatePerBag, setPackingRatePerBag] = React.useState<number>(0)
   const [damagedBags, setDamagedBags] = React.useState<number>(0)
   const [batchNotes, setBatchNotes] = React.useState("")
+  // Batch customer / order / operator (shown on the batch sheet) and
+  // the owner pool the availability pre-check scopes to.
+  const [batchCustomerId, setBatchCustomerId] = React.useState("")
+  const [batchOrderRef, setBatchOrderRef] = React.useState("")
+  const [batchOperatorName, setBatchOperatorName] = React.useState("")
+  const [isCustomerOwned, setIsCustomerOwned] = React.useState(false)
+  const [batchOwnerPartyId, setBatchOwnerPartyId] = React.useState("")
+  const [varianceReason, setVarianceReason] = React.useState("")
+  // Draft blocked by the tolerance gate: record a reason, then post.
+  const [varianceTarget, setVarianceTarget] = React.useState<any | null>(null)
+  const [varianceReasonText, setVarianceReasonText] = React.useState("")
+  const [isPostingWithReason, setIsPostingWithReason] = React.useState(false)
 
   // "Today" for the today-only filter, from client-side effect state (see
   // isTodayISO): never read new Date() during render.
@@ -92,7 +106,7 @@ export default function ProductionPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [b, g, pr, m, r, sm, pk] = await Promise.all([listBatches(), listGodowns(), listProducts(), listMachines(), listRecipes(), getStockSummary(), listPackagingTypes()])
+      const [b, g, pr, m, r, sm, pk, pa] = await Promise.all([listBatches(), listGodowns(), listProducts(), listMachines(), listRecipes(), getStockSummary(), listPackagingTypes(), listParties()])
       const failed = [b, g, pr, m, r, sm, pk].find((x) => !x.success)
       if (failed) setFormError(failed.error ?? "Could not load production data.")
       const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
@@ -100,6 +114,7 @@ export default function ProductionPage() {
       const machineList = (Array.isArray(m.data) ? m.data : []) as Machine[]
       setGodowns(godownList); setProducts(productList); setMachines(machineList)
       setPackagingTypes(Array.isArray(pk.data) ? pk.data : [])
+      setParties(Array.isArray(pa.data) ? pa.data : [])
       setRecipes(Array.isArray(r.data) ? r.data : [])
       setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
       setBatches((Array.isArray(b.data) ? b.data : []).map((row: any) => ({
@@ -119,6 +134,10 @@ export default function ProductionPage() {
   // isLoading starts true and only post-action handlers reloaded before.
   React.useEffect(() => { loadData() }, [loadData])
 
+  // Dashboard drill-down links (?filter=today / posted) apply as the
+  // initial filter on mount, matching the other list pages.
+  React.useEffect(() => { setDrillFilter(getUrlFilter()) }, [])
+
   React.useEffect(() => {
     if (machines.length > 0 && !machineId) setMachineId(machines[0].id)
     if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
@@ -135,7 +154,13 @@ export default function ProductionPage() {
 
   const totalInputKg = inputLines.reduce((s, l) => s + (Number(l.qty) || 0), 0)
   const calculatedYield = totalInputKg > 0 ? Math.round((outputWeightKg / totalInputKg) * 100) : 0
-  const stockForProduct = (productId: string) => summaryRows.filter((r) => r.product_id === productId && r.godown_id === godownId).reduce((a, r) => a + (Number(r.balance_kg) || 0), 0)
+  // Availability pre-check, scoped by OWNER POOL like the server guard:
+  // a customer-owned batch checks only that owner's pool, a company
+  // batch only the company (NULL-party) pool — never all pools summed.
+  const effectiveOwnerPartyId = isCustomerOwned ? (batchOwnerPartyId || batchCustomerId || null) : null
+  const stockForProduct = (productId: string) => summaryRows
+    .filter((r) => r.product_id === productId && r.godown_id === godownId && (r.party_id ?? null) === effectiveOwnerPartyId)
+    .reduce((a, r) => a + (Number(r.balance_kg) || 0), 0)
 
   // Picking a recipe pins it to the batch and fills the input lines
   // from its items, scaled to the current total input (0 until the
@@ -172,14 +197,16 @@ export default function ProductionPage() {
     if (outputWeightKg < 0 || byProductKg < 0 || wasteKg < 0) return setFormError("Output, by-product and waste weights cannot be negative.")
     if (outputWeightKg + byProductKg + wasteKg > totalInputKg) return setFormError(`Mass balance check failed: output (${outputWeightKg} kg) + by-product (${byProductKg} kg) + waste (${wasteKg} kg) exceeds input (${totalInputKg} kg). Correct the weights before posting.`)
     if (bagsConsumed < 0 || packingRatePerBag < 0 || damagedBags < 0) return setFormError("Bags consumed, packing rate and damaged bags cannot be negative.")
-    // Client pre-check, aggregated per product (the server re-guards).
+    // Client pre-check, aggregated per product and scoped to the
+    // owner pool (the server re-guards the same pool).
     const aggregated = new Map<string, number>()
     for (const l of inputLines) aggregated.set(l.productId, (aggregated.get(l.productId) ?? 0) + (Number(l.qty) || 0))
     for (const [productId, qty] of aggregated) {
       const available = stockForProduct(productId)
       if (qty > available) {
         const name = products.find((p) => p.id === productId)?.name ?? productId
-        return setFormError(`Insufficient input stock in this godown: ${available} kg of ${name} available, but ${qty} kg requested. Reduce the batch size or choose another godown.`)
+        const pool = isCustomerOwned ? "for this owner" : "in company stock"
+        return setFormError(`Insufficient input stock in this godown ${pool}: ${available} kg of ${name} available, but ${qty} kg requested. Reduce the batch size or choose another godown.`)
       }
     }
     setFormError("")
@@ -220,6 +247,9 @@ export default function ProductionPage() {
         byproductProductId: byProductId || undefined, byproductKg: byProductKg, wasteKg,
         packagingTypeId: packagingTypeId || undefined, bagsConsumed, packingRatePerBag, damagedBags,
         notes: batchNotes || undefined,
+        isCustomerOwned, ownerPartyId: effectiveOwnerPartyId ?? undefined,
+        customerId: batchCustomerId || undefined, orderRef: batchOrderRef || undefined,
+        operatorName: batchOperatorName || undefined, varianceReason: varianceReason || undefined,
       })
       if (!created.success || !(created.data as any)?.id) {
         setFormError(created.error ?? "Could not create the batch draft.")
@@ -269,8 +299,8 @@ export default function ProductionPage() {
       const exists = recipes.find((r) => r.code === recipeCode.trim())
       const payload = items.map((i) => ({ productId: i.productId, ratioPct: Number(i.ratioPct) || 0 }))
       const res = exists
-        ? await createRecipeVersion({ code: recipeCode.trim(), name: recipeName.trim(), outputProductId: recipeOutputId, expectedYieldPct: recipeYield, items: payload })
-        : await createRecipe({ code: recipeCode.trim(), name: recipeName.trim(), outputProductId: recipeOutputId, expectedYieldPct: recipeYield, items: payload })
+        ? await createRecipeVersion({ code: recipeCode.trim(), name: recipeName.trim(), outputProductId: recipeOutputId, expectedYieldPct: recipeYield, effectiveFrom: recipeEffectiveFrom || undefined, items: payload })
+        : await createRecipe({ code: recipeCode.trim(), name: recipeName.trim(), outputProductId: recipeOutputId, expectedYieldPct: recipeYield, effectiveFrom: recipeEffectiveFrom || undefined, items: payload })
       if (!res.success) {
         setFormError(res.error ?? "Could not save the recipe.")
         return
@@ -326,6 +356,7 @@ export default function ProductionPage() {
         output_product_name: products.find((p) => p.id === full.output_product_id)?.name,
         byproduct_product_name: products.find((p) => p.id === full.byproduct_product_id)?.name,
         packaging_name: packagingTypes.find((p: any) => p.id === full.packaging_type_id)?.name,
+        customer_name: full.customer_id ? parties.find((p: any) => p.id === full.customer_id)?.name : undefined,
         production_batch_inputs: inputs,
         production_batch_outputs: outputs,
       })
@@ -340,6 +371,12 @@ export default function ProductionPage() {
     try {
       const res = await postBatch(batch.id, postToken("batch:post", batch.id))
       if (!res.success) {
+        // Tolerance gate: the draft needs a variance reason first.
+        if ((res.error ?? "").includes("variance reason")) {
+          setVarianceTarget(batch)
+          setVarianceReasonText("")
+          return
+        }
         setFormError(res.error ?? "Could not post the batch.")
         return
       }
@@ -347,6 +384,32 @@ export default function ProductionPage() {
       await loadData()
     } finally {
       setIsPostingDraft(false)
+    }
+  }
+
+  const handlePostWithVarianceReason = async () => {
+    if (!varianceTarget || isPostingWithReason) return
+    if (!varianceReasonText.trim()) {
+      setFormError("Enter a variance reason before posting this batch.")
+      return
+    }
+    setIsPostingWithReason(true)
+    try {
+      const saved = await setBatchVarianceReason(varianceTarget.id, varianceReasonText.trim())
+      if (!saved.success) {
+        setFormError(saved.error ?? "Could not save the variance reason.")
+        return
+      }
+      const res = await postBatch(varianceTarget.id, postToken("batch:post", varianceTarget.id))
+      if (!res.success) {
+        setFormError(res.error ?? "Could not post the batch.")
+        return
+      }
+      setFormNotice(`${varianceTarget.batch_no} posted.`)
+      setVarianceTarget(null)
+      await loadData()
+    } finally {
+      setIsPostingWithReason(false)
     }
   }
 
@@ -571,6 +634,69 @@ export default function ProductionPage() {
                 </div>
               </div>
 
+              {/* Customer / order / operator: shown on the batch sheet */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="batch-customer">Customer</label>
+                  <select id="batch-customer"
+                    value={batchCustomerId}
+                    onChange={(e) => setBatchCustomerId(e.target.value)}
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  >
+                    <option value="">No customer — company batch</option>
+                    {parties.map((p: any) => (
+                      <option key={p.id} value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="batch-order-ref">Order Ref</label>
+                  <input id="batch-order-ref"
+                    type="text"
+                    value={batchOrderRef}
+                    onChange={(e) => setBatchOrderRef(e.target.value)}
+                    placeholder="Customer order reference"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="batch-operator">Operator</label>
+                  <input id="batch-operator"
+                    type="text"
+                    value={batchOperatorName}
+                    onChange={(e) => setBatchOperatorName(e.target.value)}
+                    placeholder="Operator who runs this batch"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="batch-ownership">Stock Owner Pool</label>
+                  <select id="batch-ownership"
+                    value={isCustomerOwned ? "customer" : "company"}
+                    onChange={(e) => setIsCustomerOwned(e.target.value === "customer")}
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  >
+                    <option value="company">Company stock</option>
+                    <option value="customer">Customer-owned stock</option>
+                  </select>
+                </div>
+                {isCustomerOwned && (
+                  <div className="sm:col-span-2">
+                    <label className="block font-medium text-foreground mb-1" htmlFor="batch-owner-party">Owner Party (stock pool)</label>
+                    <select id="batch-owner-party"
+                      value={batchOwnerPartyId}
+                      onChange={(e) => setBatchOwnerPartyId(e.target.value)}
+                      className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    >
+                      <option value="">Use the customer above as owner</option>
+                      {parties.map((p: any) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
               {/* Recipe (optional): pins recipe + version to the batch */}
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="recipe-optional">Recipe (optional)</label>
@@ -780,6 +906,17 @@ export default function ProductionPage() {
               </div>
 
               <div>
+                <label className="block font-medium text-foreground mb-1" htmlFor="batch-variance-reason">Variance Reason</label>
+                <input id="batch-variance-reason"
+                  type="text"
+                  value={varianceReason}
+                  onChange={(e) => setVarianceReason(e.target.value)}
+                  placeholder="Required before posting when an input variance exceeds the configured tolerance"
+                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                />
+              </div>
+
+              <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="batch-run-notes">Batch Run Notes</label>
                 <input id="batch-run-notes"
                   type="text"
@@ -835,6 +972,18 @@ export default function ProductionPage() {
               <div>
                 <span className="text-gray-500 block">Processing Godown:</span>
                 <strong className="text-sm">{selectedBatchForPrint.godown_name}</strong>
+              </div>
+              <div>
+                <span className="text-gray-500 block">Customer:</span>
+                <strong className="text-sm">{(selectedBatchForPrint as any).customer_name ?? "—"}</strong>
+              </div>
+              <div>
+                <span className="text-gray-500 block">Order Ref:</span>
+                <strong className="text-sm">{(selectedBatchForPrint as any).order_ref ?? "—"}</strong>
+              </div>
+              <div>
+                <span className="text-gray-500 block">Operator:</span>
+                <strong className="text-sm">{(selectedBatchForPrint as any).operator_name ?? "—"}</strong>
               </div>
               <div>
                 <span className="text-gray-500 block">Calculated Yield Efficiency:</span>
@@ -943,6 +1092,9 @@ export default function ProductionPage() {
             status={(selectedBatchForPrint as any).status}
             recipeName={(selectedBatchForPrint as any).recipe_id ? recipes.find((r: any) => r.id === (selectedBatchForPrint as any).recipe_id)?.name : undefined}
             recipeVersion={(selectedBatchForPrint as any).recipe_version_used ?? undefined}
+            customerName={(selectedBatchForPrint as any).customer_name}
+            orderRef={(selectedBatchForPrint as any).order_ref}
+            operator={(selectedBatchForPrint as any).operator_name}
             machine={selectedBatchForPrint.machine_name}
             godown={selectedBatchForPrint.godown_name}
             plannedSizeKg={selectedBatchForPrint.planned_size_kg}
@@ -989,6 +1141,7 @@ export default function ProductionPage() {
             </div>
           </div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="expected-yield">Expected yield (%)</label><input id="expected-yield" type="number" value={recipeYield} onChange={(e) => setRecipeYield(Number(e.target.value))} min="0" max="100" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="effective-from">Effective from</label><input id="effective-from" type="date" value={recipeEffectiveFrom} onChange={(e) => setRecipeEffectiveFrom(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
           <div className="sm:col-span-2 lg:col-span-3 flex justify-end"><button type="submit" disabled={recipePending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{recipePending ? "Saving…" : "Save recipe / new version"}</button></div>
         </form>
       </div>
@@ -1019,6 +1172,34 @@ export default function ProductionPage() {
         onConfirm={handleConfirmReversal}
         onCancel={() => setReversalTarget(null)}
       />
+      {/* Variance reason for a draft blocked by the tolerance gate */}
+      {varianceTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4">
+            <h3 className="text-sm font-bold text-foreground">Variance reason required</h3>
+            <p className="text-xs text-muted-foreground">
+              {varianceTarget.batch_no} cannot be posted: an input variance exceeds the configured tolerance. Record the reason, then post again.
+            </p>
+            <div>
+              <label className="block font-medium text-foreground mb-1 text-xs" htmlFor="draft-variance-reason">Variance reason</label>
+              <input id="draft-variance-reason"
+                type="text"
+                value={varianceReasonText}
+                onChange={(e) => setVarianceReasonText(e.target.value)}
+                placeholder="Why the input varied from plan"
+                className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground text-xs"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-3">
+              <button type="button" onClick={() => setVarianceTarget(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>
+              <button type="button" onClick={handlePostWithVarianceReason} disabled={isPostingWithReason} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer disabled:opacity-60">
+                {isPostingWithReason ? <SubmitSpinner /> : null}
+                <span>{isPostingWithReason ? "Posting…" : "Save Reason & Post"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
