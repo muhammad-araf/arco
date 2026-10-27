@@ -26,6 +26,8 @@ export interface BatchSheetPackaging {
 export interface BatchSheetPrintProps {
   company?: CompanyDetails
   batchNo?: string
+  /** True batch status (draft/posted/reversed) — never a fixed badge. */
+  status?: string
   date?: string
   recipeName?: string
   recipeVersion?: number | string
@@ -92,6 +94,7 @@ export function BatchSheetPrint(props: BatchSheetPrintProps) {
       docNumber={props.batchNo ?? "—"}
       meta={[
         { label: "Date", value: props.date },
+        { label: "Status", value: props.status },
         { label: "Recipe", value: props.recipeName },
         { label: "Version", value: props.recipeVersion !== undefined ? String(props.recipeVersion) : undefined },
         { label: "Machine", value: props.machine },

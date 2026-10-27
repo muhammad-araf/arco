@@ -14,9 +14,9 @@ import {
   Printer,
   ChevronRight,
 } from "lucide-react"
-import { listBatches, createBatchDraft, postBatch, reverseBatch, listRecipes, createRecipe, createRecipeVersion } from "@/app/actions/production"
+import { listBatches, getBatch, createBatchDraft, postBatch, reverseBatch, deleteBatchDraft, listRecipes, createRecipe, createRecipeVersion } from "@/app/actions/production"
 import { getStockSummary } from "@/app/actions/inventory"
-import { listGodowns, listProducts, listMachines } from "@/app/actions/masters"
+import { listGodowns, listProducts, listMachines, listPackagingTypes } from "@/app/actions/masters"
 import { BatchSheetPrint } from "@/components/print/batch-sheet-print"
 import { PrintButton } from "@/components/print/print-button"
 import { ProductionBatch, Godown, Product, Machine, Recipe } from "@/lib/types/database"
@@ -40,13 +40,13 @@ export default function ProductionPage() {
   const [products, setProducts] = React.useState<Product[]>([])
   const [machines, setMachines] = React.useState<Machine[]>([])
   const [recipes, setRecipes] = React.useState<any[]>([])
+  const [packagingTypes, setPackagingTypes] = React.useState<any[]>([])
   const [summaryRows, setSummaryRows] = React.useState<any[]>([])
   const [recipeCode, setRecipeCode] = React.useState("")
   const [recipeName, setRecipeName] = React.useState("")
   const [recipeOutputId, setRecipeOutputId] = React.useState("")
   const [recipeYield, setRecipeYield] = React.useState<number>(92)
-  const [recipeInputId, setRecipeInputId] = React.useState("")
-  const [recipeRatio, setRecipeRatio] = React.useState<number>(100)
+  const [recipeItems, setRecipeItems] = React.useState<{ key: number; productId: string; ratioPct: number }[]>([{ key: 1, productId: "", ratioPct: 100 }])
   const [recipePending, setRecipePending] = React.useState(false)
 
   // Modal State
@@ -60,19 +60,26 @@ export default function ProductionPage() {
   const [draftBatch, setDraftBatch] = React.useState<ProductionBatch | null>(null)
   const [reversalTarget, setReversalTarget] = React.useState<ProductionBatch | null>(null)
   const [isReversing, setIsReversing] = React.useState(false)
+  const [deleteTarget, setDeleteTarget] = React.useState<ProductionBatch | null>(null)
+  const [isDeleting, setIsDeleting] = React.useState(false)
+  const [isPostingDraft, setIsPostingDraft] = React.useState(false)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
   const postGuard = React.useRef(false)
 
   // Batch Form State
   const [machineId, setMachineId] = React.useState("")
   const [godownId, setGodownId] = React.useState("")
-  const [inputProductId, setInputProductId] = React.useState("")
+  const [recipeId, setRecipeId] = React.useState("")
+  const [inputLines, setInputLines] = React.useState<{ key: number; productId: string; qty: number }[]>([{ key: 1, productId: "", qty: 10000 }])
   const [outputProductId, setOutputProductId] = React.useState("")
   const [byProductId, setByProductId] = React.useState("")
-  const [inputWeightKg, setInputWeightKg] = React.useState<number>(10000)
   const [outputWeightKg, setOutputWeightKg] = React.useState<number>(9200)
   const [byProductKg, setByProductKg] = React.useState<number>(550)
   const [wasteKg, setWasteKg] = React.useState<number>(250)
+  const [packagingTypeId, setPackagingTypeId] = React.useState("")
+  const [bagsConsumed, setBagsConsumed] = React.useState<number>(0)
+  const [packingRatePerBag, setPackingRatePerBag] = React.useState<number>(0)
+  const [damagedBags, setDamagedBags] = React.useState<number>(0)
   const [batchNotes, setBatchNotes] = React.useState("")
 
   // "Today" for the today-only filter, from client-side effect state (see
@@ -83,13 +90,14 @@ export default function ProductionPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [b, g, pr, m, r, sm] = await Promise.all([listBatches(), listGodowns(), listProducts(), listMachines(), listRecipes(), getStockSummary()])
-      const failed = [b, g, pr, m, r, sm].find((x) => !x.success)
+      const [b, g, pr, m, r, sm, pk] = await Promise.all([listBatches(), listGodowns(), listProducts(), listMachines(), listRecipes(), getStockSummary(), listPackagingTypes()])
+      const failed = [b, g, pr, m, r, sm, pk].find((x) => !x.success)
       if (failed) setFormError(failed.error ?? "Could not load production data.")
       const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
       const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
       const machineList = (Array.isArray(m.data) ? m.data : []) as Machine[]
       setGodowns(godownList); setProducts(productList); setMachines(machineList)
+      setPackagingTypes(Array.isArray(pk.data) ? pk.data : [])
       setRecipes(Array.isArray(r.data) ? r.data : [])
       setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
       setBatches((Array.isArray(b.data) ? b.data : []).map((row: any) => ({
@@ -116,13 +124,36 @@ export default function ProductionPage() {
     const finSeeds = products.filter((p) => p.category === "finished_seed")
     const byProds = products.filter((p) => p.category === "by_product")
 
-    if (rawSeeds.length > 0 && !inputProductId) setInputProductId(rawSeeds[0].id)
+    if (rawSeeds.length > 0 && !inputLines[0]?.productId) {
+      setInputLines((lines) => lines.map((l, i) => (i === 0 ? { ...l, productId: rawSeeds[0].id } : l)))
+    }
     if (finSeeds.length > 0 && !outputProductId) setOutputProductId(finSeeds[0].id)
     if (byProds.length > 0 && !byProductId) setByProductId(byProds[0].id)
-  }, [machines, godowns, products, machineId, godownId, inputProductId, outputProductId, byProductId])
+  }, [machines, godowns, products, machineId, godownId, inputLines, outputProductId, byProductId])
 
-  const calculatedYield = inputWeightKg > 0 ? Math.round((outputWeightKg / inputWeightKg) * 100) : 0
-  const availableInputStock = inputProductId ? summaryRows.filter((r) => r.product_id === inputProductId && r.godown_id === godownId).reduce((a, r) => a + (Number(r.balance_kg) || 0), 0) : 0
+  const totalInputKg = inputLines.reduce((s, l) => s + (Number(l.qty) || 0), 0)
+  const calculatedYield = totalInputKg > 0 ? Math.round((outputWeightKg / totalInputKg) * 100) : 0
+  const stockForProduct = (productId: string) => summaryRows.filter((r) => r.product_id === productId && r.godown_id === godownId).reduce((a, r) => a + (Number(r.balance_kg) || 0), 0)
+
+  // Picking a recipe pins it to the batch and fills the input lines
+  // from its items, scaled to the current total input (0 until the
+  // user enters quantities). The server records recipe_id + the
+  // version that was active when the draft was created.
+  const handleRecipeSelect = (id: string) => {
+    setRecipeId(id)
+    if (!id) return
+    const recipe = recipes.find((r: any) => r.id === id)
+    if (!recipe) return
+    if (recipe.output_product_id) setOutputProductId(recipe.output_product_id)
+    const items = (recipe.recipe_items ?? []) as { product_id: string; required_ratio_pct: number }[]
+    if (items.length) {
+      setInputLines(items.map((item, i) => ({
+        key: Date.now() + i,
+        productId: item.product_id,
+        qty: totalInputKg > 0 ? Math.round((totalInputKg * Number(item.required_ratio_pct)) / 100) : 0,
+      })))
+    }
+  }
 
   const handlePostBatch = (e: React.FormEvent) => {
     e.preventDefault()
@@ -131,12 +162,24 @@ export default function ProductionPage() {
     // the stock guard — each failure names the fix, never a silent return.
     if (!machineId) return setFormError("Select the machine / cleaning plant for this batch.")
     if (!godownId) return setFormError("Select the target godown for this batch.")
-    if (!inputProductId) return setFormError("Select the raw seed input product.")
+    if (!inputLines.length) return setFormError("Add at least one input line.")
+    if (inputLines.some((l) => !l.productId)) return setFormError("Every input line needs a product.")
+    if (inputLines.some((l) => (Number(l.qty) || 0) < 0)) return setFormError("Input quantities cannot be negative.")
     if (!outputProductId) return setFormError("Select the finished output product.")
-    if (!isPositive(inputWeightKg)) return setFormError("Input weight must be greater than zero.")
+    if (!isPositive(totalInputKg)) return setFormError("Input weight must be greater than zero.")
     if (outputWeightKg < 0 || byProductKg < 0 || wasteKg < 0) return setFormError("Output, by-product and waste weights cannot be negative.")
-    if (outputWeightKg + byProductKg + wasteKg > inputWeightKg) return setFormError(`Mass balance check failed: output (${outputWeightKg} kg) + by-product (${byProductKg} kg) + waste (${wasteKg} kg) exceeds input (${inputWeightKg} kg). Correct the weights before posting.`)
-    if (inputWeightKg > availableInputStock) return setFormError(`Insufficient input stock in this godown: ${availableInputStock} kg available, but ${inputWeightKg} kg requested. Reduce the batch size or choose another godown.`)
+    if (outputWeightKg + byProductKg + wasteKg > totalInputKg) return setFormError(`Mass balance check failed: output (${outputWeightKg} kg) + by-product (${byProductKg} kg) + waste (${wasteKg} kg) exceeds input (${totalInputKg} kg). Correct the weights before posting.`)
+    if (bagsConsumed < 0 || packingRatePerBag < 0 || damagedBags < 0) return setFormError("Bags consumed, packing rate and damaged bags cannot be negative.")
+    // Client pre-check, aggregated per product (the server re-guards).
+    const aggregated = new Map<string, number>()
+    for (const l of inputLines) aggregated.set(l.productId, (aggregated.get(l.productId) ?? 0) + (Number(l.qty) || 0))
+    for (const [productId, qty] of aggregated) {
+      const available = stockForProduct(productId)
+      if (qty > available) {
+        const name = products.find((p) => p.id === productId)?.name ?? productId
+        return setFormError(`Insufficient input stock in this godown: ${available} kg of ${name} available, but ${qty} kg requested. Reduce the batch size or choose another godown.`)
+      }
+    }
     setFormError("")
     const selectedMachine = machines.find((m) => m.id === machineId)
     const selectedGodown = godowns.find((g) => g.id === godownId)
@@ -149,16 +192,15 @@ export default function ProductionPage() {
       machine_name: selectedMachine?.name,
       godown_id: godownId,
       godown_name: selectedGodown?.name,
-      planned_size_kg: inputWeightKg,
-      actual_input_kg: inputWeightKg,
+      planned_size_kg: totalInputKg,
+      actual_input_kg: totalInputKg,
       actual_output_kg: outputWeightKg,
       byproduct_kg: byProductKg,
       waste_kg: wasteKg,
       yield_pct: calculatedYield,
-      status: "posted",
+      status: "draft",
       notes: batchNotes || undefined,
       created_at: new Date().toISOString(),
-      posted_at: new Date().toISOString(),
     })
     setShowPostConfirm(true)
   }
@@ -169,10 +211,12 @@ export default function ProductionPage() {
     setIsPending(true)
     try {
       const created = await createBatchDraft({
-        machineId, godownId, plannedSizeKg: inputWeightKg,
-        inputs: [{ productId: inputProductId, actualQtyKg: inputWeightKg }],
+        recipeId: recipeId || undefined,
+        machineId, godownId, plannedSizeKg: totalInputKg,
+        inputs: inputLines.map((l) => ({ productId: l.productId, actualQtyKg: Number(l.qty) || 0 })),
         outputProductId, actualOutputKg: outputWeightKg,
         byproductProductId: byProductId || undefined, byproductKg: byProductKg, wasteKg,
+        packagingTypeId: packagingTypeId || undefined, bagsConsumed, packingRatePerBag, damagedBags,
         notes: batchNotes || undefined,
       })
       if (!created.success || !(created.data as any)?.id) {
@@ -181,16 +225,20 @@ export default function ProductionPage() {
       }
       const posted = await postBatch((created.data as any).id, `batch-${Date.now()}`)
       if (!posted.success) {
-        setFormError(posted.error ?? "Could not post the batch.")
+        // The draft stays in the list as Draft, with Post / Delete
+        // actions — it is not lost, and it is not shown as posted.
+        setFormError(posted.error ?? "Could not post the batch. The draft is kept below — post it again or delete it.")
+        await loadData()
         return
       }
       const row: any = posted.data ?? created.data
       setFormNotice(`${row.batch_no ?? draftBatch.batch_no} posted — ${formatWeight(row.actual_input_kg ?? draftBatch.actual_input_kg)} input deducted, ${formatWeight(row.actual_output_kg ?? draftBatch.actual_output_kg)} output added at ${row.yield_pct ?? draftBatch.yield_pct}% yield.`)
-      setSelectedBatchForPrint({ ...draftBatch, batch_no: row.batch_no ?? draftBatch.batch_no, status: "posted" })
       setShowPostConfirm(false)
       setIsBatchModalOpen(false)
       setDraftBatch(null)
       await loadData()
+      // Print from the batch's own stored lines, not form state.
+      await handlePrintBatch({ id: row.id ?? (created.data as any).id, batch_no: row.batch_no ?? draftBatch.batch_no })
     } finally {
       setIsPending(false)
       postGuard.current = false
@@ -200,16 +248,27 @@ export default function ProductionPage() {
   const handleCreateRecipe = async (e: React.FormEvent) => {
     e.preventDefault()
     if (recipePending) return
-    if (!recipeCode.trim() || !recipeName.trim() || !recipeOutputId || !recipeInputId) {
-      setFormError("Recipe code, name, output product and at least one input product are required.")
+    if (!recipeCode.trim() || !recipeName.trim() || !recipeOutputId) {
+      setFormError("Recipe code, name and output product are required.")
+      return
+    }
+    const items = recipeItems.filter((i) => i.productId)
+    if (!items.length) {
+      setFormError("A recipe needs at least one input product.")
+      return
+    }
+    const ratioSum = items.reduce((s, i) => s + (Number(i.ratioPct) || 0), 0)
+    if (Math.abs(ratioSum - 100) > 0.01) {
+      setFormError(`Recipe input ratios must sum to 100 (got ${ratioSum}).`)
       return
     }
     setRecipePending(true)
     try {
       const exists = recipes.find((r) => r.code === recipeCode.trim())
+      const payload = items.map((i) => ({ productId: i.productId, ratioPct: Number(i.ratioPct) || 0 }))
       const res = exists
-        ? await createRecipeVersion({ code: recipeCode.trim(), name: recipeName.trim(), outputProductId: recipeOutputId, expectedYieldPct: recipeYield, items: [{ productId: recipeInputId, ratioPct: recipeRatio }] })
-        : await createRecipe({ code: recipeCode.trim(), name: recipeName.trim(), outputProductId: recipeOutputId, expectedYieldPct: recipeYield, items: [{ productId: recipeInputId, ratioPct: recipeRatio }] })
+        ? await createRecipeVersion({ code: recipeCode.trim(), name: recipeName.trim(), outputProductId: recipeOutputId, expectedYieldPct: recipeYield, items: payload })
+        : await createRecipe({ code: recipeCode.trim(), name: recipeName.trim(), outputProductId: recipeOutputId, expectedYieldPct: recipeYield, items: payload })
       if (!res.success) {
         setFormError(res.error ?? "Could not save the recipe.")
         return
@@ -240,6 +299,69 @@ export default function ProductionPage() {
       await loadData()
     } finally {
       setIsReversing(false)
+    }
+  }
+
+  // Print from the batch's own stored lines + true status, fetched
+  // fresh — never the current form state's product or a fixed badge.
+  const handlePrintBatch = async (b: any) => {
+    const res = await getBatch(b.id)
+    if (res.success && res.data) {
+      const full: any = res.data
+      const inputs = (full.production_batch_inputs ?? []).map((i: any) => ({
+        ...i,
+        product_name: products.find((p) => p.id === i.product_id)?.name ?? i.product_id,
+      }))
+      const outputs = (full.production_batch_outputs ?? []).map((o: any) => ({
+        ...o,
+        product_name: products.find((p) => p.id === o.product_id)?.name ?? o.product_id,
+      }))
+      setSelectedBatchForPrint({
+        ...b,
+        ...full,
+        machine_name: machines.find((m) => m.id === full.machine_id)?.name ?? b.machine_name,
+        godown_name: godowns.find((g) => g.id === full.godown_id)?.name ?? b.godown_name,
+        output_product_name: products.find((p) => p.id === full.output_product_id)?.name,
+        byproduct_product_name: products.find((p) => p.id === full.byproduct_product_id)?.name,
+        packaging_name: packagingTypes.find((p: any) => p.id === full.packaging_type_id)?.name,
+        production_batch_inputs: inputs,
+        production_batch_outputs: outputs,
+      })
+    } else {
+      setSelectedBatchForPrint(b)
+    }
+  }
+
+  const handlePostDraft = async (batch: any) => {
+    if (isPostingDraft) return
+    setIsPostingDraft(true)
+    try {
+      const res = await postBatch(batch.id, `batch-retry-${Date.now()}`)
+      if (!res.success) {
+        setFormError(res.error ?? "Could not post the batch.")
+        return
+      }
+      setFormNotice(`${batch.batch_no} posted.`)
+      await loadData()
+    } finally {
+      setIsPostingDraft(false)
+    }
+  }
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget || isDeleting) return
+    setIsDeleting(true)
+    try {
+      const res = await deleteBatchDraft(deleteTarget.id)
+      if (!res.success) {
+        setFormError(res.error ?? "Could not delete the draft batch.")
+        return
+      }
+      setFormNotice(`${deleteTarget.batch_no} draft deleted.`)
+      setDeleteTarget(null)
+      await loadData()
+    } finally {
+      setIsDeleting(false)
     }
   }
 
@@ -317,8 +439,8 @@ export default function ProductionPage() {
                   <td className="py-3 font-bold text-foreground">
                     <div className="flex items-center gap-1.5">
                       <span>{b.batch_no}</span>
-                      <span className={b.status === "reversed" ? "px-1.5 py-0.2 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase" : "px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase"}>
-                        {b.status === "reversed" ? "Reversed" : "Posted"}
+                      <span className={b.status === "reversed" ? "px-1.5 py-0.2 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[9px] font-bold uppercase" : b.status === "draft" ? "px-1.5 py-0.2 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[9px] font-bold uppercase" : "px-1.5 py-0.2 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[9px] font-bold uppercase"}>
+                        {b.status ?? "draft"}
                       </span>
                     </div>
                   </td>
@@ -344,12 +466,31 @@ export default function ProductionPage() {
                     <div className="flex items-center justify-center gap-1">
                       <button
                         type="button"
-                        onClick={() => setSelectedBatchForPrint(b)}
+                        onClick={() => handlePrintBatch(b)}
                         className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
                         title="Print Production Batch Sheet"
                       >
                         <Printer className="h-4 w-4" />
                       </button>
+                      {b.status === "draft" && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handlePostDraft(b)}
+                            disabled={isPostingDraft}
+                            className="px-2 py-1 rounded-md hover:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer disabled:opacity-60"
+                          >
+                            Post
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTarget(b)}
+                            className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer"
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
                       {b.status === "posted" && (
                         <button
                           type="button"
@@ -428,6 +569,23 @@ export default function ProductionPage() {
                 </div>
               </div>
 
+              {/* Recipe (optional): pins recipe + version to the batch */}
+              <div>
+                <label className="block font-medium text-foreground mb-1">Recipe (optional)</label>
+                <select
+                  value={recipeId}
+                  onChange={(e) => handleRecipeSelect(e.target.value)}
+                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                >
+                  <option value="">No recipe — enter inputs by hand</option>
+                  {recipes.map((r: any) => (
+                    <option key={r.id} value={r.id}>
+                      {r.code} v{r.version} — {r.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* Input Grain Selection & Stock Checker */}
               <div className="p-3 rounded-lg bg-muted border border-border space-y-2">
                 <div className="flex items-center justify-between">
@@ -435,40 +593,49 @@ export default function ProductionPage() {
                     Input Grain (Stock Deduction)
                   </span>
                   <span className="text-muted-foreground text-[11px]">
-                    Godown Stock: <strong className="text-foreground">{formatWeight(availableInputStock)}</strong>
+                    Total Input: <strong className="text-foreground">{formatWeight(totalInputKg)}</strong>
                   </span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">Raw Seed Product</label>
-                    <select
-                      value={inputProductId}
-                      onChange={(e) => setInputProductId(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
-                    >
-                      {products
-                        .filter((p) => p.category === "raw_seed" || p.category === "intermediate")
-                        .map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                    </select>
-                  </div>
+                {inputLines.map((line, idx) => (
+                  <div key={line.key} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5">Raw Seed Product</label>
+                      <select
+                        value={line.productId}
+                        onChange={(e) => setInputLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, productId: e.target.value } : l)))}
+                        className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                      >
+                        <option value="">Select product</option>
+                        {products
+                          .filter((p) => p.category === "raw_seed" || p.category === "intermediate")
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
 
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">Input Weight (kg)</label>
-                    <input
-                      type="number"
-                      value={inputWeightKg}
-                      onChange={(e) => setInputWeightKg(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
-                      min="1"
-                      required
-                    />
+                    <div>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5">Input Weight (kg){line.productId ? ` — in godown: ${formatWeight(stockForProduct(line.productId))}` : ""}</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="number"
+                          value={line.qty}
+                          onChange={(e) => setInputLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, qty: Number(e.target.value) } : l)))}
+                          className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
+                          min="0"
+                          required
+                        />
+                        {inputLines.length > 1 && (
+                          <button type="button" onClick={() => setInputLines((lines) => lines.filter((l) => l.key !== line.key))} className="px-2 rounded-md bg-muted text-muted-foreground text-xs font-bold cursor-pointer" title="Remove this input line">✕</button>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
+                ))}
+                <button type="button" onClick={() => setInputLines((lines) => [...lines, { key: Date.now(), productId: "", qty: 0 }])} className="px-3 py-1.5 rounded-md bg-background border border-border text-foreground text-[11px] font-semibold cursor-pointer">+ Add input line</button>
               </div>
 
               {/* Output & By-Product Recovery */}
@@ -556,6 +723,60 @@ export default function ProductionPage() {
                 </div>
               </div>
 
+              {/* Packaging: writes a packing record + bardana ledger row on post */}
+              <div className="p-3 rounded-lg bg-muted border border-border space-y-3">
+                <span className="font-bold text-foreground uppercase tracking-wider text-[10px] block">
+                  Packaging (Bardana)
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5">Bag / Bardana Type</label>
+                    <select
+                      value={packagingTypeId}
+                      onChange={(e) => setPackagingTypeId(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                    >
+                      <option value="">No packaging for this batch</option>
+                      {packagingTypes.map((p: any) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} — {p.current_stock} bags available
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5">Bags Consumed</label>
+                    <input
+                      type="number"
+                      value={bagsConsumed}
+                      onChange={(e) => setBagsConsumed(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
+                      min="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5">Packing Rate / Bag (PKR)</label>
+                    <input
+                      type="number"
+                      value={packingRatePerBag}
+                      onChange={(e) => setPackingRatePerBag(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
+                      min="0"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5">Damaged Bags</label>
+                    <input
+                      type="number"
+                      value={damagedBags}
+                      onChange={(e) => setDamagedBags(Number(e.target.value))}
+                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
+                      min="0"
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="block font-medium text-foreground mb-1">Batch Run Notes</label>
                 <input
@@ -619,9 +840,42 @@ export default function ProductionPage() {
               </div>
               <div>
                 <span className="text-gray-500 block">Status:</span>
-                <strong className="text-xs uppercase bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">Posted</strong>
+                <strong className="text-xs uppercase bg-gray-100 text-gray-800 px-2 py-0.5 rounded">{(selectedBatchForPrint as any).status ?? "draft"}</strong>
               </div>
             </div>
+
+            {/* The batch's own input lines, fetched with the batch */}
+            {((selectedBatchForPrint as any).production_batch_inputs ?? []).length > 0 && (
+              <table className="w-full text-left border-collapse text-xs mt-4">
+                <thead>
+                  <tr className="border-b-2 border-gray-300">
+                    <th className="py-2">Input Product</th>
+                    <th className="py-2 text-right">Planned (kg)</th>
+                    <th className="py-2 text-right">Actual (kg)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {((selectedBatchForPrint as any).production_batch_inputs ?? []).map((i: any) => (
+                    <tr key={i.id ?? i.product_id}>
+                      <td className="py-2 font-medium">{i.product_name ?? i.product_id}</td>
+                      <td className="py-2 text-right font-mono">{i.planned_qty_kg} kg</td>
+                      <td className="py-2 text-right font-mono font-bold">{i.actual_qty_kg} kg</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            {((selectedBatchForPrint as any).variances ?? []).length > 0 && (
+              <div className="text-xs mt-2">
+                <span className="text-gray-500 block">Variances (actual − planned):</span>
+                {((selectedBatchForPrint as any).variances ?? []).map((v: any) => (
+                  <div key={v.product_id} className="flex justify-between">
+                    <span>{products.find((p) => p.id === v.product_id)?.name ?? v.product_id}</span>
+                    <strong className="font-mono">{v.qty} kg ({v.pct}%)</strong>
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Reconciliation Table */}
             <table className="w-full text-left border-collapse text-xs mt-4">
@@ -679,19 +933,27 @@ export default function ProductionPage() {
           </div>
         </div>
       )}
-      {selectedBatchForPrint && selectedBatchForPrint.status === "posted" && (
+      {selectedBatchForPrint && (
         <div className="hidden print:block">
           <BatchSheetPrint
             batchNo={selectedBatchForPrint.batch_no}
             date={selectedBatchForPrint.date}
+            status={(selectedBatchForPrint as any).status}
+            recipeName={(selectedBatchForPrint as any).recipe_id ? recipes.find((r: any) => r.id === (selectedBatchForPrint as any).recipe_id)?.name : undefined}
+            recipeVersion={(selectedBatchForPrint as any).recipe_version_used ?? undefined}
             machine={selectedBatchForPrint.machine_name}
             godown={selectedBatchForPrint.godown_name}
             plannedSizeKg={selectedBatchForPrint.planned_size_kg}
-            actualInputs={[{ product: products.find((p) => p.id === inputProductId)?.name, actualQtyKg: selectedBatchForPrint.actual_input_kg }]}
-            outputProduct={products.find((p) => p.id === outputProductId)?.name}
+            plannedInputs={((selectedBatchForPrint as any).production_batch_inputs ?? []).map((i: any) => ({ product: i.product_name ?? products.find((p) => p.id === i.product_id)?.name ?? i.product_id, plannedQtyKg: i.planned_qty_kg, actualQtyKg: i.actual_qty_kg }))}
+            actualInputs={((selectedBatchForPrint as any).production_batch_inputs ?? []).map((i: any) => ({ product: i.product_name ?? products.find((p) => p.id === i.product_id)?.name ?? i.product_id, plannedQtyKg: i.planned_qty_kg, actualQtyKg: i.actual_qty_kg }))}
+            outputProduct={(selectedBatchForPrint as any).output_product_name ?? products.find((p) => p.id === (selectedBatchForPrint as any).output_product_id)?.name}
             actualOutputKg={selectedBatchForPrint.actual_output_kg}
+            byProductName={(selectedBatchForPrint as any).byproduct_product_name}
             byProductKg={selectedBatchForPrint.byproduct_kg}
             wasteKg={selectedBatchForPrint.waste_kg}
+            yieldPct={selectedBatchForPrint.yield_pct}
+            packagingConsumed={(selectedBatchForPrint as any).packaging_type_id ? [{ packagingType: (selectedBatchForPrint as any).packaging_name ?? packagingTypes.find((p: any) => p.id === (selectedBatchForPrint as any).packaging_type_id)?.name, bags: (selectedBatchForPrint as any).bags_consumed, capacityKg: packagingTypes.find((p: any) => p.id === (selectedBatchForPrint as any).packaging_type_id)?.capacity_kg }] : []}
+            notes={selectedBatchForPrint.notes}
           />
         </div>
       )}
@@ -708,8 +970,22 @@ export default function ProductionPage() {
           <div><label className="block font-medium text-foreground mb-1">Code *</label><input value={recipeCode} onChange={(e) => setRecipeCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
           <div><label className="block font-medium text-foreground mb-1">Name *</label><input value={recipeName} onChange={(e) => setRecipeName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
           <div><label className="block font-medium text-foreground mb-1">Output product *</label><select value={recipeOutputId} onChange={(e) => setRecipeOutputId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select output</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">Input product *</label><select value={recipeInputId} onChange={(e) => setRecipeInputId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select input</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">Input ratio (%)</label><input type="number" value={recipeRatio} onChange={(e) => setRecipeRatio(Number(e.target.value))} min="0" max="100" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+          <div className="sm:col-span-2 lg:col-span-3 space-y-2">
+            <span className="block font-medium text-foreground">Input items (ratios must sum to 100)</span>
+            {recipeItems.map((item) => (
+              <div key={item.key} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <select value={item.productId} onChange={(e) => setRecipeItems((items) => items.map((i) => (i.key === item.key ? { ...i, productId: e.target.value } : i)))} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select input</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select>
+                <div className="flex gap-2">
+                  <input type="number" value={item.ratioPct} onChange={(e) => setRecipeItems((items) => items.map((i) => (i.key === item.key ? { ...i, ratioPct: Number(e.target.value) } : i)))} min="0" max="100" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" />
+                  {recipeItems.length > 1 && (<button type="button" onClick={() => setRecipeItems((items) => items.filter((i) => i.key !== item.key))} className="px-2 rounded-lg bg-muted text-muted-foreground text-xs font-bold cursor-pointer" title="Remove this input item">✕</button>)}
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center justify-between">
+              <button type="button" onClick={() => setRecipeItems((items) => [...items, { key: Date.now(), productId: "", ratioPct: 0 }])} className="px-3 py-1.5 rounded-md bg-background border border-border text-foreground text-[11px] font-semibold cursor-pointer">+ Add input item</button>
+              <span className="text-muted-foreground">Total: {recipeItems.reduce((s, i) => s + (Number(i.ratioPct) || 0), 0)}%</span>
+            </div>
+          </div>
           <div><label className="block font-medium text-foreground mb-1">Expected yield (%)</label><input type="number" value={recipeYield} onChange={(e) => setRecipeYield(Number(e.target.value))} min="0" max="100" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
           <div className="sm:col-span-2 lg:col-span-3 flex justify-end"><button type="submit" disabled={recipePending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{recipePending ? "Saving…" : "Save recipe / new version"}</button></div>
         </form>
@@ -722,6 +998,16 @@ export default function ProductionPage() {
         pending={isPending}
         onConfirm={handleConfirmPost}
         onCancel={() => { setShowPostConfirm(false); setDraftBatch(null) }}
+      />
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Delete this draft batch?"
+        description={deleteTarget ? `${deleteTarget.batch_no} never posted, so deleting it changes no stock. Posted batches cannot be deleted.` : ""}
+        confirmLabel="Delete Draft"
+        destructive
+        pending={isDeleting}
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeleteTarget(null)}
       />
       <ReversalDialog
         open={!!reversalTarget}
