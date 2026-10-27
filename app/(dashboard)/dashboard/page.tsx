@@ -29,6 +29,10 @@ export default function DashboardPage() {
   const [receivables, setReceivables] = React.useState<number | null>(null)
   const [payables, setPayables] = React.useState<number | null>(null)
   const [cashOpening, setCashOpening] = React.useState<number | null>(null)
+  const [cashPosition, setCashPosition] = React.useState<number | null>(null)
+  const [cashByAccount, setCashByAccount] = React.useState<Row[]>([])
+  const [cashSource, setCashSource] = React.useState<string | null>(null)
+  const [payrollDue, setPayrollDue] = React.useState<number | null>(null)
   const [latestPassNo, setLatestPassNo] = React.useState<string | null>(null)
   // "Today" is client state, set in an effect (TodayBadge pattern): reading
   // new Date() during render makes this route un-prerenderable under
@@ -60,6 +64,10 @@ export default function DashboardPage() {
       setReceivables(data.receivables === null || data.receivables === undefined ? null : num(data.receivables))
       setPayables(data.payables === null || data.payables === undefined ? null : num(data.payables))
       setCashOpening(data.cashOpening === null || data.cashOpening === undefined ? null : num(data.cashOpening))
+      setCashPosition(data.cashPosition === null || data.cashPosition === undefined ? null : num(data.cashPosition))
+      setCashByAccount(Array.isArray(data.cashByAccount) ? data.cashByAccount : [])
+      setCashSource(data.cashSource ?? null)
+      setPayrollDue(data.payrollDue === null || data.payrollDue === undefined ? null : num(data.payrollDue))
       setLatestPassNo(data.latestPassNo ?? null)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
@@ -80,6 +88,7 @@ export default function DashboardPage() {
   const todayOutputKg = todayBatches.reduce((a, r) => a + num(r.actual_output_kg), 0)
   const yieldAvg = todayBatches.length ? todayBatches.reduce((a, r) => a + num(r.yield_pct), 0) / todayBatches.length : 0
   const byproductToday = todayBatches.reduce((a, r) => a + num(r.byproduct_kg), 0)
+  const wastageToday = todayBatches.reduce((a, r) => a + num(r.waste_kg), 0)
   const todayOutKg = todayPasses.reduce((a, r) => a + num(r.total_weight_kg), 0)
   const lowCount = summary.filter((r) => r.below_min_stock).length
   const byProduct = new Map<string, { name: string; total: number; low: boolean }>()
@@ -103,6 +112,10 @@ export default function DashboardPage() {
           <Link href="/inward" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold"><Plus className="h-3.5 w-3.5" />New Inward</Link>
           <Link href="/gatepass" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold"><FileCheck2 className="h-3.5 w-3.5 text-emerald-500" />Issue Gate Pass</Link>
           <Link href="/production" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold"><Boxes className="h-3.5 w-3.5 text-amber-500" />Run Batch</Link>
+          <Link href="/purchases" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold"><Plus className="h-3.5 w-3.5 text-amber-500" />Purchase</Link>
+          <Link href="/billing" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold"><Wallet className="h-3.5 w-3.5 text-emerald-500" />Receipt</Link>
+          <Link href="/daybook" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold"><Wallet className="h-3.5 w-3.5 text-amber-500" />Expense</Link>
+          <Link href="/payroll" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold"><Clock className="h-3.5 w-3.5 text-emerald-500" />Attendance</Link>
         </div>
       </div>
       {error && <AlertBanner tone="error" message={/not configured|Authentication required/i.test(error) ? "Supabase is not set up, or sign-in is required. See SETUP.md." : error} onDismiss={() => setError("")} />}
@@ -115,7 +128,7 @@ export default function DashboardPage() {
         <div className="expensive-card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Processing Output</span><div className="h-8 w-8 rounded-lg bg-teal-500/15 text-teal-600 dark:text-teal-400 flex items-center justify-center"><Boxes className="h-4 w-4" /></div></div>
           <div className="my-3"><div className="text-2xl font-black text-foreground">{formatWeight(todayOutputKg)}</div><div className="text-xs text-muted-foreground mt-1 font-medium"><span className="text-teal-600 dark:text-teal-400 font-bold">{yieldAvg.toFixed(1)}% Efficiency</span> Graded seed yield</div></div>
-          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>By-products today: {formatWeight(byproductToday)}</span><Link href="/production?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">Batches <ArrowUpRight className="h-3 w-3" /></Link></div>
+          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>By-products: {formatWeight(byproductToday)} &bull; Wastage: {formatWeight(wastageToday)}</span><Link href="/production?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">Batches <ArrowUpRight className="h-3 w-3" /></Link></div>
         </div>
         <div className="expensive-card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Dispatched</span><div className="h-8 w-8 rounded-lg bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center"><FileCheck2 className="h-4 w-4" /></div></div>
@@ -124,7 +137,15 @@ export default function DashboardPage() {
         </div>
         <div className="expensive-card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cash</span><div className="h-8 w-8 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center"><Wallet className="h-4 w-4" /></div></div>
-          <div className="my-3"><div className="text-2xl font-black text-foreground">{cashOpening === null ? "—" : formatCurrency(cashOpening)}</div><div className="text-xs text-muted-foreground mt-1 font-medium">{cashOpening === null ? "Restricted to Owner/Admin and Accountant" : "Opening balances"}</div></div>
+          <div className="my-3"><div className="text-2xl font-black text-foreground">{cashPosition !== null ? formatCurrency(cashPosition) : cashOpening === null ? "—" : formatCurrency(cashOpening)}</div><div className="text-xs text-muted-foreground mt-1 font-medium">{cashOpening === null && cashPosition === null ? "Restricted to Owner/Admin and Accountant" : cashSource === "daybook" ? "Live cash position (daybook)" : "Opening balances (daybook unavailable)"}</div>
+            {cashByAccount.length > 0 && (
+              <div className="mt-2 space-y-0.5">
+                {cashByAccount.map((a: Row) => (
+                  <div key={a.cashAccountId ?? a.code ?? a.name} className="flex items-center justify-between text-[11px] text-muted-foreground"><span>{a.code ? `${a.code} — ${a.name}` : a.name}</span><span className="font-mono font-semibold text-foreground">{formatCurrency(num(a.closing))}</span></div>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>See live balances on the Daybook page</span><Link href="/daybook?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">Daybook <ArrowUpRight className="h-3 w-3" /></Link></div>
         </div>
       </div>
@@ -176,7 +197,7 @@ export default function DashboardPage() {
               <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20"><div className="text-xs text-muted-foreground font-medium">Customer Receivables</div><div className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{receivables === null ? "—" : formatCurrency(receivables)}</div></div>
               <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/20"><div className="text-xs text-muted-foreground font-medium">Vendor Payables</div><div className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1">{payables === null ? "—" : formatCurrency(payables)}</div></div>
             </div>
-            <Link href="/payroll?filter=unpaid" className="mt-3 flex items-center justify-between p-3 rounded-lg bg-card border border-border hover:bg-muted transition-colors"><span className="text-xs text-muted-foreground font-medium">Payroll due</span><span className="text-xs font-bold text-foreground flex items-center gap-1">Open payroll <ArrowUpRight className="h-3.5 w-3.5 text-primary" /></span></Link>
+            <Link href="/payroll?filter=unpaid" className="mt-3 flex items-center justify-between p-3 rounded-lg bg-card border border-border hover:bg-muted transition-colors"><span className="text-xs text-muted-foreground font-medium">Payroll due</span><span className="text-xs font-bold text-foreground flex items-center gap-1">{payrollDue === null ? "Open payroll" : formatCurrency(payrollDue)} <ArrowUpRight className="h-3.5 w-3.5 text-primary" /></span></Link>
             <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs"><Link href="/billing?filter=receivable" className="text-primary hover:underline font-semibold">Customer Invoices</Link><Link href="/purchases?filter=payable" className="text-primary hover:underline font-semibold">Vendor Bills</Link></div>
           </div>
           <div className="expensive-card p-5">
