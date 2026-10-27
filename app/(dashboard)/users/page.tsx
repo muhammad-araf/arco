@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import { getMyProfile, listProfiles, setUserRole, type AppRole } from "@/app/actions/auth"
-import { AlertBanner, EmptyState, ConfirmDialog } from "@/components/erp-ui"
+import { AlertBanner, EmptyState } from "@/components/erp-ui"
 import { UsersSkeleton } from "@/components/route-skeletons"
 
 const ROLE_LABELS: Record<AppRole, string> = {
@@ -82,7 +82,7 @@ export default function UsersPage() {
       setError(res.error ?? "Role change failed.")
       return
     }
-    setNotice(`Role for ${target.display_name ?? target.id} changed to ${ROLE_LABELS[newRole]}.`)
+    setNotice(`Role for ${target.display_name ?? "this operator"} changed to ${ROLE_LABELS[newRole]}.`)
     setTarget(null)
     setReason("")
     await load()
@@ -135,7 +135,7 @@ export default function UsersPage() {
             <tbody>
               {profiles.map((p) => (
                 <tr key={p.id} className="border-b border-border/40 last:border-0">
-                  <td className="py-2.5 pr-3 font-semibold text-foreground">{p.display_name ?? p.id}</td>
+                  <td className="py-2.5 pr-3 font-semibold text-foreground">{p.display_name ?? "Not set"}</td>
                   <td className="py-2.5 pr-3">{ROLE_LABELS[p.role] ?? p.role}</td>
                   <td className="py-2.5 pr-3">{p.is_active === false ? "Inactive" : "Active"}</td>
                   <td className="py-2.5">
@@ -157,45 +157,89 @@ export default function UsersPage() {
           </table>
         </div>
       )}
-      <ConfirmDialog
-        open={target !== null}
-        title={`Change role for ${target?.display_name ?? ""}?`}
-        description="The last active Owner / Admin cannot be demoted."
-        confirmLabel="Change role"
-        pending={pending}
-        onCancel={() => setTarget(null)}
-        onConfirm={confirmRoleChange}
-      />
       {target && (
-        <div className="expensive-card p-4 space-y-3 text-xs">
-          <div>
-            <label className="block font-medium text-foreground mb-1">New role *</label>
-            <select
-              value={newRole}
-              onChange={(e) => setNewRole(e.target.value as AppRole)}
-              className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-            >
-              {(Object.keys(ROLE_LABELS) as AppRole[]).map((r) => (
-                <option key={r} value={r}>
-                  {ROLE_LABELS[r]}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block font-medium text-foreground mb-1">Reason * (required, at least 3 characters)</label>
-            <textarea
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              rows={2}
-              placeholder="Why is this role changing?"
-              className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground resize-y"
-            />
-            {!pending && reason.trim().length < 3 && (
-              <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
-                Enter a reason first — confirming without one is blocked by the server and by this form.
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 overflow-y-auto"
+          onClick={() => {
+            if (!pending) {
+              setTarget(null)
+              setReason("")
+            }
+          }}
+          role="presentation"
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Change role for ${target.display_name ?? "this operator"}`}
+            onClick={(e) => e.stopPropagation()}
+            className="expensive-card w-full max-w-md p-4 sm:p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-auto max-h-[90dvh] overflow-y-auto text-xs"
+          >
+            <div>
+              <h3 className="text-base font-bold text-foreground">
+                Change role for {target.display_name ?? "this operator"}?
+              </h3>
+              <p className="text-xs text-muted-foreground mt-1">
+                The last active Owner / Admin cannot be demoted.
+              </p>
+            </div>
+            {error && (
+              <p role="alert" className="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs font-medium text-red-700 dark:text-red-400">
+                {error}
               </p>
             )}
+            <div>
+              <label htmlFor="user-new-role" className="block font-medium text-foreground mb-1">New role *</label>
+              <select
+                id="user-new-role"
+                value={newRole}
+                onChange={(e) => setNewRole(e.target.value as AppRole)}
+                className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+              >
+                {(Object.keys(ROLE_LABELS) as AppRole[]).map((r) => (
+                  <option key={r} value={r}>
+                    {ROLE_LABELS[r]}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="user-role-reason" className="block font-medium text-foreground mb-1">Reason * (required, at least 3 characters)</label>
+              <textarea
+                id="user-role-reason"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                rows={3}
+                placeholder="Why is this role changing?"
+                className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground resize-y"
+              />
+              {!pending && reason.trim().length < 3 && (
+                <p className="mt-1 text-[11px] text-amber-600 dark:text-amber-400">
+                  Enter a reason first — confirming without one is blocked by the server and by this form.
+                </p>
+              )}
+            </div>
+            <div className="flex flex-col-reverse sm:flex-row justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setTarget(null)
+                  setReason("")
+                }}
+                disabled={pending}
+                className="px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                Go back
+              </button>
+              <button
+                type="button"
+                onClick={confirmRoleChange}
+                disabled={pending || reason.trim().length < 3}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {pending ? "Changing…" : "Change role"}
+              </button>
+            </div>
           </div>
         </div>
       )}

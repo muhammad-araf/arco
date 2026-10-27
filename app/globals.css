@@ -132,6 +132,181 @@ body {
   border-radius: 6px;
 }
 
+/* Screen preview of a print document: the same .print-document classes
+   used on paper, so a preview modal shows the document itself rather
+   than a second hand-built copy. The @media print block below still
+   owns paper layout (A4, chrome hidden); it comes later, so it wins
+   when printing. */
+.print-document {
+  background: #ffffff;
+  color: #000000;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 11pt;
+  line-height: 1.4;
+}
+.print-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 3px solid #0B2F24;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+.print-logo {
+  max-height: 48px;
+  max-width: 120px;
+  object-fit: contain;
+}
+.print-company-name {
+  font-size: 18pt;
+  font-weight: 700;
+  color: #0B2F24;
+}
+.print-company-line {
+  font-size: 9pt;
+  color: #333333;
+}
+.print-title-band {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  background: #0B2F24;
+  color: #ffffff;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+}
+.print-title {
+  font-size: 13pt;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.print-doc-no {
+  font-size: 11pt;
+}
+.print-doc-no strong {
+  color: #D99726;
+  font-size: 13pt;
+}
+.print-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+  font-size: 9pt;
+  margin-bottom: 12px;
+}
+.print-meta-label {
+  font-weight: 700;
+}
+.print-body {
+  margin-bottom: 12px;
+}
+.print-footer {
+  border-top: 1px solid #999999;
+  padding-top: 6px;
+  font-size: 8pt;
+  color: #666666;
+  text-align: center;
+}
+.print-section-title {
+  font-size: 10pt;
+  font-weight: 700;
+  color: #0B2F24;
+  border-bottom: 1px solid #D99726;
+  padding-bottom: 2px;
+  margin: 14px 0 6px;
+}
+.print-info-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px 24px;
+  font-size: 10pt;
+}
+@media (min-width: 640px) {
+  .print-info-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+.print-field-label {
+  font-weight: 700;
+}
+.print-field-label::after {
+  content: ": ";
+}
+.print-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10pt;
+  margin: 4px 0 8px;
+}
+.print-table th {
+  background: #0B2F24;
+  color: #ffffff;
+  text-align: left;
+  padding: 5px 6px;
+  border: 1px solid #0B2F24;
+}
+.print-table td {
+  padding: 4px 6px;
+  border: 1px solid #999999;
+  vertical-align: top;
+}
+.print-table tfoot td {
+  font-weight: 700;
+  border-top: 2px solid #0B2F24;
+}
+.print-col-narrow {
+  width: 28px;
+  text-align: center;
+}
+.print-col-number {
+  text-align: right;
+}
+.print-total-label {
+  text-align: right;
+}
+.print-sub {
+  color: #555555;
+  font-size: 9pt;
+}
+.print-empty-row {
+  text-align: center;
+  color: #555555;
+  font-style: italic;
+}
+.print-total-line {
+  font-size: 10pt;
+  font-weight: 700;
+  margin: 2px 0 8px;
+}
+.print-notes {
+  font-size: 10pt;
+  margin: 0 0 8px;
+  white-space: pre-wrap;
+}
+.print-signatures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  margin: 28px 0 8px;
+}
+.print-signature {
+  flex: 1;
+  min-width: 140px;
+}
+.print-signature-line {
+  border-bottom: 1px solid #000000;
+  min-height: 22px;
+  text-align: center;
+  font-size: 10pt;
+}
+.print-signature-label {
+  text-align: center;
+  font-size: 9pt;
+  font-weight: 700;
+  padding-top: 3px;
+}
+
 /* Print Optimization — print documents only (components/print/*).
    Pages render exactly one `.print-document` per print action; this
    block hides all app chrome and shows only that document, so a page

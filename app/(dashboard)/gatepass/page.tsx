@@ -491,14 +491,27 @@ export default function GatePassPage() {
                   </td>
                   <td className="py-3 text-center">
                     <div className="flex items-center justify-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setSelectedPassForPrint(gp)}
-                        className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
-                        title="Print A4 Gate Pass"
-                      >
-                        <Printer className="h-4 w-4" />
-                      </button>
+                      {gp.status === "posted" ? (
+                        <button
+                          type="button"
+                          onClick={() => setSelectedPassForPrint(gp)}
+                          className="p-1.5 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                          title="Print A4 Gate Pass"
+                          aria-label="Print A4 Gate Pass"
+                        >
+                          <Printer className="h-4 w-4" />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled
+                          className="p-1.5 rounded-md text-muted-foreground opacity-50 cursor-not-allowed"
+                          title="Printing is available only for posted passes"
+                          aria-label="Printing is available only for posted passes"
+                        >
+                          <Printer className="h-4 w-4" />
+                        </button>
+                      )}
                       {(gp.status === "posted" || gp.status === "partially_returned") && (
                         <button
                           type="button"
@@ -776,95 +789,30 @@ export default function GatePassPage() {
         </div>
       )}
 
-      {/* Formal A4 Printable Gate Pass */}
+      {/* Gate pass preview: the SAME GatePassPrint document that prints,
+          so preview and paper can never drift apart. No company address
+          is passed, so nothing invented appears on the document. */}
       {selectedPassForPrint && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 overflow-y-auto">
-          <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-md rounded-md printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-start justify-between border-b pb-4">
-              <div>
-                <h1 className="text-2xl font-black tracking-tight uppercase">ARCO SEED GODOWN</h1>
-                <div className="text-xs text-gray-600">OFFICIAL OUTGOING GOODS GATE PASS & DISPATCH VOUCHER</div>
-              </div>
-              <div className="text-right">
-                <div className="text-xl font-mono font-black text-gray-900 border-2 border-black px-3 py-1 inline-block">
-                  {selectedPassForPrint.pass_no}
-                </div>
-                <div className="text-xs text-gray-500 mt-1">{formatDateTime(selectedPassForPrint.date)}</div>
-              </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 overflow-y-auto">
+          <div className="w-full max-w-2xl bg-white text-black rounded-md shadow-md max-h-[90dvh] overflow-y-auto">
+            <div className="p-4 sm:p-6">
+              <GatePassPrint
+                passNo={selectedPassForPrint.pass_no}
+                date={selectedPassForPrint.date}
+                status={selectedPassForPrint.status}
+                customerName={selectedPassForPrint.customer_name}
+                destination={selectedPassForPrint.destination}
+                godown={selectedPassForPrint.godown_name}
+                orderRef={selectedPassForPrint.order_ref}
+                transporter={selectedPassForPrint.transporter}
+                vehicleNo={selectedPassForPrint.vehicle_no}
+                driverName={selectedPassForPrint.driver_name}
+                driverPhone={selectedPassForPrint.driver_phone}
+                notes={selectedPassForPrint.notes}
+                items={selectedPassForPrint.items.map((it) => ({ product: it.product_name, bags: it.bags_count, weightKg: it.net_weight_kg, grossWeightKg: it.gross_weight_kg, remarks: it.remarks }))}
+              />
             </div>
-
-            {/* Consignee & Vehicle Details Grid */}
-            <div className="grid grid-cols-2 gap-4 text-xs bg-gray-50 p-4 rounded border border-gray-200">
-              <div>
-                <span className="text-gray-500 uppercase text-[10px] font-bold block">Consignee / Customer</span>
-                <strong className="text-sm block">{selectedPassForPrint.customer_name}</strong>
-                <span className="text-gray-600 text-[11px]">{selectedPassForPrint.destination || "Factory / Farm Dispatch"}</span>
-              </div>
-
-              <div>
-                <span className="text-gray-500 uppercase text-[10px] font-bold block">Dispatch Godown</span>
-                <strong className="text-sm block">{selectedPassForPrint.godown_name}</strong>
-                <span className="text-gray-600 text-[11px]">Authorized Exit Point</span>
-              </div>
-
-              <div>
-                <span className="text-gray-500 uppercase text-[10px] font-bold block">Vehicle Number</span>
-                <strong className="text-base font-mono font-black block">{selectedPassForPrint.vehicle_no}</strong>
-              </div>
-
-              <div>
-                <span className="text-gray-500 uppercase text-[10px] font-bold block">Driver Details</span>
-                <strong className="text-sm block">{selectedPassForPrint.driver_name}</strong>
-                <span className="text-gray-600 font-mono">{selectedPassForPrint.driver_phone || "Contact Not Recorded"}</span>
-              </div>
-            </div>
-
-            {/* Items Table */}
-            <table className="w-full text-left border-collapse text-xs mt-4">
-              <thead>
-                <tr className="border-b-2 border-black bg-gray-100">
-                  <th className="py-2 px-2">Sr</th>
-                  <th className="py-2">Description of Seed / Goods</th>
-                  <th className="py-2 text-right">Bags</th>
-                  <th className="py-2 text-right">Net Weight (kg)</th>
-                  <th className="py-2 px-2">Packaging Remarks</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-300">
-                {selectedPassForPrint.items.map((item, idx) => (
-                  <tr key={item.id}>
-                    <td className="py-2.5 px-2 font-mono">{idx + 1}</td>
-                    <td className="py-2.5 font-bold text-gray-900">{item.product_name}</td>
-                    <td className="py-2.5 text-right font-mono font-bold">{item.bags_count}</td>
-                    <td className="py-2.5 text-right font-mono font-black">{item.net_weight_kg.toLocaleString()} kg</td>
-                    <td className="py-2.5 px-2 text-gray-600">{item.remarks || "-"}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot>
-                <tr className="border-t-2 border-black font-black bg-gray-50 text-sm">
-                  <td colSpan={2} className="py-2 px-2">Total Verified for Dispatch</td>
-                  <td className="py-2 text-right font-mono">{selectedPassForPrint.total_bags} bags</td>
-                  <td className="py-2 text-right font-mono text-emerald-800">{selectedPassForPrint.total_weight_kg.toLocaleString()} kg</td>
-                  <td></td>
-                </tr>
-              </tfoot>
-            </table>
-
-            {/* Driver Declaration */}
-            <div className="p-3 bg-gray-50 border border-gray-200 rounded text-[11px] text-gray-600 italic">
-              "I hereby acknowledge the receipt of the specified goods in sound condition and sealed packaging as listed above for onward transit to the destination."
-            </div>
-
-            {/* Signature Blocks */}
-            <div className="grid grid-cols-3 gap-6 pt-16 text-center text-xs">
-              <div className="border-t-2 border-gray-400 pt-2 font-medium">Driver Signature</div>
-              <div className="border-t-2 border-gray-400 pt-2 font-medium">Security Gate Officer</div>
-              <div className="border-t-2 border-gray-400 pt-2 font-bold">Godown Incharge Stamp</div>
-            </div>
-
-            {/* Modal Controls */}
-            <div className="flex items-center justify-end gap-3 pt-4 border-t no-print">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 px-4 sm:px-6 pb-4 sm:pb-6 pt-4 border-t border-gray-200 no-print">
               <button
                 type="button"
                 onClick={() => setSelectedPassForPrint(null)}
@@ -872,27 +820,13 @@ export default function GatePassPage() {
               >
                 Close
               </button>
-              <PrintButton label="Print Official Gate Pass (A4)" className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
+              {selectedPassForPrint.status === "posted" ? (
+                <PrintButton label="Print Official Gate Pass (A4)" className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
+              ) : (
+                <p className="text-xs text-muted-foreground">Printing is available only for posted passes.</p>
+              )}
             </div>
           </div>
-        </div>
-      )}
-      {selectedPassForPrint && selectedPassForPrint.status === "posted" && (
-        <div className="hidden print:block">
-          <GatePassPrint
-            passNo={selectedPassForPrint.pass_no}
-            date={selectedPassForPrint.date}
-            status={selectedPassForPrint.status}
-            customerName={selectedPassForPrint.customer_name}
-            destination={selectedPassForPrint.destination}
-            godown={selectedPassForPrint.godown_name}
-            orderRef={selectedPassForPrint.order_ref}
-            transporter={selectedPassForPrint.transporter}
-            vehicleNo={selectedPassForPrint.vehicle_no}
-            driverName={selectedPassForPrint.driver_name}
-            driverPhone={selectedPassForPrint.driver_phone}
-            items={selectedPassForPrint.items.map((it) => ({ product: it.product_name, bags: it.bags_count, weightKg: it.net_weight_kg, grossWeightKg: it.gross_weight_kg, remarks: it.remarks }))}
-          />
         </div>
       )}
       {returnTarget !== null && (
