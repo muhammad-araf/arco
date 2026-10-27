@@ -8,9 +8,11 @@ import {
   updateCompanySettings,
   listDocNumbering,
   updateDocNumberingPrefix,
+} from "@/app/actions/settings"
+import {
   type SettingsSnapshot,
   type DocNumberingRow,
-} from "@/app/actions/settings"
+} from "@/lib/settings-validation"
 import {
   listProcessingTypes,
   createProcessingType,
