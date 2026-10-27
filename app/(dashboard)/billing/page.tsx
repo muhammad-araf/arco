@@ -1,5 +1,7 @@
 "use client"
 
+import { submissionToken, resetSubmissionToken } from "@/lib/idempotency"
+
 import * as React from "react"
 import {
   Receipt,
@@ -45,6 +47,8 @@ export default function BillingPage() {
   const [draftReceipt, setDraftReceipt] = React.useState<CustomerReceipt | null>(null)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
   const receiptGuard = React.useRef(false)
+  const receiptTokenRef = React.useRef<string | null>(null)
+  const invoiceTokenRef = React.useRef<string | null>(null)
   const [customerId, setCustomerId] = React.useState("")
   const [amount, setAmount] = React.useState<number>(100000)
   const [paymentMethod, setPaymentMethod] = React.useState<"cash" | "bank" | "online">("bank")
@@ -163,7 +167,7 @@ export default function BillingPage() {
       const created = await createReceipt({
         customerId, cashAccountId: receiptCashAccountId, account: paymentMethod, amount,
         referenceNo: referenceNo || undefined, notes: notes || undefined,
-        clientToken: `receipt-${Date.now()}`,
+        clientToken: submissionToken(receiptTokenRef, "receipt"),
         allocations: allocInvoiceId && allocAmount > 0 ? [{ invoiceId: allocInvoiceId, amount: allocAmount }] : [],
       })
       if (!created.success || !(created.data as any)?.id) {
@@ -181,6 +185,7 @@ export default function BillingPage() {
       setPrintReceipt({ ...draftReceipt, receipt_no: row.receipt_no ?? draftReceipt.receipt_no, status: "posted", customer_name: selectedCust?.name, allocations: allocInvoiceId ? [{ invoice_no: invoices.find((i) => i.id === allocInvoiceId)?.invoice_no, amount: allocAmount }] : [] })
       setShowConfirm(false)
       setIsReceiptModalOpen(false)
+      resetSubmissionToken(receiptTokenRef)
       setDraftReceipt(null)
       await loadData()
     } finally {
@@ -211,7 +216,7 @@ export default function BillingPage() {
     setInvPending(true)
     try {
       const created = await createInvoice({
-        customerId: invCustomerId, sourceType: "manual", clientToken: `invoice-${Date.now()}`,
+        customerId: invCustomerId, sourceType: "manual", clientToken: submissionToken(invoiceTokenRef, "invoice"),
         lines: [{ description: invDesc.trim(), quantity: invQty, unitPrice: invPrice }],
       })
       if (!created.success || !(created.data as any)?.id) {
@@ -225,6 +230,7 @@ export default function BillingPage() {
       }
       const row: any = posted.data ?? created.data
       setFormNotice(`Invoice ${row.invoice_no ?? ""} posted for ${formatCurrency(invQty * invPrice)}.`)
+      resetSubmissionToken(invoiceTokenRef)
       await loadData()
     } finally { setInvPending(false) }
   }

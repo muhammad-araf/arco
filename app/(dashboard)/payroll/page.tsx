@@ -1,5 +1,7 @@
 "use client"
 
+import { submissionToken, resetSubmissionToken } from "@/lib/idempotency"
+
 import * as React from "react"
 import {
   Users2,
@@ -94,6 +96,7 @@ export default function PayrollPage() {
   const [ruleOtRate, setRuleOtRate] = React.useState<string>("")
   const [ruleReason, setRuleReason] = React.useState("")
   const saveGuard = React.useRef(false)
+  const payTokenRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     const now = new Date()
@@ -277,9 +280,11 @@ export default function PayrollPage() {
         paymentMethod: payMethod, cashAccountId: payAccountId,
         account: (acct?.account_kind ?? "cash") as "cash" | "bank" | "online",
         referenceNo: payRef.trim() || undefined,
+        clientToken: submissionToken(payTokenRef, "payrollpay"),
       })
       if (!res.success) { setFormError(res.error ?? "Could not pay payroll."); return }
       setFormNotice(`Payroll payment of ${formatCurrency(payAmount)} recorded from ${acct?.name ?? "the selected account"}.`)
+      resetSubmissionToken(payTokenRef)
       setPayTarget(null)
       await loadData()
     } finally { setPayPending(false) }

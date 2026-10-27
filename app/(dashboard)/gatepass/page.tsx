@@ -1,5 +1,7 @@
 "use client"
 
+import { postToken, submissionToken, resetSubmissionToken } from "@/lib/idempotency"
+
 import * as React from "react"
 import {
   FileCheck2,
@@ -64,6 +66,7 @@ export default function GatePassPage() {
   const [isReversing, setIsReversing] = React.useState(false)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
   const postGuard = React.useRef(false)
+  const returnTokenRef = React.useRef<string | null>(null)
 
   // Form Fields
   const [customerId, setCustomerId] = React.useState("")
@@ -237,7 +240,7 @@ export default function GatePassPage() {
         setFormError(created.error ?? "Could not create the gate pass draft.")
         return
       }
-      const posted = await postGatePass((created.data as any).id, `gatepass-${Date.now()}`)
+      const posted = await postGatePass((created.data as any).id, postToken("gatepass:post", (created.data as any).id))
       if (!posted.success) {
         setFormError(posted.error ?? "Could not post the gate pass.")
         return
@@ -328,13 +331,14 @@ export default function GatePassPage() {
       const res = await returnGatePass(returnTarget.id, {
         reason: returnReason.trim(),
         items: entries.map((l) => ({ productId: l.productId, qtyKg: Number(l.qtyKg), partyId: l.partyId })),
-      }, `gatepass-return-${Date.now()}`)
+      }, submissionToken(returnTokenRef, "gatepass-return"))
       if (!res.success) {
         setFormError(res.error ?? "Could not return the gate pass.")
         return
       }
       const newStatus = (res.data as any)?.status
       setFormNotice(`${returnTarget.pass_no} ${newStatus === "returned" ? "returned in full" : "partially returned"} — stock restored for the returned quantities.`)
+      resetSubmissionToken(returnTokenRef)
       setReturnTarget(null)
       setReturnLines([])
       await loadData()
@@ -350,7 +354,7 @@ export default function GatePassPage() {
     if (!reversalTarget || isReversing) return
     setIsReversing(true)
     try {
-      const res = await reverseGatePass(reversalTarget.id, `${reasonCode}: ${reason}`, `gatepass-rev-${Date.now()}`)
+      const res = await reverseGatePass(reversalTarget.id, `${reasonCode}: ${reason}`, postToken("gatepass:reverse", reversalTarget.id))
       if (!res.success) {
         setFormError(res.error ?? "Could not reverse the gate pass.")
         return

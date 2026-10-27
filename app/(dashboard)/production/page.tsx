@@ -1,5 +1,7 @@
 "use client"
 
+import { postToken } from "@/lib/idempotency"
+
 import * as React from "react"
 import {
   ScrollText,
@@ -223,7 +225,7 @@ export default function ProductionPage() {
         setFormError(created.error ?? "Could not create the batch draft.")
         return
       }
-      const posted = await postBatch((created.data as any).id, `batch-${Date.now()}`)
+      const posted = await postBatch((created.data as any).id, postToken("batch:post", (created.data as any).id))
       if (!posted.success) {
         // The draft stays in the list as Draft, with Post / Delete
         // actions — it is not lost, and it is not shown as posted.
@@ -289,7 +291,7 @@ export default function ProductionPage() {
     if (!reversalTarget || isReversing) return
     setIsReversing(true)
     try {
-      const res = await reverseBatch(reversalTarget.id, `${reasonCode}: ${reason}`, `batch-rev-${Date.now()}`)
+      const res = await reverseBatch(reversalTarget.id, `${reasonCode}: ${reason}`, postToken("batch:reverse", reversalTarget.id))
       if (!res.success) {
         setFormError(res.error ?? "Could not reverse the batch.")
         return
@@ -336,7 +338,7 @@ export default function ProductionPage() {
     if (isPostingDraft) return
     setIsPostingDraft(true)
     try {
-      const res = await postBatch(batch.id, `batch-retry-${Date.now()}`)
+      const res = await postBatch(batch.id, postToken("batch:post", batch.id))
       if (!res.success) {
         setFormError(res.error ?? "Could not post the batch.")
         return

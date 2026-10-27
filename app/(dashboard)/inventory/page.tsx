@@ -1,5 +1,7 @@
 "use client"
 
+import { postToken } from "@/lib/idempotency"
+
 import * as React from "react"
 import {
   Boxes,
@@ -177,7 +179,7 @@ export default function InventoryPage() {
         setTransferError(created.error ?? "Could not create the transfer draft.")
         return
       }
-      const posted = await postTransfer((created.data as any).id, `transfer-${Date.now()}`)
+      const posted = await postTransfer((created.data as any).id, postToken("transfer:post", (created.data as any).id))
       if (!posted.success) {
         setTransferError(posted.error ?? "Could not post the transfer.")
         return
@@ -213,7 +215,7 @@ export default function InventoryPage() {
         setTransferError(created.error ?? "Could not create the adjustment.")
         return
       }
-      const posted = await postAdjustment((created.data as any).id, `adjustment-${Date.now()}`)
+      const posted = await postAdjustment((created.data as any).id, postToken("adjustment:post", (created.data as any).id))
       if (!posted.success) {
         setTransferError(posted.error ?? "Could not post the adjustment.")
         return
@@ -229,7 +231,7 @@ export default function InventoryPage() {
     if (!revTransfer || revPending) return
     setRevPending(true)
     try {
-      const res = await reverseTransfer(revTransfer.id, `${reasonCode}: ${reason}`, `transfer-rev-${Date.now()}`)
+      const res = await reverseTransfer(revTransfer.id, `${reasonCode}: ${reason}`, postToken("transfer:reverse", revTransfer.id))
       if (!res.success) {
         setTransferError(res.error ?? "Could not reverse the transfer.")
         return
@@ -246,7 +248,7 @@ export default function InventoryPage() {
     if (!revAdjustment || revPending) return
     setRevPending(true)
     try {
-      const res = await reverseAdjustment(revAdjustment.id, `${reasonCode}: ${reason}`, `adjustment-rev-${Date.now()}`)
+      const res = await reverseAdjustment(revAdjustment.id, `${reasonCode}: ${reason}`, postToken("adjustment:reverse", revAdjustment.id))
       if (!res.success) {
         setTransferError(res.error ?? "Could not reverse the adjustment.")
         return

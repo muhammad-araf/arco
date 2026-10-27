@@ -1,5 +1,7 @@
 "use client"
 
+import { postToken } from "@/lib/idempotency"
+
 import * as React from "react"
 import {
   Cog,
@@ -183,7 +185,7 @@ export default function MachineryJobsPage() {
         setFormError(created.error ?? "Could not create the machinery job draft.")
         return
       }
-      const posted = await postJob((created.data as any).id, `job-${Date.now()}`)
+      const posted = await postJob((created.data as any).id, postToken("machinery:post", (created.data as any).id))
       if (!posted.success) {
         // The draft stays in the list as Draft, with Post / Delete
         // actions — it is not lost, and it is not shown as posted.
@@ -207,7 +209,7 @@ export default function MachineryJobsPage() {
     if (isPostingDraft) return
     setIsPostingDraft(true)
     try {
-      const res = await postJob(job.id, `job-retry-${Date.now()}`)
+      const res = await postJob(job.id, postToken("machinery:post", job.id))
       if (!res.success) {
         setFormError(res.error ?? "Could not post the job.")
         return
@@ -240,7 +242,7 @@ export default function MachineryJobsPage() {
     if (!reversalTarget || isReversing) return
     setIsReversing(true)
     try {
-      const res = await reverseJob(reversalTarget.id, `${reasonCode}: ${reason}`, `job-rev-${Date.now()}`)
+      const res = await reverseJob(reversalTarget.id, `${reasonCode}: ${reason}`, postToken("machinery:reverse", reversalTarget.id))
       if (!res.success) {
         setFormError(res.error ?? "Could not reverse the job.")
         return

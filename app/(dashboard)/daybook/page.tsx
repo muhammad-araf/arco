@@ -1,5 +1,7 @@
 "use client"
 
+import { submissionToken, resetSubmissionToken } from "@/lib/idempotency"
+
 import * as React from "react"
 import {
   Wallet,
@@ -72,6 +74,8 @@ export default function DaybookPage() {
   const [draftExpense, setDraftExpense] = React.useState<ExpenseVoucher | null>(null)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
   const expenseGuard = React.useRef(false)
+  const expenseTokenRef = React.useRef<string | null>(null)
+  const transferTokenRef = React.useRef<string | null>(null)
   const [categoryName, setCategoryName] = React.useState("Generator Fuel & Diesel")
   const [payee, setPayee] = React.useState("")
   const [amount, setAmount] = React.useState<number>(15000)
@@ -190,7 +194,7 @@ export default function DaybookPage() {
         description: description.trim(), settlement: expSettlement,
         vendorId: expSettlement === "credit" ? expVendorId : undefined,
         cashAccountId: expSettlement === "paid" ? expCashAccountId : undefined,
-        clientToken: `expense-${Date.now()}`,
+        clientToken: submissionToken(expenseTokenRef, "expense"),
       })
       if (!created.success || !(created.data as any)?.id) {
         setFormError(created.error ?? "Could not create the expense.")
@@ -205,6 +209,7 @@ export default function DaybookPage() {
       setFormNotice(`${row.expense_no ?? draftExpense.expense_no} posted — ${formatCurrency(amount)} for ${categoryName} (${expSettlement === "credit" ? "credit, unpaid" : paymentMethod}).`)
       setShowConfirm(false)
       setIsExpenseModalOpen(false)
+      resetSubmissionToken(expenseTokenRef)
       setDraftExpense(null)
       await loadData()
     } finally {
@@ -221,9 +226,10 @@ export default function DaybookPage() {
     if (!(trAmount > 0)) return setFormError("Transfer amount must be greater than zero.")
     setTrPending(true)
     try {
-      const res = await postTransfer({ fromAccountId: trFrom, toAccountId: trTo, amount: trAmount, referenceNo: trRef || undefined, clientToken: `transfer-${Date.now()}` })
+      const res = await postTransfer({ fromAccountId: trFrom, toAccountId: trTo, amount: trAmount, referenceNo: trRef || undefined, clientToken: submissionToken(transferTokenRef, "transfer") })
       if (!res.success) { setFormError(res.error ?? "Could not post the transfer."); return }
       setFormNotice(`Transfer ${(res.data as any)?.transfer_no ?? ""} posted — ${formatCurrency(trAmount)} moved between accounts.`)
+      resetSubmissionToken(transferTokenRef)
       await loadData()
     } finally { setTrPending(false) }
   }

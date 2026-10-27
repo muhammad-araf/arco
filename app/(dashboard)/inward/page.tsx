@@ -1,5 +1,7 @@
 "use client"
 
+import { postToken } from "@/lib/idempotency"
+
 import * as React from "react"
 import {
   Truck,
@@ -227,7 +229,6 @@ export default function InwardPage() {
     postGuard.current = true
     setIsPending(true)
     try {
-      const token = `inward-${Date.now()}`
       const created = await createInwardDraft({
         partyId, godownId, biltyNo: biltyNo || undefined, vehicleNo: vehicleNo || undefined,
         driverName: driverName || undefined, driverPhone: driverPhone || undefined, notes: notes || undefined,
@@ -241,7 +242,7 @@ export default function InwardPage() {
         setFormError(created.error ?? "Could not create the inward draft.")
         return
       }
-      const posted = await postInward((created.data as any).id, token)
+      const posted = await postInward((created.data as any).id, postToken("inward:post", (created.data as any).id))
       if (!posted.success) {
         setFormError(posted.error ?? "Could not post the inward voucher.")
         return
@@ -276,7 +277,7 @@ export default function InwardPage() {
     if (!reversalTarget || isReversing) return
     setIsReversing(true)
     try {
-      const res = await reverseInward(reversalTarget.id, `${reasonCode}: ${reason}`, `inward-rev-${Date.now()}`)
+      const res = await reverseInward(reversalTarget.id, `${reasonCode}: ${reason}`, postToken("inward:reverse", reversalTarget.id))
       if (!res.success) {
         setFormError(res.error ?? "Could not reverse the voucher.")
         return

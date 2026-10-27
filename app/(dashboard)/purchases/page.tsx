@@ -1,5 +1,7 @@
 "use client"
 
+import { submissionToken, resetSubmissionToken } from "@/lib/idempotency"
+
 import * as React from "react"
 import {
   ShoppingCart,
@@ -56,6 +58,10 @@ export default function PurchasesPage() {
   const [payAmount, setPayAmount] = React.useState<number>(0)
   const [payPending, setPayPending] = React.useState(false)
   const purchaseGuard = React.useRef(false)
+  const purchaseTokenRef = React.useRef<string | null>(null)
+  const confirmPayTokenRef = React.useRef<string | null>(null)
+  const returnTokenRef = React.useRef<string | null>(null)
+  const payTokenRef = React.useRef<string | null>(null)
   const [vendorId, setVendorId] = React.useState("")
   const [godownId, setGodownId] = React.useState("")
   const [invoiceRef, setInvoiceRef] = React.useState("")
@@ -167,7 +173,7 @@ export default function PurchasesPage() {
     try {
       const created = await createPurchase({
         vendorId, invoiceRef: invoiceRef || undefined, godownId: godownId || undefined,
-        notes: notes || undefined, clientToken: `purchase-${Date.now()}`,
+        notes: notes || undefined, clientToken: submissionToken(purchaseTokenRef, "purchase"),
         items: [{ itemType: "seed", productId, quantity, unit: "kg", unitPrice }],
       })
       if (!created.success || !(created.data as any)?.id) {
@@ -184,7 +190,7 @@ export default function PurchasesPage() {
       if (paidAmount > 0) {
         const pay = await allocatePayment({
           vendorId, cashAccountId: payCashAccountId, account: payAccountKind, amount: paidAmount, settlementKind: "purchase",
-          clientToken: `vendorpay-${Date.now()}`,
+          clientToken: submissionToken(confirmPayTokenRef, "vendorpay"),
           allocations: [{ targetType: "purchase", targetId: (created.data as any).id, amount: paidAmount }],
         })
         payOk = pay.success
@@ -198,6 +204,8 @@ export default function PurchasesPage() {
       setFormNotice(`${row.purchase_no ?? draftPurchase.purchase_no} posted — remaining balance ${formatCurrency(balanceAfter)} owed to ${draftPurchase.vendor_name || "the vendor"}.${payNote}`)
       setShowConfirm(false)
       setIsModalOpen(false)
+      resetSubmissionToken(purchaseTokenRef)
+      resetSubmissionToken(confirmPayTokenRef)
       setDraftPurchase(null)
       await loadData()
     } finally {
@@ -217,7 +225,7 @@ export default function PurchasesPage() {
     setRetPending(true)
     try {
       const res = await createPurchaseReturn({
-        purchaseId: retPurchaseId, reason: retReason.trim(), clientToken: `purchasereturn-${Date.now()}`,
+        purchaseId: retPurchaseId, reason: retReason.trim(), clientToken: submissionToken(returnTokenRef, "purchasereturn"),
         items: [{ purchaseItemId: firstItem.id, quantity: retQty, unitPrice: retPrice }],
       })
       if (!res.success) {
@@ -234,6 +242,7 @@ export default function PurchasesPage() {
       } else {
         setFormNotice(`Purchase return ${(postedReturn.data as any)?.return_no ?? createdReturn.return_no ?? ""} posted — stock out and vendor credit applied against ${purchase.purchase_no}.`)
       }
+      resetSubmissionToken(returnTokenRef)
       await loadData()
     } finally {
       setRetPending(false)
@@ -263,11 +272,12 @@ export default function PurchasesPage() {
     try {
       const res = await allocatePayment({
         vendorId: purchase.vendor_id, cashAccountId: payCashAccountId, account: payAccountKind,
-        amount: payAmount, settlementKind: "purchase", clientToken: `vendorpay-${Date.now()}`,
+        amount: payAmount, settlementKind: "purchase", clientToken: submissionToken(payTokenRef, "vendorpay"),
         allocations: [{ targetType: "purchase", targetId: purchase.id, amount: payAmount }],
       })
       if (!res.success) { setFormError(res.error ?? "Could not record the payment."); return }
       setFormNotice(`Paid ${formatCurrency(payAmount)} against ${purchase.purchase_no}. Remaining balance: ${formatCurrency(Number(purchase.balance_amount) - payAmount)}.`)
+      resetSubmissionToken(payTokenRef)
       await loadData()
     } finally { setPayPending(false) }
   }
