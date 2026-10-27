@@ -17,7 +17,7 @@ import {
   Plus,
   Download,
 } from "lucide-react"
-import { getStockSummary, getStockLedger, createTransfer, postTransfer, reverseTransfer, createAdjustment, postAdjustment, reverseAdjustment, listTransfers, listAdjustments } from "@/app/actions/inventory"
+import { getStockSummary, getStockLedger, getStockAgeing, createTransfer, postTransfer, reverseTransfer, createAdjustment, postAdjustment, reverseAdjustment, listTransfers, listAdjustments } from "@/app/actions/inventory"
 import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
 import { StockLedgerEntry, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDateTime } from "@/lib/utils"
@@ -36,10 +36,21 @@ import {
 import { InventorySkeleton } from "@/components/route-skeletons"
 
 export default function InventoryPage() {
-  const [activeTab, setActiveTab] = React.useState<"summary" | "ledger" | "transfers" | "adjustments">("summary")
+  const [activeTab, setActiveTab] = React.useState<"summary" | "ledger" | "transfers" | "adjustments" | "count" | "ageing">("summary")
   const [rawSummary, setRawSummary] = React.useState<any[]>([])
   const [transfers, setTransfers] = React.useState<any[]>([])
   const [adjustments, setAdjustments] = React.useState<any[]>([])
+  const [ageing, setAgeing] = React.useState<any[]>([])
+  const [transferPage, setTransferPage] = React.useState(1)
+  const [transferTotal, setTransferTotal] = React.useState(0)
+  const [adjustmentPage, setAdjustmentPage] = React.useState(1)
+  const [adjustmentTotal, setAdjustmentTotal] = React.useState(0)
+  const [lotFilter, setLotFilter] = React.useState("")
+  const [countGodown, setCountGodown] = React.useState("")
+  const [counted, setCounted] = React.useState<Record<string, string>>({})
+  const [countReason, setCountReason] = React.useState("")
+  const [countApprover, setCountApprover] = React.useState("")
+  const [countPending, setCountPending] = React.useState(false)
   const [parties, setParties] = React.useState<Party[]>([])
   const [collapsedGodowns, setCollapsedGodowns] = React.useState<string[]>([])
   const [ledgerPage, setLedgerPage] = React.useState(1)
@@ -89,18 +100,38 @@ export default function InventoryPage() {
     })))
   }, [])
 
-  const loadLedgerPage = React.useCallback(async (page: number, godown: string, godownList: Godown[], productList: Product[]) => {
-    const le = await getStockLedger({ page, pageSize: 50, godownId: godown !== "all" ? godown : undefined })
+  const loadLedgerPage = React.useCallback(async (page: number, godown: string, godownList: Godown[], productList: Product[], lot?: string) => {
+    const le = await getStockLedger({ page, pageSize: 50, godownId: godown !== "all" ? godown : undefined, lotNumber: lot?.trim() ? lot.trim() : undefined })
     if (!le.success) setTransferError(le.error ?? "Could not load the ledger.")
     else applyLedgerPage(le, godownList, productList)
     setLedgerPage(page)
   }, [applyLedgerPage])
 
+  const loadTransfersPage = React.useCallback(async (page: number) => {
+    const tr = await listTransfers({ page, pageSize: 50 })
+    if (!tr.success) setTransferError(tr.error ?? "Could not load transfers.")
+    else {
+      setTransfers(Array.isArray((tr.data as any)?.rows) ? (tr.data as any).rows : (Array.isArray(tr.data) ? tr.data : []))
+      setTransferTotal(Number((tr.data as any)?.total) || 0)
+      setTransferPage(Number((tr.data as any)?.page) || page)
+    }
+  }, [])
+
+  const loadAdjustmentsPage = React.useCallback(async (page: number) => {
+    const ad = await listAdjustments({ page, pageSize: 50 })
+    if (!ad.success) setTransferError(ad.error ?? "Could not load adjustments.")
+    else {
+      setAdjustments(Array.isArray((ad.data as any)?.rows) ? (ad.data as any).rows : (Array.isArray(ad.data) ? ad.data : []))
+      setAdjustmentTotal(Number((ad.data as any)?.total) || 0)
+      setAdjustmentPage(Number((ad.data as any)?.page) || page)
+    }
+  }, [])
+
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [sm, le, g, pr, pa, tr, ad] = await Promise.all([getStockSummary(), getStockLedger({ page: 1, pageSize: 50 }), listGodowns(), listProducts(), listParties(), listTransfers(), listAdjustments()])
-      const failed = [sm, le, g, pr, pa, tr, ad].find((r) => !r.success)
+      const [sm, le, g, pr, pa, tr, ad, ag] = await Promise.all([getStockSummary(), getStockLedger({ page: 1, pageSize: 50 }), listGodowns(), listProducts(), listParties(), listTransfers({ page: 1, pageSize: 50 }), listAdjustments({ page: 1, pageSize: 50 }), getStockAgeing()])
+      const failed = [sm, le, g, pr, pa, tr, ad, ag].find((r) => !r.success)
       if (failed) setTransferError(failed.error ?? "Could not load inventory data.")
       const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
       const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
@@ -109,8 +140,13 @@ export default function InventoryPage() {
       setGodowns(godownList)
       setProducts(productList)
       setParties(partyList)
-      setTransfers(Array.isArray(tr.data) ? tr.data : [])
-      setAdjustments(Array.isArray(ad.data) ? ad.data : [])
+      setTransfers(Array.isArray((tr.data as any)?.rows) ? (tr.data as any).rows : (Array.isArray(tr.data) ? tr.data : []))
+      setTransferTotal(Number((tr.data as any)?.total) || 0)
+      setTransferPage(1)
+      setAdjustments(Array.isArray((ad.data as any)?.rows) ? (ad.data as any).rows : (Array.isArray(ad.data) ? ad.data : []))
+      setAdjustmentTotal(Number((ad.data as any)?.total) || 0)
+      setAdjustmentPage(1)
+      setAgeing(Array.isArray(ag.data) ? ag.data : [])
       setLedgerPage(1)
       applyLedgerPage(le, godownList, productList)
     } catch (err) {
@@ -122,7 +158,60 @@ export default function InventoryPage() {
 
   // Mount load: without this the page never leaves its skeleton —
   // isLoading starts true and only post-action handlers reloaded before.
-  React.useEffect(() => { loadData() }, [loadData])
+  // Dashboard drill-down links (?filter=low) are applied on mount via
+  // the shared getUrlFilter() helper, so they actually filter.
+  React.useEffect(() => { loadData(); setDrillFilter(getUrlFilter()) }, [loadData])
+
+  React.useEffect(() => {
+    if (godowns.length > 0 && !countGodown) {
+      const first = godowns[0].id
+      setCountGodown(first)
+      const next: Record<string, string> = {}
+      for (const r of rawSummary.filter((x) => x.godown_id === first)) {
+        next[`${r.godown_id}|${r.product_id}|${r.party_id ?? ""}`] = String(r.balance_kg ?? 0)
+      }
+      setCounted(next)
+    }
+  }, [godowns, rawSummary, countGodown])
+
+  const countRows = rawSummary.filter((r) => !countGodown || r.godown_id === countGodown)
+  const countKey = (r: any) => `${r.godown_id}|${r.product_id}|${r.party_id ?? ""}`
+  const handleCountSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (countPending) return
+    if (!countGodown) return setTransferError("Select a godown for the count.")
+    if (!countReason.trim()) return setTransferError("A count reason is required.")
+    if (!countApprover.trim()) return setTransferError("An approver is required for count adjustments.")
+    const variances = countRows.map((r) => {
+      const systemQty = Number(r.balance_kg) || 0
+      const countedQty = Number(counted[countKey(r)])
+      return { row: r, systemQty, countedQty }
+    }).filter((v) => Number.isFinite(v.countedQty) && v.countedQty >= 0 && v.countedQty !== v.systemQty)
+    if (!variances.length) {
+      setTransferNotice("Count matches system stock — no adjustments created.")
+      return
+    }
+    setCountPending(true)
+    try {
+      const failures: string[] = []
+      let created = 0
+      for (const v of variances) {
+        const adj = await createAdjustment({
+          godownId: v.row.godown_id, productId: v.row.product_id, quantityBeforeKg: v.systemQty, quantityAfterKg: v.countedQty,
+          reason: countReason.trim(), approver: countApprover.trim(), partyId: v.row.party_id || undefined,
+        })
+        if (!adj.success || !(adj.data as any)?.id) { failures.push(`${v.row.product_name}: ${adj.error ?? "could not create adjustment"}`); continue }
+        const posted = await postAdjustment((adj.data as any).id, postToken("adjustment:post", (adj.data as any).id))
+        if (!posted.success) failures.push(`${v.row.product_name}: ${posted.error ?? "could not post adjustment"}`)
+        else created++
+      }
+      if (failures.length) setTransferError(`Count adjustments: ${created} posted, ${failures.length} failed — ${failures.join("; ")}`)
+      else setTransferNotice(`Count posted: ${created} adjustment${created === 1 ? "" : "s"} for variances in ${godowns.find((g) => g.id === countGodown)?.name ?? "the godown"}.`)
+      await loadData()
+    } finally {
+      setCountPending(false)
+    }
+  }
 
   React.useEffect(() => {
     if (godowns.length >= 2) {
@@ -137,7 +226,9 @@ export default function InventoryPage() {
   const filteredSummary = rawSummary.filter((r) => {
     const prod = products.find((x) => x.id === r.product_id)
     const matchesSearch = (r.product_name ?? "").toLowerCase().includes(searchQuery.toLowerCase()) || (prod?.code ?? "").toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesCategory = selectedCategory === "all" || (prod?.category ?? "") === selectedCategory
+    // Category now arrives server-side on the summary row; the masters
+    // join is only a fallback for older cached rows.
+    const matchesCategory = selectedCategory === "all" || (r.product_category ?? prod?.category ?? "") === selectedCategory
     const matchesDrill = drillFilter === "low" ? !!r.below_min_stock : true
     return matchesSearch && matchesCategory && matchesDrill
   })
@@ -265,6 +356,8 @@ export default function InventoryPage() {
   // Shared by the CSV / Excel / PDF buttons: one definition of the active
   // tab's rows, columns, title and totals, so all formats agree.
   const getInventoryExport = () => {
+    if (activeTab === "count") return { rows: countRows.map((r: any) => ({ godown: godowns.find((g) => g.id === r.godown_id)?.name ?? r.godown_id, product: r.product_name, owner: r.party_name || "Company", system_kg: r.balance_kg, counted_kg: Number(counted[countKey(r)]) || 0, variance_kg: (Number(counted[countKey(r)]) || 0) - (Number(r.balance_kg) || 0) })), filename: "stock_count", columns: [{ key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "owner", label: "Owner" }, { key: "system_kg", label: "System (kg)" }, { key: "counted_kg", label: "Counted (kg)" }, { key: "variance_kg", label: "Variance (kg)" }], options: { title: "Stock Count" }, report: "inventory_count" }
+    if (activeTab === "ageing") return { rows: ageing.map((a: any) => ({ godown: a.godown_name, product: a.product_name, owner: a.party_name || "Company", days_0_30: a.buckets["0-30"] ?? 0, days_31_60: a.buckets["31-60"] ?? 0, days_61_90: a.buckets["61-90"] ?? 0, days_90_plus: a.buckets["90+"] ?? 0, total_kg: a.total_kg ?? 0 })), filename: "stock_ageing", columns: [{ key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "owner", label: "Owner" }, { key: "days_0_30", label: "0-30 days" }, { key: "days_31_60", label: "31-60 days" }, { key: "days_61_90", label: "61-90 days" }, { key: "days_90_plus", label: "90+ days" }, { key: "total_kg", label: "Total (kg)" }], options: { title: "Stock Ageing (FIFO approximation)" }, report: "inventory_ageing" }
     if (activeTab === "summary") return { rows: filteredSummary.map((r) => ({ godown: r.godown_name, product: r.product_name, owner: r.party_name || "Company", stock_kg: r.balance_kg, min_stock: r.min_stock_kg || 0, below_min: r.below_min_stock ? "yes" : "no" })), filename: "godown_stock_summary", columns: [{ key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "owner", label: "Owner" }, { key: "stock_kg", label: "Stock (kg)" }, { key: "min_stock", label: "Min stock" }, { key: "below_min", label: "Below min" }], options: { title: "Godown Stock Summary", totals: { stock_kg: filteredSummary.reduce((a, r) => a + (Number(r.balance_kg) || 0), 0) } }, report: "inventory_summary" }
     if (activeTab === "transfers") return { rows: transfers.map((t: any) => ({ transfer_no: t.transfer_no, date: t.date, from: godowns.find((g) => g.id === t.from_godown_id)?.name ?? "Not set", to: godowns.find((g) => g.id === t.to_godown_id)?.name ?? "Not set", product: products.find((x) => x.id === t.product_id)?.name ?? t.product_id, quantity_kg: t.quantity, status: t.status })), filename: "transfers", columns: [{ key: "transfer_no", label: "Transfer no" }, { key: "date", label: "Date" }, { key: "from", label: "From" }, { key: "to", label: "To" }, { key: "product", label: "Product" }, { key: "quantity_kg", label: "Quantity (kg)" }, { key: "status", label: "Status" }], options: { title: "Stock Transfers", totals: { quantity_kg: transfers.reduce((a, t: any) => a + (Number(t.quantity) || 0), 0) } }, report: "inventory_transfers" }
     if (activeTab === "adjustments") return { rows: adjustments.map((a: any) => ({ adjustment_no: a.adjustment_no, date: a.date, godown: godowns.find((g) => g.id === a.godown_id)?.name ?? a.godown_id, product: products.find((x) => x.id === a.product_id)?.name ?? a.product_id, before_kg: a.quantity_before, after_kg: a.quantity_after, status: a.status })), filename: "adjustments", columns: [{ key: "adjustment_no", label: "Adjustment no" }, { key: "date", label: "Date" }, { key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "before_kg", label: "Before (kg)" }, { key: "after_kg", label: "After (kg)" }, { key: "status", label: "Status" }], options: { title: "Stock Adjustments" }, report: "inventory_adjustments" }
@@ -370,7 +463,7 @@ export default function InventoryPage() {
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            Transfers ({transfers.length})
+            Transfers ({transferTotal})
           </button>
           <button
             type="button"
@@ -381,7 +474,29 @@ export default function InventoryPage() {
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            Adjustments ({adjustments.length})
+            Adjustments ({adjustmentTotal})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("count")}
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === "count"
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Count
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("ageing")}
+            className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
+              activeTab === "ageing"
+                ? "bg-primary text-primary-foreground shadow-xs"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Ageing ({ageing.length})
           </button>
         </div>
 
@@ -409,20 +524,30 @@ export default function InventoryPage() {
               <option value="finished_seed">Finished Seed</option>
               <option value="by_product">By-Product</option>
             </select>
-          ) : (
-            <select
-              value={selectedGodown}
-              onChange={(e) => { setSelectedGodown(e.target.value); void loadLedgerPage(1, e.target.value, godowns, products) }}
-              className="px-2.5 py-1.5 rounded-lg bg-background border border-border text-xs text-foreground"
-            >
-              <option value="all">All Godowns</option>
-              {godowns.map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.name}
-                </option>
-              ))}
-            </select>
-          )}
+          ) : activeTab === "ledger" ? (
+            <>
+              <input
+                type="text"
+                value={lotFilter}
+                onChange={(e) => setLotFilter(e.target.value)}
+                placeholder="Lot no. (optional)"
+                className="px-2.5 py-1.5 rounded-lg bg-background border border-border text-xs text-foreground"
+              />
+              <button type="button" onClick={() => void loadLedgerPage(1, selectedGodown, godowns, products, lotFilter)} className="px-3 py-1.5 rounded-lg bg-muted text-foreground font-semibold cursor-pointer">Filter lot</button>
+              <select
+                value={selectedGodown}
+                onChange={(e) => { setSelectedGodown(e.target.value); void loadLedgerPage(1, e.target.value, godowns, products, lotFilter) }}
+                className="px-2.5 py-1.5 rounded-lg bg-background border border-border text-xs text-foreground"
+              >
+                <option value="all">All Godowns</option>
+                {godowns.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -519,6 +644,7 @@ export default function InventoryPage() {
                   <th className="pb-3 font-bold">Type</th>
                   <th className="pb-3 font-bold">Godown</th>
                   <th className="pb-3 font-bold">Product</th>
+                  <th className="pb-3 font-bold">Lot</th>
                   <th className="pb-3 font-bold text-right">Inward</th>
                   <th className="pb-3 font-bold text-right">Outward</th>
                   <th className="pb-3 font-bold text-right">Balance</th>
@@ -528,7 +654,7 @@ export default function InventoryPage() {
               <tbody className="divide-y divide-border font-mono">
                 {filteredLedger.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="py-4 font-sans">
+                    <td colSpan={10} className="py-4 font-sans">
                       <EmptyState
                         title="No ledger movements match these filters"
                         hint="Movements appear here after you post a voucher."
@@ -547,6 +673,7 @@ export default function InventoryPage() {
                     </td>
                     <td className="py-3 text-muted-foreground font-sans">{entry.godown_name}</td>
                     <td className="py-3 font-semibold text-foreground font-sans">{entry.product_name}</td>
+                    <td className="py-3 text-muted-foreground font-sans">{(entry as any).lot_number || "—"}</td>
                     <td className="py-3 text-right font-bold text-emerald-600 dark:text-emerald-400">
                       {entry.inward_qty > 0 ? `+${entry.inward_qty.toLocaleString()} kg` : "-"}
                     </td>
@@ -626,6 +753,21 @@ export default function InventoryPage() {
         </div>
       )}
 
+      {activeTab === "transfers" && (
+        <div className="expensive-card p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <span className="text-muted-foreground">
+            {transferPage === 1
+              ? `Showing latest ${transfers.length} of ${transferTotal} transfers`
+              : `Showing rows ${(transferPage - 1) * 50 + 1}–${(transferPage - 1) * 50 + transfers.length} of ${transferTotal} transfers`}
+          </span>
+          <span className="flex items-center gap-2">
+            <button type="button" disabled={transferPage <= 1} onClick={() => void loadTransfersPage(transferPage - 1)} className="px-3 py-1.5 rounded-lg bg-muted text-foreground font-semibold cursor-pointer disabled:opacity-50">Previous</button>
+            <span className="font-mono">Page {transferPage} of {Math.max(1, Math.ceil(transferTotal / 50))}</span>
+            <button type="button" disabled={transferPage * 50 >= transferTotal} onClick={() => void loadTransfersPage(transferPage + 1)} className="px-3 py-1.5 rounded-lg bg-muted text-foreground font-semibold cursor-pointer disabled:opacity-50">Next</button>
+          </span>
+        </div>
+      )}
+
       {/* Adjustments register: every posted row reversible, not just the latest. */}
       {activeTab === "adjustments" && (
         <div className="expensive-card p-5">
@@ -661,6 +803,119 @@ export default function InventoryPage() {
                         <button type="button" onClick={() => setRevAdjustment(a)} className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>
                       )}
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "adjustments" && (
+        <div className="expensive-card p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <span className="text-muted-foreground">
+            {adjustmentPage === 1
+              ? `Showing latest ${adjustments.length} of ${adjustmentTotal} adjustments`
+              : `Showing rows ${(adjustmentPage - 1) * 50 + 1}–${(adjustmentPage - 1) * 50 + adjustments.length} of ${adjustmentTotal} adjustments`}
+          </span>
+          <span className="flex items-center gap-2">
+            <button type="button" disabled={adjustmentPage <= 1} onClick={() => void loadAdjustmentsPage(adjustmentPage - 1)} className="px-3 py-1.5 rounded-lg bg-muted text-foreground font-semibold cursor-pointer disabled:opacity-50">Previous</button>
+            <span className="font-mono">Page {adjustmentPage} of {Math.max(1, Math.ceil(adjustmentTotal / 50))}</span>
+            <button type="button" disabled={adjustmentPage * 50 >= adjustmentTotal} onClick={() => void loadAdjustmentsPage(adjustmentPage + 1)} className="px-3 py-1.5 rounded-lg bg-muted text-foreground font-semibold cursor-pointer disabled:opacity-50">Next</button>
+          </span>
+        </div>
+      )}
+
+      {activeTab === "count" && (
+        <div className="expensive-card p-5">
+          <h2 className="text-sm font-bold text-foreground mb-1">Stock Count</h2>
+          <p className="text-xs text-muted-foreground mb-4">Count one godown at a time. System quantities come from the live stock summary; counted quantities default to system stock, so only changed rows create adjustments. Variances post as adjustments with the reason and approver below — this count is the discrepancy source the dashboard stock-alerts card can later use, and no count is invented.</p>
+          <form onSubmit={handleCountSubmit} className="space-y-4 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div><label className="block font-medium text-foreground mb-1" htmlFor="count-godown">Godown</label><select id="count-godown" value={countGodown} onChange={(e) => {
+                const gid = e.target.value
+                setCountGodown(gid)
+                const next: Record<string, string> = {}
+                for (const r of rawSummary.filter((x) => x.godown_id === gid)) {
+                  next[`${r.godown_id}|${r.product_id}|${r.party_id ?? ""}`] = String(r.balance_kg ?? 0)
+                }
+                setCounted(next)
+              }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select godown</option>{godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
+              <div><label className="block font-medium text-foreground mb-1" htmlFor="count-reason">Reason *</label><input id="count-reason" value={countReason} onChange={(e) => setCountReason(e.target.value)} placeholder="e.g. Monthly physical count" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+              <div><label className="block font-medium text-foreground mb-1" htmlFor="count-approver">Approver *</label><input id="count-approver" value={countApprover} onChange={(e) => setCountApprover(e.target.value)} placeholder="Approver name" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs min-w-[640px]">
+                <thead>
+                  <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
+                    <th className="pb-3 font-bold">Product</th>
+                    <th className="pb-3 font-bold">Owner</th>
+                    <th className="pb-3 font-bold text-right">System Qty (kg)</th>
+                    <th className="pb-3 font-bold text-right">Counted Qty (kg)</th>
+                    <th className="pb-3 font-bold text-right">Variance (kg)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {countRows.length === 0 && (
+                    <tr><td colSpan={5} className="py-4"><EmptyState title="No stock rows for this godown" hint="Select a godown that holds stock, or post an inward voucher first." /></td></tr>
+                  )}
+                  {countRows.map((r: any) => {
+                    const key = countKey(r)
+                    const systemQty = Number(r.balance_kg) || 0
+                    const countedQty = Number(counted[key])
+                    const variance = Number.isFinite(countedQty) ? countedQty - systemQty : 0
+                    return (
+                      <tr key={key} className="hover:bg-muted transition-colors">
+                        <td className="py-3 font-bold text-foreground">{r.product_name}</td>
+                        <td className="py-3 text-muted-foreground">{r.party_name || "Company"}</td>
+                        <td className="py-3 text-right font-mono">{formatWeight(systemQty)}</td>
+                        <td className="py-3 text-right"><input type="number" min="0" value={counted[key] ?? ""} onChange={(e) => setCounted((prev) => ({ ...prev, [key]: e.target.value }))} className="w-32 px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono text-right" /></td>
+                        <td className={`py-3 text-right font-bold font-mono ${variance === 0 ? "text-muted-foreground" : variance > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{variance > 0 ? `+${formatWeight(variance)}` : formatWeight(variance)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center justify-end">
+              <button type="submit" disabled={countPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{countPending ? "Posting…" : "Create Adjustments for Variances"}</button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {activeTab === "ageing" && (
+        <div className="expensive-card p-5">
+          <h2 className="text-sm font-bold text-foreground mb-1">Stock Ageing (FIFO approximation)</h2>
+          <p className="text-xs text-muted-foreground mb-4">Approximation pending client confirmation of the buckets: ledger rows are consumed oldest-first per godown, product and owner pool, and the remaining stock is bucketed by ledger date into 0–30, 31–60, 61–90 and 90+ days. Opening-balances stock carries no ledger date and is excluded from this view.</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
+              <thead>
+                <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
+                  <th className="pb-3 font-bold">Godown</th>
+                  <th className="pb-3 font-bold">Product</th>
+                  <th className="pb-3 font-bold">Owner</th>
+                  <th className="pb-3 font-bold text-right">0–30 days</th>
+                  <th className="pb-3 font-bold text-right">31–60 days</th>
+                  <th className="pb-3 font-bold text-right">61–90 days</th>
+                  <th className="pb-3 font-bold text-right">90+ days</th>
+                  <th className="pb-3 font-bold text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {ageing.length === 0 && (
+                  <tr><td colSpan={8} className="py-4"><EmptyState title="No ageing data yet" hint="Ageing appears here after ledger movements are posted." /></td></tr>
+                )}
+                {ageing.map((a: any) => (
+                  <tr key={`${a.godown_id}-${a.product_id}-${a.party_id ?? ""}`} className="hover:bg-muted transition-colors">
+                    <td className="py-3 text-muted-foreground">{a.godown_name}</td>
+                    <td className="py-3 font-semibold text-foreground">{a.product_name}</td>
+                    <td className="py-3 text-muted-foreground">{a.party_name || "Company"}</td>
+                    <td className="py-3 text-right font-mono">{formatWeight(a.buckets["0-30"] ?? 0)}</td>
+                    <td className="py-3 text-right font-mono">{formatWeight(a.buckets["31-60"] ?? 0)}</td>
+                    <td className="py-3 text-right font-mono">{formatWeight(a.buckets["61-90"] ?? 0)}</td>
+                    <td className="py-3 text-right font-mono">{formatWeight(a.buckets["90+"] ?? 0)}</td>
+                    <td className="py-3 text-right font-black text-foreground">{formatWeight(a.total_kg ?? 0)}</td>
                   </tr>
                 ))}
               </tbody>

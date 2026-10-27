@@ -150,6 +150,9 @@ describe("callAtomicStockTransition", () => {
         inward_qty: 100,
         outward_qty: 0,
         notes: null,
+        // Lot extension (STOCK-DASH): omitted lot serialises as null,
+        // so lines without lot tracking are unchanged in shape.
+        lot_number: null,
       },
     ]);
   });
