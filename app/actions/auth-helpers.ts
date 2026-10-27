@@ -16,6 +16,16 @@ export type AppRole =
   | "read_only_manager";
 
 export const FINANCE_WRITE: AppRole[] = ["owner_admin", "accountant"];
+/** Stock writes: inward, transfers, adjustments, gate passes. */
+export const STOCK_WRITE: AppRole[] = ["owner_admin", "storekeeper"];
+/** Production writes: recipes, recipe versions, batches. */
+export const PRODUCTION_WRITE: AppRole[] = ["owner_admin", "production_operator"];
+/** Machinery writes: service-job drafts, posts, reversals. */
+export const MACHINERY_WRITE: AppRole[] = ["owner_admin", "production_operator"];
+/** Master-data writes: godowns, products, parties, machines,
+ * packaging types, employees. Owner/Admin only — reference data
+ * changes affect every module, so no operator role may edit it. */
+export const MASTERS_WRITE: AppRole[] = ["owner_admin"];
 export const FINANCE_READ_SENSITIVE: AppRole[] = ["owner_admin", "accountant"];
 export const PAYROLL_WRITE: AppRole[] = ["owner_admin", "hr_payroll"];
 export const PAYROLL_PAY: AppRole[] = ["owner_admin", "hr_payroll", "accountant"];

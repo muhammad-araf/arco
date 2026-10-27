@@ -16,16 +16,32 @@
  * that operator signs in, sensitive actions fail closed with
  * "Authentication required" — they do not silently run as admin.
  *
+ * FAIL CLOSED (B2): getCurrentActor() returns null when the signed-in
+ * user has no profiles row, when the profile is inactive, or when the
+ * stored role string is not a recognised role. It NEVER defaults to
+ * owner_admin. Legacy role strings "owner" / "admin" (which older
+ * databases may hold) are normalised to owner_admin, because the app
+ * itself has always treated them as admin — and the last-admin guard
+ * in setUserRole() counts all three spellings.
+ *
  * Role matrix (typical access, spec §17; final permissions configurable
  * via the profiles.role column):
  *   owner_admin         — everything, incl. user management & audit
- *   storekeeper         — receiving/stock views; no payroll/profit
+ *   storekeeper         — receiving/stock views; no payroll/profit;
+ *                         stock writes (inward, transfers, adjustments,
+ *                         gate passes) via STOCK_WRITE
  *   production_operator — recipe/batch & machinery entry; limited finance
  *   gate_operator       — view/print approved gate passes; no stock edits
  *   accountant          — purchases, receipts, payments, expenses,
  *                         ledgers, daybook, financial reports
  *   hr_payroll          — employees, attendance, payroll
  *   read_only_manager   — reads only; never a write action
+ *
+ * Write groups (see auth-helpers.ts): STOCK_WRITE, PRODUCTION_WRITE,
+ * MACHINERY_WRITE, MASTERS_WRITE (owner_admin only). Stock/master
+ * reads are open to any signed-in operator (requireSignedIn) — the
+ * finance/payroll pattern of role-restricted sensitive reads is kept
+ * for finance and payroll only, not extended to stock reads.
  */
 
 import { createClient } from "@/lib/supabase/server";
@@ -87,16 +103,13 @@ export async function getCurrentActor(
     .eq("id", user.id)
     .maybeSingle();
 
-  // If no profile exists yet, fallback for the authenticated user so they are not blocked.
-  // The display name is the user's own email, never an invented name.
-  if (!profile) {
-    return {
-      userId: user.id,
-      email: user.email ?? null,
-      role: "owner_admin",
-      displayName: user.email ?? null,
-    };
-  }
+  // FAIL CLOSED: no profiles row means no authorised actor. A
+  // signed-in user without a profile (e.g. a self-registered account
+  // when sign-ups are on) is denied everywhere, never promoted to
+  // owner_admin. Display-only callers (sidebar) already handle null
+  // by showing the session email or a generic label — that fallback
+  // is display only and never authorises anything.
+  if (!profile) return null;
 
   const isActive = profile.is_active !== undefined
     ? profile.is_active !== false
@@ -104,9 +117,12 @@ export async function getCurrentActor(
 
   if (!isActive) return null;
 
-  // Map role gracefully
-  let role: AppRole = "read_only_manager";
+  // Map the stored role. Legacy "owner" / "admin" spellings normalise
+  // to owner_admin; anything else unrecognised (including an empty
+  // role) FAILS CLOSED — it is never promoted to owner_admin and
+  // never silently demoted to a readable role either.
   const rawRole = (profile.role || "").toLowerCase();
+  let role: AppRole;
   if (rawRole === "owner_admin" || rawRole === "owner" || rawRole === "admin") {
     role = "owner_admin";
   } else if (rawRole === "accountant") {
@@ -119,8 +135,10 @@ export async function getCurrentActor(
     role = "production_operator";
   } else if (rawRole === "gate_operator") {
     role = "gate_operator";
+  } else if (rawRole === "read_only_manager") {
+    role = "read_only_manager";
   } else {
-    role = "owner_admin"; // fallback for single-role operator
+    return null;
   }
 
   const displayName = profile.display_name || profile.full_name || user.email;
@@ -206,8 +224,9 @@ export async function listProfiles(): Promise<ActionResult> {
 
 /**
  * Change an operator's role — Owner/Admin only, audited, and the last
- * active Owner/Admin cannot be demoted or deactivated (otherwise the
- * business locks itself out of user management).
+ * active Owner/Admin cannot be demoted (otherwise the business locks
+ * itself out of user management). "Last admin" counts every admin
+ * spelling: owner_admin, owner, and admin.
  */
 export async function setUserRole(
   targetUserId: string,
@@ -230,13 +249,35 @@ export async function setUserRole(
     .eq("id", targetUserId)
     .maybeSingle();
   if (!before) return { success: false, error: "Operator profile not found." };
-  if (before.role === "owner_admin" && role !== "owner_admin") {
-    const { count } = await db
+  // Last-admin guard (M12): count EVERY spelling the app treats as
+  // admin ("owner_admin", "owner", "admin"), not just the canonical
+  // one — otherwise demoting the last canonical row while a legacy
+  // spelling exists (or vice versa) miscounts. Roles are counted in
+  // code rather than filtered in SQL so a legacy spelling stored in a
+  // database whose role column is the app_role_enum (which has no
+  // "owner"/"admin" values) cannot make the query itself fail.
+  const beforeIsAdmin =
+    before.role === "owner_admin" ||
+    before.role === "owner" ||
+    before.role === "admin";
+  if (beforeIsAdmin && role !== "owner_admin") {
+    const { data: activeProfiles, error: countError } = await db
       .from("profiles")
-      .select("id", { count: "exact", head: true })
-      .eq("role", "owner_admin")
+      .select("role")
       .eq("is_active", true);
-    if ((count ?? 0) <= 1) {
+    if (countError) {
+      return {
+        success: false,
+        error:
+          "Cannot verify the last-admin guard; demotion refused. " +
+          countError.message,
+      };
+    }
+    const adminCount = (activeProfiles ?? []).filter(
+      (p: { role: string }) =>
+        p.role === "owner_admin" || p.role === "owner" || p.role === "admin",
+    ).length;
+    if (adminCount <= 1) {
       return {
         success: false,
         error: "Cannot demote the last active Owner/Admin.",
