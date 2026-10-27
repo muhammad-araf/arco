@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole, requireSignedIn, type Actor } from "./auth";
-import { STOCK_WRITE } from "./auth-helpers";
+import { STOCK_WRITE, OWNER_ONLY } from "./auth-helpers";
 import { logAudit } from "@/lib/audit";
 import { callAtomicStockTransition } from "@/lib/atomic";
 import { isUniqueViolation } from "@/lib/idempotency";
@@ -16,6 +16,7 @@ import {
   remainingReturnable,
   validateCumulativeReturns,
   gatePassStatusAfterReturn,
+  acceptedRestockQuantities,
 } from "@/lib/calc";
 
 /**
@@ -64,6 +65,63 @@ async function requireWrite(
   const gate = await requireRole(db, STOCK_WRITE);
   if (!gate.ok) return { error: gate.error };
   return { actor: gate.actor };
+}
+
+/** Display name for sign-off columns: profile name, else email, else id. */
+function actorName(actor: Actor): string {
+  return actor.displayName ?? actor.email ?? actor.userId;
+}
+
+/**
+ * Spec §9.3 step 4 approval gate. The `gatepass_approval_required`
+ * app_settings row is owned by the settings team; when it is absent
+ * (or unreadable, or any other shape) approval is OFF and posting
+ * behaves exactly as before. Accepted shapes: `true`, `"true"`, or an
+ * object with `required` / `enabled` / `value` true — the reader stays
+ * liberal because the settings team owns the stored shape.
+ */
+async function gatepassApprovalRequired(supabase: Db): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "gatepass_approval_required")
+      .maybeSingle();
+    if (error || !data) return false;
+    const v = (data as { value?: unknown }).value;
+    if (v === true || v === "true") return true;
+    if (v && typeof v === "object") {
+      const o = v as Record<string, unknown>;
+      return o.required === true || o.enabled === true || o.value === true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/** Stock guard shared by post + approve: aggregated per pool, never negative. */
+async function guardStock(
+  supabase: Db,
+  pass: { pass_no: string; godown_id: string },
+  items: { product_id: string; net_weight_kg: number; party_id: string | null }[],
+): Promise<string | null> {
+  const required = aggregatePoolQuantities(
+    items.map((item) => ({
+      productId: item.product_id,
+      partyId: item.party_id ?? null,
+      qtyKg: roundWeight(item.net_weight_kg),
+    })),
+  );
+  for (const { productId, partyId, qtyKg } of required) {
+    const available = await physicalBalance(supabase, pass.godown_id, productId, partyId);
+    if (available < qtyKg) {
+      return (
+        `Insufficient stock for gate pass ${pass.pass_no}: product ${productId} has ${available} kg available in this godown${partyId ? " for this owner" : ""}, pass needs ${qtyKg} kg`
+      );
+    }
+  }
+  return null;
 }
 
 async function nextDocNumber(supabase: Db, series: string, prefix: string): Promise<string> {
@@ -217,6 +275,7 @@ export async function listGatePasses(filters?: {
   status?: string;
   customerId?: string;
   godownId?: string;
+  vehicleNo?: string;
   from?: string;
   to?: string;
 }): Promise<ActionResult> {
@@ -231,6 +290,7 @@ export async function listGatePasses(filters?: {
     if (filters?.status) query = query.eq("status", filters.status);
     if (filters?.customerId) query = query.eq("customer_id", filters.customerId);
     if (filters?.godownId) query = query.eq("godown_id", filters.godownId);
+    if (filters?.vehicleNo) query = query.ilike("vehicle_no", `%${filters.vehicleNo}%`);
     if (filters?.from) query = query.gte("date", filters.from);
     if (filters?.to) query = query.lte("date", filters.to);
     const { data, error } = await query;
@@ -271,6 +331,11 @@ export async function createGatePassDraft(input: {
   orderRef?: string;
   date?: string;
   notes?: string;
+  /** Person physically receiving the goods (spec §9). */
+  receiverName?: string;
+  receiverContact?: string;
+  /** How the goods leave: free text from the form select. */
+  dispatchMode?: string;
   items: {
     productId: string;
     bags: number;
@@ -279,6 +344,8 @@ export async function createGatePassDraft(input: {
     remarks?: string;
     /** Owner of this line's stock; omit for company-owned stock. */
     partyId?: string;
+    /** Bag type for this line; omit when no specific type applies. */
+    packagingTypeId?: string;
   }[];
 }): Promise<ActionResult> {
   try {
@@ -296,6 +363,26 @@ export async function createGatePassDraft(input: {
     const supabase = await createClient();
     const gate = await requireWrite(supabase);
     if ("error" in gate) return fail(gate.error);
+    // Duplicate order-reference WARNING (non-blocking — duplicates may
+    // be legitimate, e.g. one order split across passes). A lookup
+    // failure degrades to no warning, never to a blocked creation.
+    let duplicateOrderRefWarning: string | undefined;
+    const orderRef = input.orderRef?.trim() || null;
+    if (orderRef) {
+      try {
+        const { data: dupes, error: dupeError } = await supabase
+          .from("gate_passes")
+          .select("pass_no")
+          .eq("order_ref", orderRef)
+          .limit(5);
+        if (!dupeError && dupes?.length) {
+          duplicateOrderRefWarning =
+            `Order reference "${orderRef}" is already used on ${(dupes as { pass_no: string }[]).map((d) => d.pass_no).join(", ")} — duplicates may be legitimate, so this pass was still created.`;
+        }
+      } catch {
+        duplicateOrderRefWarning = undefined;
+      }
+    }
     const passNo = await nextDocNumber(supabase, "gatepass", "GP");
     const totalBags = input.items.reduce((s, i) => s + i.bags, 0);
     const totalWeight = roundWeight(input.items.reduce((s, i) => s + i.netWeightKg, 0));
@@ -311,7 +398,11 @@ export async function createGatePassDraft(input: {
         driver_name: input.driverName.trim(),
         driver_phone: input.driverPhone ?? null,
         transporter: input.transporter ?? null,
-        order_ref: input.orderRef ?? null,
+        order_ref: orderRef,
+        receiver_name: input.receiverName?.trim() || null,
+        receiver_contact: input.receiverContact?.trim() || null,
+        dispatch_mode: input.dispatchMode?.trim() || null,
+        prepared_by: actorName(gate.actor),
         status: "draft",
         total_bags: totalBags,
         total_weight_kg: totalWeight,
@@ -330,6 +421,7 @@ export async function createGatePassDraft(input: {
       gross_weight_kg: roundWeight(item.grossWeightKg ?? item.netWeightKg),
       remarks: item.remarks ?? null,
       party_id: item.partyId ?? null,
+      packaging_type_id: item.packagingTypeId ?? null,
     }));
     const { error: iError } = await supabase.from("gate_pass_items").insert(lines);
     if (iError) {
@@ -337,7 +429,7 @@ export async function createGatePassDraft(input: {
       return fail(iError.message);
     }
     revalidateGatepass();
-    return ok({ ...pass, items: lines });
+    return ok({ ...pass, items: lines, duplicateOrderRefWarning });
   } catch (e) {
     return fail(errMessage(e));
   }
@@ -359,7 +451,10 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
       .single();
     if (error) return fail(error.message);
     // Already posted is a successful replay, not a second posting.
+    // Already awaiting approval is likewise a replay: approval, not
+    // another post, is what moves it to posted.
     if (pass.status === "posted") return ok(pass);
+    if (pass.status === "awaiting_approval") return ok(pass);
     if (pass.status !== "draft") return fail(`Only a draft can be posted (status: ${pass.status})`);
     const items = (pass.gate_pass_items ?? []) as {
       product_id: string;
@@ -367,27 +462,40 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
       party_id: string | null;
     }[];
     if (!items.length) return fail("Cannot post a gate pass with no items");
+    // Spec §9.3 step 4, setting-gated: when approval is required,
+    // posting only submits the pass for approval — NO stock change
+    // happens here. The stock guard and deduction run at approval.
+    if (await gatepassApprovalRequired(supabase)) {
+      const { data: submitted, error: uError } = await supabase
+        .from("gate_passes")
+        .update({ status: "awaiting_approval" })
+        .eq("id", id)
+        .in("status", ["draft"])
+        .select()
+        .single();
+      if (uError) return fail(uError.message);
+      const result = { ...submitted, items };
+      await logAudit(supabase, {
+        action: "submit_for_approval",
+        entityType: "gate_passes",
+        entityId: id,
+        voucherNo: pass.pass_no,
+        before: { status: "draft" },
+        after: { status: "awaiting_approval" },
+        userId: gate.actor.userId,
+        userEmail: gate.actor.email,
+      });
+      await storeIdempotency(supabase, "gatepass:post", clientToken, "gatepass", id, pass.pass_no, result);
+      revalidateGatepass();
+      return ok(result);
+    }
     // Stock guard per line/godown/owner. Aggregate duplicate
     // (product, owner) lines before guarding, so two lines for the same
     // product cannot each pass the guard and jointly go negative.
     // party_id null = company-owned stock; a set party_id draws ONLY
     // that owner's stock, never company stock.
-    const itemsWithParty = items as { product_id: string; net_weight_kg: number; party_id: string | null }[];
-    const required = aggregatePoolQuantities(
-      itemsWithParty.map((item) => ({
-        productId: item.product_id,
-        partyId: item.party_id ?? null,
-        qtyKg: roundWeight(item.net_weight_kg),
-      })),
-    );
-    for (const { productId, partyId, qtyKg } of required) {
-      const available = await physicalBalance(supabase, pass.godown_id, productId, partyId);
-      if (available < qtyKg) {
-        return fail(
-          `Insufficient stock for gate pass ${pass.pass_no}: product ${productId} has ${available} kg available in this godown${partyId ? " for this owner" : ""}, pass needs ${qtyKg} kg`,
-        );
-      }
-    }
+    const guardError = await guardStock(supabase, pass, items);
+    if (guardError) return fail(guardError);
     // Atomic post (B4): ledger lines + status flip + idempotency key
     // in one transaction via atomic_stock_transition (see inward.ts).
     const transition = await callAtomicStockTransition(supabase, {
@@ -415,7 +523,17 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
       return fail(`Only a draft can be posted (status: ${transition.result.status})`);
     }
     const posted = transition.result.voucher as Record<string, unknown>;
-    const result = { ...posted, items };
+    const result: Record<string, unknown> = { ...posted, items };
+    // Sign-off: the poster approves when no approval step is configured.
+    // Best-effort AFTER the atomic flip — a failed name update must not
+    // report the post as failed once stock has already moved; the name
+    // is still carried in the returned row for the UI/print.
+    await supabase
+      .from("gate_passes")
+      .update({ approved_by: actorName(gate.actor) })
+      .eq("id", id)
+      .eq("status", "posted");
+    result.approved_by = actorName(gate.actor);
     await logAudit(supabase, {
       action: "post",
       entityType: "gate_passes",
@@ -426,6 +544,144 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
       userId: gate.actor.userId,
       userEmail: gate.actor.email,
     });
+    revalidateGatepass();
+    return ok(result);
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+// ---------------- Approval (spec §9.3 step 4, setting-gated) ----------------
+/**
+ * Approve an awaiting_approval pass: the stock guard runs HERE (not at
+ * submit time, so stock is checked against the moment of approval) and
+ * the atomic transition deducts stock exactly once, as a normal post.
+ *
+ * INTERIM, pending the client's §19 definition of who approves: gated
+ * via the EXISTING requireRole helper with the EXISTING owner_admin
+ * role (OWNER_ONLY). No new role is invented and no role logic changes.
+ */
+export async function approveGatePass(id: string, clientToken?: string): Promise<ActionResult> {
+  try {
+    if (!id) return fail("id is required");
+    const supabase = await createClient();
+    const gate = await requireRole(supabase, OWNER_ONLY);
+    if (!gate.ok) return fail(gate.error);
+    const replay = await checkIdempotency(supabase, "gatepass:approve", clientToken);
+    if (replay) return replay;
+    const { data: pass, error } = await supabase
+      .from("gate_passes")
+      .select("*, gate_pass_items(*)")
+      .eq("id", id)
+      .single();
+    if (error) return fail(error.message);
+    if (pass.status === "posted") return ok(pass);
+    if (pass.status !== "awaiting_approval") {
+      return fail(`Only a pass awaiting approval can be approved (status: ${pass.status})`);
+    }
+    const items = (pass.gate_pass_items ?? []) as {
+      product_id: string;
+      net_weight_kg: number;
+      party_id: string | null;
+    }[];
+    if (!items.length) return fail("Cannot approve a gate pass with no items");
+    const guardError = await guardStock(supabase, pass, items);
+    if (guardError) return fail(guardError);
+    const transition = await callAtomicStockTransition(supabase, {
+      voucherTable: "gate_passes",
+      voucherId: id,
+      fromStatuses: ["awaiting_approval"],
+      toStatus: "posted",
+      voucherType: "gatepass",
+      voucherNo: pass.pass_no,
+      entryKind: "post",
+      lines: items.map((item, i) => ({
+        lineNo: i,
+        godownId: pass.godown_id,
+        productId: item.product_id,
+        partyId: item.party_id ?? null,
+        inwardQty: 0,
+        outwardQty: roundWeight(item.net_weight_kg),
+      })),
+      createdBy: gate.actor.userId,
+      clientToken: clientToken ?? null,
+      scope: "gatepass:approve",
+    });
+    if (!transition.ok) return fail(transition.error);
+    if (transition.result.outcome === "invalid") {
+      return fail(`Only a pass awaiting approval can be approved (status: ${transition.result.status})`);
+    }
+    const posted = transition.result.voucher as Record<string, unknown>;
+    const result: Record<string, unknown> = { ...posted, items };
+    await supabase
+      .from("gate_passes")
+      .update({ approved_by: actorName(gate.actor) })
+      .eq("id", id)
+      .eq("status", "posted");
+    result.approved_by = actorName(gate.actor);
+    await logAudit(supabase, {
+      action: "approve",
+      entityType: "gate_passes",
+      entityId: id,
+      voucherNo: pass.pass_no,
+      before: { status: "awaiting_approval" },
+      after: { status: "posted" },
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
+    revalidateGatepass();
+    return ok(result);
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+/**
+ * Reject an awaiting_approval pass back to draft with a mandatory
+ * reason (stored as rejection_reason). No stock ever moved for it,
+ * so rejection changes no ledger rows; the pass can be edited and
+ * re-submitted. Same interim owner_admin gate as approval.
+ */
+export async function rejectGatePass(id: string, reason: string, clientToken?: string): Promise<ActionResult> {
+  try {
+    if (!id) return fail("id is required");
+    if (!reason?.trim()) return fail("A rejection reason is mandatory");
+    const supabase = await createClient();
+    const gate = await requireRole(supabase, OWNER_ONLY);
+    if (!gate.ok) return fail(gate.error);
+    const replay = await checkIdempotency(supabase, "gatepass:reject", clientToken);
+    if (replay) return replay;
+    const { data: pass, error } = await supabase
+      .from("gate_passes")
+      .select("*, gate_pass_items(*)")
+      .eq("id", id)
+      .single();
+    if (error) return fail(error.message);
+    if (pass.status === "draft") return ok(pass);
+    if (pass.status !== "awaiting_approval") {
+      return fail(`Only a pass awaiting approval can be rejected (status: ${pass.status})`);
+    }
+    const { data: rejected, error: uError } = await supabase
+      .from("gate_passes")
+      .update({ status: "draft", rejection_reason: reason.trim(), approved_by: null })
+      .eq("id", id)
+      .in("status", ["awaiting_approval"])
+      .select()
+      .single();
+    if (uError) return fail(uError.message);
+    const result = { ...rejected, items: pass.gate_pass_items ?? [] };
+    await logAudit(supabase, {
+      action: "reject",
+      entityType: "gate_passes",
+      entityId: id,
+      voucherNo: pass.pass_no,
+      before: { status: "awaiting_approval" },
+      after: { status: "draft" },
+      reason: reason.trim(),
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
+    await storeIdempotency(supabase, "gatepass:reject", clientToken, "gatepass", id, pass.pass_no, result);
     revalidateGatepass();
     return ok(result);
   } catch (e) {
@@ -464,7 +720,10 @@ export async function reverseGatePass(id: string, reason: string, clientToken?: 
     }[];
     // A partially returned pass already has part of its stock back via
     // return ledger rows: reversing credits ONLY the unreturned
-    // remainder, never the full dispatched quantity again.
+    // remainder, never the full dispatched quantity again. The
+    // remainder is dispatched minus ALL returned quantity (accepted +
+    // rejected): rejected goods are accounted for, not in stock, so
+    // restoring them would wrongly credit stock that was rejected.
     const { data: priorReturns } = await supabase
       .from("gate_pass_returns")
       .select("product_id, party_id, qty_kg")
@@ -531,8 +790,20 @@ export async function returnGatePass(
   id: string,
   input: {
     reason: string;
+    /** Condition of the returned goods (free text, e.g. "damaged"); applies to whole-return lines when items are omitted. */
+    condition?: string;
+    /** Restock decision for whole-return lines when items are omitted; defaults to 'accepted'. */
+    restockDecision?: "accepted" | "rejected";
     /** If omitted, the whole remaining (not yet returned) quantity is returned. Quantities are kg. */
-    items?: { productId: string; qtyKg: number; partyId?: string | null }[];
+    items?: {
+      productId: string;
+      qtyKg: number;
+      partyId?: string | null;
+      /** Condition of this line's returned goods. */
+      condition?: string;
+      /** 'accepted' restocks the quantity, 'rejected' records it without returning it to stock. Defaults to 'accepted'. */
+      restockDecision?: "accepted" | "rejected";
+    }[];
   },
   clientToken?: string,
 ): Promise<ActionResult> {
@@ -574,6 +845,9 @@ export async function returnGatePass(
       (r) => ({ productId: r.product_id, partyId: r.party_id ?? null, qtyKg: roundWeight(r.qty_kg) }),
     );
     let returns: { productId: string; qtyKg: number; partyId: string | null }[];
+    // Per-line condition/decision, carried alongside the quantities so
+    // the return rows and the ledger split stay in the same shape.
+    let returnLines: { productId: string; qtyKg: number; partyId: string | null; condition: string | null; restockDecision: "accepted" | "rejected" }[];
     if (input?.items?.length) {
       // Owner attribution is explicit, never guessed: when a product was
       // dispatched from more than one owner pool, the entry MUST name
@@ -586,18 +860,29 @@ export async function returnGatePass(
             `Return for product ${r.productId} must specify its owner: this pass dispatched it from more than one owner pool`,
           );
         }
+        if (r.restockDecision !== undefined && r.restockDecision !== "accepted" && r.restockDecision !== "rejected") {
+          throw new Error(`Return for product ${r.productId} has an invalid restock decision`);
+        }
         return {
           productId: r.productId,
           qtyKg: roundWeight(r.qtyKg),
           partyId: r.partyId !== undefined ? r.partyId : (owners[0] ?? null),
+          condition: r.condition?.trim() || null,
+          restockDecision: r.restockDecision ?? ("accepted" as const),
         };
       });
       const checked = validateCumulativeReturns(dispatchedPools, priorPools, resolved);
       if (!checked.ok) return fail(checked.error);
       returns = checked.aggregated;
+      returnLines = resolved;
     } else {
       returns = remainingReturnable(dispatchedPools, priorPools);
       if (!returns.length) return fail(`Gate pass ${pass.pass_no} has nothing left to return`);
+      returnLines = returns.map((r) => ({
+        ...r,
+        condition: input.condition?.trim() || null,
+        restockDecision: input.restockDecision ?? ("accepted" as const),
+      }));
     }
     const dispatchedTotal = roundWeight(dispatchedPools.reduce((s, d) => s + d.qtyKg, 0));
     const priorTotal = roundWeight(priorPools.reduce((s, d) => s + d.qtyKg, 0));
@@ -606,15 +891,22 @@ export async function returnGatePass(
     // Return records FIRST, with their insert error checked: a failed
     // insert aborts the return before any ledger row or status flip, so
     // the pass can never flip to returned with no audit record.
+    // NOTE on rejected quantity: status and cumulative math count ALL
+    // returned quantity (accepted + rejected) — rejected goods are
+    // accounted for, just not back in stock — while the LEDGER below
+    // credits only accepted quantity. That keeps reversal honest too:
+    // it restores dispatched minus all returned, never rejected stock.
     const { data: inserted, error: insertError } = await supabase
       .from("gate_pass_returns")
       .insert(
-        returns.map((ret) => ({
+        returnLines.map((ret) => ({
           gate_pass_id: pass.id,
           product_id: ret.productId,
           party_id: ret.partyId,
           qty_kg: roundWeight(ret.qtyKg),
           reason: input.reason.trim(),
+          condition: ret.condition,
+          restock_decision: ret.restockDecision,
         })),
       )
       .select("id");
@@ -634,8 +926,12 @@ export async function returnGatePass(
       .eq("entry_kind", "return");
     const returnLineBase = (priorReturnLedger ?? []).length;
     try {
-      for (let i = 0; i < returns.length; i++) {
-        const ret = returns[i];
+      // Restock ONLY the accepted quantity: rejected lines are recorded
+      // above but deliberately get no ledger row, so rejected goods
+      // never come back into stock.
+      const restockLines = acceptedRestockQuantities(returnLines);
+      for (let i = 0; i < restockLines.length; i++) {
+        const ret = restockLines[i];
         await appendLedger(
           supabase,
           {
