@@ -7,6 +7,7 @@ import { STOCK_WRITE } from "./auth-helpers";
 import { logAudit } from "@/lib/audit";
 import { netWeight, roundMoney, roundWeight, stockBalanceFromRows, aggregatePoolQuantities } from "@/lib/calc";
 import { callAtomicStockTransition } from "@/lib/atomic";
+import { normalizeBiltyMode, type BiltyDuplicateMode } from "@/lib/stock-helpers";
 
 /**
  * Inward (incoming goods) server actions.
@@ -162,17 +163,72 @@ async function physicalBalance(
 }
 
 // ---------------- Reads ----------------
+/** Bilty duplicate-check mode from the app_settings row owned by the
+ *  settings team. Absent row, absent value, or an unrecognised value
+ *  all resolve to "warn" (never hard-coded to a mode here). The raw
+ *  value may be a plain string ("block") or an object ({ mode }). */
+async function biltyDuplicateMode(supabase: Db): Promise<BiltyDuplicateMode> {
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("value")
+    .eq("key", "bilty_duplicate_check")
+    .maybeSingle();
+  if (error || !data) return "warn";
+  return normalizeBiltyMode((data as { value?: unknown }).value);
+}
+
+function escapeLike(s: string): string {
+  return s.replace(/[%_\\]/g, (c) => `\\${c}`);
+}
+
 export async function listInward(filters?: {
   status?: string;
   godownId?: string;
   partyId?: string;
   from?: string;
   to?: string;
+  /** Free-text search across voucher, bilty and vehicle numbers. */
+  search?: string;
+  /** 1-based page; when set, returns the paged shape (same pattern as
+   *  the stock-ledger register): { rows, total, page, pageSize }. */
+  page?: number;
+  pageSize?: number;
 }): Promise<ActionResult> {
   try {
     const supabase = await createClient();
     const gate = await requireSignedIn(supabase);
     if (!gate.ok) return fail(gate.error);
+    // Exclusive next-day bound (same fix as the stock ledger): a plain
+    // YYYY-MM-DD compares as midnight and silently dropped the `to` day.
+    const toExclusive = filters?.to
+      ? (() => {
+          const d = new Date(`${filters.to}T00:00:00Z`);
+          if (Number.isNaN(d.getTime())) return undefined;
+          d.setUTCDate(d.getUTCDate() + 1);
+          return d.toISOString();
+        })()
+      : undefined;
+    const search = filters?.search?.trim();
+    const searchTerm = search ? `%${escapeLike(search)}%` : undefined;
+    if (filters?.page !== undefined) {
+      const pageSize = Math.min(Math.max(filters?.pageSize ?? 50, 1), 200);
+      const page = Math.max(filters.page, 1);
+      const fromRow = (page - 1) * pageSize;
+      const toRow = fromRow + pageSize - 1;
+      let query = supabase
+        .from("incoming_goods")
+        .select("*, incoming_goods_items(*)", { count: "exact" })
+        .order("date", { ascending: false });
+      if (filters?.status) query = query.eq("status", filters.status);
+      if (filters?.godownId) query = query.eq("godown_id", filters.godownId);
+      if (filters?.partyId) query = query.eq("party_id", filters.partyId);
+      if (filters?.from) query = query.gte("date", filters.from);
+      if (toExclusive) query = query.lt("date", toExclusive);
+      if (searchTerm) query = query.or(`voucher_no.ilike.${searchTerm},bilty_no.ilike.${searchTerm},vehicle_no.ilike.${searchTerm}`);
+      const { data, error, count } = await query.range(fromRow, toRow);
+      if (error) return fail(error.message);
+      return ok({ rows: data, total: count ?? (data ?? []).length, page, pageSize });
+    }
     let query = supabase
       .from("incoming_goods")
       .select("*, incoming_goods_items(*)")
@@ -181,7 +237,8 @@ export async function listInward(filters?: {
     if (filters?.godownId) query = query.eq("godown_id", filters.godownId);
     if (filters?.partyId) query = query.eq("party_id", filters.partyId);
     if (filters?.from) query = query.gte("date", filters.from);
-    if (filters?.to) query = query.lte("date", filters.to);
+    if (toExclusive) query = query.lt("date", toExclusive);
+    if (searchTerm) query = query.or(`voucher_no.ilike.${searchTerm},bilty_no.ilike.${searchTerm},vehicle_no.ilike.${searchTerm}`);
     const { data, error } = await query;
     if (error) return fail(error.message);
     return ok(data);
@@ -219,6 +276,8 @@ export interface InwardItemInput {
   tarePerBagKg?: number;
   /** Optional per-kg rate; 0/absent = no valuation recorded. */
   ratePerUnit?: number;
+  /** Optional lot number; empty = no lot tracking for this line. */
+  lotNo?: string;
 }
 
 export async function createInwardDraft(input: {
@@ -231,6 +290,13 @@ export async function createInwardDraft(input: {
   driverPhone?: string;
   transportCompany?: string;
   notes?: string;
+  /** Staff member who received the goods (free text). */
+  receivedBy?: string;
+  /** True when the goods were delivered by hand (no vehicle). */
+  byHand?: boolean;
+  /** Free-text receiving classification. No classification list is
+   *  invented here — free text until the client confirms one. */
+  nature?: string;
   isCustomerOwned?: boolean;
   ownerPartyId?: string;
   items: InwardItemInput[];
@@ -241,6 +307,47 @@ export async function createInwardDraft(input: {
     const supabase = await createClient();
     const gate = await requireWrite(supabase);
     if ("error" in gate) return fail(gate.error);
+    // Server-side is_active check: the UI already filters inactive
+    // products, but a stale form or a direct call must never post one.
+    const productIds = [...new Set(input.items.map((i) => i.productId))];
+    const { data: prodRows, error: prodError } = await supabase
+      .from("products")
+      .select("id, is_active")
+      .in("id", productIds);
+    if (prodError) return fail(prodError.message);
+    for (const pid of productIds) {
+      const row = (prodRows ?? []).find((p: { id: string }) => p.id === pid) as
+        | { is_active?: boolean }
+        | undefined;
+      if (!row) return fail(`Product ${pid} was not found.`);
+      if (row.is_active === false) return fail("An inactive product cannot be received. Reactivate it in Masters first.");
+    }
+    // Bilty duplicate check, per the app_settings mode (settings team
+    // owns the setting; absent = warn). "warn" proceeds and returns a
+    // biltyWarning the UI displays without blocking; "block" rejects;
+    // "off" skips the check entirely.
+    let biltyWarning: string | undefined;
+    const biltyNo = input.biltyNo?.trim() || undefined;
+    if (biltyNo) {
+      const mode = await biltyDuplicateMode(supabase);
+      if (mode !== "off") {
+        const { data: dupes, error: dupError } = await supabase
+          .from("incoming_goods")
+          .select("id, voucher_no")
+          .eq("bilty_no", biltyNo)
+          .neq("status", "reversed")
+          .limit(1);
+        if (dupError) return fail(dupError.message);
+        if ((dupes ?? []).length > 0) {
+          if (mode === "block") {
+            return fail(
+              `Bilty number ${biltyNo} is already used on ${(dupes as { voucher_no: string }[])[0].voucher_no}. Duplicate bilty numbers are blocked by the current setting.`,
+            );
+          }
+          biltyWarning = `Warning: bilty number ${biltyNo} was already used on ${(dupes as { voucher_no: string }[])[0].voucher_no}.`;
+        }
+      }
+    }
     const voucherNo = await nextDocNumber(supabase, "inward", "INW");
 
     const lines = input.items.map((item) => {
@@ -266,46 +373,80 @@ export async function createInwardDraft(input: {
         net_weight_kg: net,
         rate_per_unit: rate,
         total_value: roundMoney(rate * net),
+        lot_no: item.lotNo?.trim() ? item.lotNo.trim() : null,
       };
     });
     const totalBags = lines.reduce((s, l) => s + l.bags_count, 0);
     const totalNet = roundWeight(lines.reduce((s, l) => s + l.net_weight_kg, 0));
     const totalValue = roundMoney(lines.reduce((s, l) => s + l.total_value, 0));
 
-    const { data: header, error: hError } = await supabase
-      .from("incoming_goods")
-      .insert({
-        voucher_no: voucherNo,
-        date: input.date ?? new Date().toISOString(),
-        party_id: input.partyId,
-        godown_id: input.godownId,
-        bilty_no: input.biltyNo ?? null,
-        vehicle_no: input.vehicleNo ?? null,
-        driver_name: input.driverName ?? null,
-        driver_phone: input.driverPhone ?? null,
-        transport_company: input.transportCompany ?? null,
-        status: "draft",
-        total_bags: totalBags,
-        total_net_weight_kg: totalNet,
-        total_value: totalValue,
-        notes: input.notes ?? null,
-        is_customer_owned: input.isCustomerOwned ?? false,
-        owner_party_id: input.ownerPartyId ?? null,
-      })
-      .select()
-      .single();
+    // New header columns (received_by / by_hand / nature) and the
+    // line lot_no column need a live-DB migration (see the STOCK-DASH
+    // report). Until it is applied, degrade instead of breaking
+    // inward entirely: retry without the missing columns and surface
+    // the loss as a warning on the returned draft.
+    const isMissingColumn = (msg: string) => /column .* does not exist/i.test(msg);
+    let columnsWarning: string | undefined;
+    const headerRow = {
+      voucher_no: voucherNo,
+      date: input.date ?? new Date().toISOString(),
+      party_id: input.partyId,
+      godown_id: input.godownId,
+      bilty_no: biltyNo ?? null,
+      vehicle_no: input.vehicleNo ?? null,
+      driver_name: input.driverName ?? null,
+      driver_phone: input.driverPhone ?? null,
+      transport_company: input.transportCompany ?? null,
+      status: "draft",
+      total_bags: totalBags,
+      total_net_weight_kg: totalNet,
+      total_value: totalValue,
+      notes: input.notes ?? null,
+      is_customer_owned: input.isCustomerOwned ?? false,
+      owner_party_id: input.ownerPartyId ?? null,
+      received_by: input.receivedBy?.trim() ? input.receivedBy.trim() : null,
+      by_hand: input.byHand ?? false,
+      nature: input.nature?.trim() ? input.nature.trim() : null,
+    };
+    let headerRes = await supabase.from("incoming_goods").insert(headerRow).select().single();
+    if (headerRes.error && isMissingColumn(headerRes.error.message)) {
+      const { received_by: _rb, by_hand: _bh, nature: _n, ...legacyRow } = headerRow;
+      void _rb;
+      void _bh;
+      void _n;
+      headerRes = await supabase.from("incoming_goods").insert(legacyRow).select().single();
+      if (!headerRes.error) {
+        columnsWarning =
+          "Received-by / by-hand / nature were not saved: the live database does not have those columns yet (migration pending).";
+      }
+    }
+    const { data: header, error: hError } = headerRes;
     if (hError) return fail(hError.message);
 
-    const { error: iError } = await supabase
+    let iRes = await supabase
       .from("incoming_goods_items")
       .insert(lines.map((l) => ({ ...l, incoming_id: header.id })));
+    if (iRes.error && isMissingColumn(iRes.error.message)) {
+      const legacyLines = lines.map((l) => {
+        const { lot_no: _lot, ...rest } = l;
+        void _lot;
+        return { ...rest, incoming_id: header.id };
+      });
+      iRes = await supabase.from("incoming_goods_items").insert(legacyLines);
+      if (!iRes.error && !columnsWarning) {
+        columnsWarning = "Lot numbers were not saved: the live database does not have the lot column yet (migration pending).";
+      } else if (!iRes.error) {
+        columnsWarning += " Lot numbers were also not saved.";
+      }
+    }
+    const { error: iError } = iRes;
     if (iError) {
       // Draft header without lines is useless; remove it (drafts are not ledger history).
       await supabase.from("incoming_goods").delete().eq("id", header.id);
       return fail(iError.message);
     }
     revalidateInward();
-    return ok({ ...header, items: lines });
+    return ok({ ...header, items: lines, biltyWarning, columnsWarning });
   } catch (e) {
     return fail(errMessage(e));
   }
@@ -341,6 +482,7 @@ export async function postInward(id: string, clientToken?: string): Promise<Acti
     const items = (voucher.incoming_goods_items ?? []) as {
       product_id: string;
       net_weight_kg: number;
+      lot_no?: string | null;
     }[];
     if (!items.length) return fail("Cannot post an inward voucher with no items");
     // Atomic post (B4): the function locks the voucher row, inserts
@@ -363,6 +505,7 @@ export async function postInward(id: string, clientToken?: string): Promise<Acti
         partyId: ledgerPartyId,
         inwardQty: roundWeight(item.net_weight_kg),
         outwardQty: 0,
+        lotNumber: item.lot_no ?? null,
       })),
       createdBy: gate.actor.userId,
       clientToken: clientToken ?? null,
@@ -424,6 +567,7 @@ export async function reverseInward(
     const items = (voucher.incoming_goods_items ?? []) as {
       product_id: string;
       net_weight_kg: number;
+      lot_no?: string | null;
     }[];
     // Stock guard on reversal: undoing an inward must not drive stock negative
     // (later consumption/dispatch may already have used this stock).
@@ -463,6 +607,7 @@ export async function reverseInward(
         inwardQty: 0,
         outwardQty: roundWeight(item.net_weight_kg),
         notes: `Reversal of ${voucher.voucher_no}: ${reason.trim()}`,
+        lotNumber: item.lot_no ?? null,
       })),
       createdBy: gate.actor.userId,
       clientToken: clientToken ?? null,

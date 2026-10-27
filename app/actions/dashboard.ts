@@ -21,6 +21,11 @@
 
 import { getDb, requireRole, requireSignedIn, type ActionResult } from "./auth";
 import { getStockSummary, getStockLedger } from "./inventory";
+// Import only: finance.ts / payroll.ts belong to other teams and are
+// never edited here. getDaybook supplies the LIVE cash position and
+// getUnpaidSalaries supplies payroll due (see below).
+import { getDaybook } from "./finance";
+import { getUnpaidSalaries } from "./payroll";
 import { errMsg, FINANCE_READ_SENSITIVE } from "./auth-helpers";
 
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0);
@@ -30,6 +35,62 @@ function utcDayRange(): { start: string; end: string } {
   const start = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
   const end = new Date(Date.parse(start) + 86400000).toISOString();
   return { start, end };
+}
+
+/**
+ * Receivables / payables from party_ledger balances (STOCK-DASH).
+ *
+ * party_ledger is the posted-only trail: postInvoice writes +total,
+ * postPurchase writes −total, postReceipt writes −amount (the full
+ * receipt, so an unapplied advance already nets the party down and can
+ * push it negative), and a vendor payment writes +amount (so an
+ * unapplied vendor advance nets the payable down). A reversal writes
+ * the mirror entry. Draft invoices/purchases never reach this table,
+ * so a per-party balance is exactly "posted invoices/purchases, net
+ * of unapplied advances" for that party — unlike raw invoice sums,
+ * which ignore receipts, payments and advances.
+ *
+ * Balance per party = latest running_balance, or the signed master
+ * opening (payable openings are negative) when the party has no ledger
+ * rows yet. Receivables sum the positive balances of customer / both
+ * parties; payables sum the absolute negative balances of supplier /
+ * both / source parties. A party of unknown type contributes by sign.
+ */
+function partyReceivablesPayables(
+  parties: { id: string; type: string | null; opening_balance: number | null; balance_type: string | null }[],
+  ledger: { party_id: string; running_balance: number | null; created_at: string | null }[],
+): { receivables: number; payables: number } {
+  const latest = new Map<string, number>();
+  for (const row of ledger) {
+    if (!row.party_id) continue;
+    latest.set(row.party_id, num(row.running_balance));
+  }
+  const byId = new Map(parties.map((p) => [p.id, p]));
+  const partyIds = new Set([...parties.map((p) => p.id), ...latest.keys()]);
+  let receivables = 0;
+  let payables = 0;
+  for (const id of partyIds) {
+    const party = byId.get(id);
+    const balance = latest.has(id)
+      ? (latest.get(id) ?? 0)
+      : party
+        ? (party.balance_type === "payable" ? -num(party.opening_balance) : num(party.opening_balance))
+        : 0;
+    const type = party?.type ?? null;
+    if (type === null) {
+      // Ledger party missing from masters: contribute by sign only.
+      if (balance > 0) receivables += balance;
+      if (balance < 0) payables += -balance;
+    } else if (type === "customer") {
+      if (balance > 0) receivables += balance;
+    } else if (type === "supplier" || type === "source") {
+      if (balance < 0) payables += -balance;
+    } else if (type === "both") {
+      if (balance > 0) receivables += balance;
+      if (balance < 0) payables += -balance;
+    }
+  }
+  return { receivables: Math.round(receivables * 100) / 100, payables: Math.round(payables * 100) / 100 };
 }
 
 export async function getDashboardData(): Promise<ActionResult> {
@@ -45,6 +106,7 @@ export async function getDashboardData(): Promise<ActionResult> {
   const financeAllowed = financeGate.ok;
   try {
     const { start, end } = utcDayRange();
+    const today = new Date().toISOString().slice(0, 10);
     const [
       summaryRes,
       ledgerRes,
@@ -52,10 +114,12 @@ export async function getDashboardData(): Promise<ActionResult> {
       batRes,
       passRes,
       latestRes,
-      invRes,
-      purRes,
+      partyRes,
+      ledgerBalRes,
       cashRes,
       gdnRes,
+      daybookRes,
+      unpaidRes,
     ] = await Promise.all([
       getStockSummary(),
       getStockLedger({ limit: 20 }),
@@ -67,7 +131,7 @@ export async function getDashboardData(): Promise<ActionResult> {
         .lt("date", end),
       db
         .from("production_batches")
-        .select("status, date, actual_output_kg, yield_pct, byproduct_kg")
+        .select("status, date, actual_output_kg, yield_pct, byproduct_kg, waste_kg")
         .eq("status", "posted")
         .gte("date", start)
         .lt("date", end),
@@ -86,10 +150,13 @@ export async function getDashboardData(): Promise<ActionResult> {
         .limit(1)
         .maybeSingle(),
       financeAllowed
-        ? db.from("customer_invoices").select("balance_amount, total_amount, paid_amount")
+        ? db.from("parties").select("id, type, opening_balance, balance_type")
         : Promise.resolve({ data: [], error: null }),
       financeAllowed
-        ? db.from("purchases").select("balance_amount, total_amount, paid_amount")
+        ? db
+          .from("party_ledger")
+          .select("party_id, running_balance, created_at")
+          .order("created_at", { ascending: true })
         : Promise.resolve({ data: [], error: null }),
       financeAllowed
         ? db.from("cash_accounts").select("opening_balance")
@@ -98,6 +165,19 @@ export async function getDashboardData(): Promise<ActionResult> {
         .from("godowns")
         .select("id, name, capacity_metric_tons")
         .order("code", { ascending: true }),
+      // LIVE cash position, per account, from the cash ledger: calling
+      // getDaybook with from = to = today is enough because its
+      // opening already folds in master openings, opening_balances
+      // evidence and every prior cash_ledger movement, and its closing
+      // is opening + receipts − payments for the day. Fetching all
+      // history as entries would add nothing to the closing figure.
+      financeAllowed
+        ? getDaybook({ from: today, to: today })
+        : Promise.resolve({ success: false, error: "restricted" } as ActionResult),
+      // Payroll due is a read-level figure (any signed-in operator),
+      // not finance-sensitive, so it is wired regardless of the
+      // finance gate above.
+      getUnpaidSalaries(),
     ]);
 
     if (!summaryRes.success) return { success: false, error: summaryRes.error };
@@ -107,19 +187,26 @@ export async function getDashboardData(): Promise<ActionResult> {
       batRes.error,
       passRes.error,
       latestRes.error,
-      invRes.error,
-      purRes.error,
+      partyRes.error,
+      ledgerBalRes.error,
       cashRes.error,
       gdnRes.error,
     ].find(Boolean);
     if (queryErrors) return { success: false, error: queryErrors.message };
 
-    const invoices = (invRes.data ?? []) as {
-      balance_amount: number | null;
-      total_amount: number | null;
-      paid_amount: number | null;
-    }[];
-    const purchases = (purRes.data ?? []) as typeof invoices;
+    const { receivables, payables } = financeAllowed
+      ? partyReceivablesPayables(
+        (partyRes.data ?? []) as { id: string; type: string | null; opening_balance: number | null; balance_type: string | null }[],
+        (ledgerBalRes.data ?? []) as { party_id: string; running_balance: number | null; created_at: string | null }[],
+      )
+      : { receivables: 0, payables: 0 };
+    // Daybook closing is the live position; if the daybook call fails
+    // (e.g. the cash tables are not migrated yet) fall back to the
+    // previous opening-balances sum and say so, rather than failing
+    // the whole dashboard.
+    const daybookData = daybookRes.success ? (daybookRes.data as Record<string, unknown> | undefined) : undefined;
+    const cashByAccount = Array.isArray(daybookData?.balances) ? daybookData.balances : [];
+    const cashPosition = daybookData && typeof daybookData.closing === "number" ? num(daybookData.closing) : null;
     return {
       success: true,
       data: {
@@ -130,23 +217,26 @@ export async function getDashboardData(): Promise<ActionResult> {
         batchesToday: batRes.data ?? [],
         passesToday: passRes.data ?? [],
         latestPassNo: (latestRes.data as { pass_no?: string } | null)?.pass_no ?? null,
-        receivables: financeAllowed
-          ? invoices.reduce(
-            (a, r) => a + num(r.balance_amount ?? num(r.total_amount) - num(r.paid_amount)),
-            0,
-          )
-          : null,
-        payables: financeAllowed
-          ? purchases.reduce(
-            (a, r) => a + num(r.balance_amount ?? num(r.total_amount) - num(r.paid_amount)),
-            0,
-          )
-          : null,
+        receivables: financeAllowed ? receivables : null,
+        payables: financeAllowed ? payables : null,
+        // Kept for existing consumers: master opening-balances sum.
         cashOpening: financeAllowed
           ? ((cashRes.data ?? []) as { opening_balance: number | null }[]).reduce(
             (a, r) => a + num(r.opening_balance),
             0,
           )
+          : null,
+        // LIVE cash position: daybook closing (opening + posted
+        // receipts − posted payments/expenses, per account in
+        // cashByAccount). Null when the daybook call failed; the page
+        // then falls back to cashOpening and labels it as opening.
+        cashPosition: financeAllowed ? cashPosition : null,
+        cashByAccount: financeAllowed ? cashByAccount : [],
+        cashSource: financeAllowed ? (cashPosition !== null ? "daybook" : "opening-fallback") : null,
+        // Payroll due from getUnpaidSalaries (approved / partially
+        // paid periods with a positive balance); null on failure.
+        payrollDue: unpaidRes.success
+          ? num((unpaidRes.data as { totalUnpaid?: unknown } | undefined)?.totalUnpaid)
           : null,
       },
     };
