@@ -12,7 +12,8 @@ import {
   CreditCard,
   TrendingUp,
 } from "lucide-react"
-import { listReceipts, listInvoices, createReceipt, postReceipt, reverseReceipt, createInvoice, postInvoice, reverseInvoice } from "@/app/actions/finance"
+import { listReceipts, listInvoices, createReceipt, postReceipt, reverseReceipt, createInvoice, postInvoice, reverseInvoice, listCashAccounts } from "@/app/actions/finance"
+import { amountInWordsPKR, customerBalanceNetOfAdvances } from "@/lib/calc/finance"
 import { listParties } from "@/app/actions/masters"
 import { ReceiptVoucherPrint } from "@/components/print/receipt-voucher-print"
 import { PrintButton } from "@/components/print/print-button"
@@ -50,6 +51,8 @@ export default function BillingPage() {
   const [referenceNo, setReferenceNo] = React.useState("")
   const [notes, setNotes] = React.useState("")
   const [invoices, setInvoices] = React.useState<any[]>([])
+  const [cashAccounts, setCashAccounts] = React.useState<any[]>([])
+  const [receiptCashAccountId, setReceiptCashAccountId] = React.useState("")
   const [allocInvoiceId, setAllocInvoiceId] = React.useState("")
   const [allocAmount, setAllocAmount] = React.useState<number>(0)
   const [printReceipt, setPrintReceipt] = React.useState<any | null>(null)
@@ -66,8 +69,9 @@ export default function BillingPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [re, inv, pa] = await Promise.all([listReceipts(), listInvoices(), listParties()])
-      const failed = [re, inv, pa].find((x) => !x.success)
+      const [re, inv, pa, ca] = await Promise.all([listReceipts(), listInvoices(), listParties(), listCashAccounts()])
+      const failed = [re, inv, pa, ca].find((x) => !x.success)
+      setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
       if (failed) setFormError(failed.error ?? "Could not load billing data.")
       const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
       setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both"))
@@ -91,11 +95,26 @@ export default function BillingPage() {
   React.useEffect(() => {
     if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
   }, [customers, customerId])
+  React.useEffect(() => {
+    if (cashAccounts.length > 0 && !receiptCashAccountId) {
+      const first = cashAccounts.find((a) => a.account_kind === paymentMethod) ?? cashAccounts[0]
+      if (first) setReceiptCashAccountId(first.id)
+    }
+  }, [cashAccounts, receiptCashAccountId, paymentMethod])
 
+  // Balance net of unapplied advances: invoice balances already
+  // subtract allocated receipts, so only the unapplied remainder of
+  // posted receipts is subtracted again. Ignoring it overstated
+  // receivables and misfired the over-collection guard below.
   const custBalance = (c: Party) => {
     const opening = c.balance_type === "payable" ? -Number(c.opening_balance || 0) : Number(c.opening_balance || 0)
-    const invBal = invoices.filter((i) => i.customer_id === c.id && i.status === "posted").reduce((a, i) => a + (Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)) || 0), 0)
-    return opening + invBal
+    const invBal = invoices.filter((i) => i.customer_id === c.id && i.status === "posted").map((i) => Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)) || 0)
+    const unapplied = receipts.filter((r: any) => r.customer_id === c.id && r.status === "posted").map((r: any) => Number(r.unapplied_amount || 0))
+    return customerBalanceNetOfAdvances(opening, invBal, unapplied)
+  }
+  const receiptAccountLabel = (r: any) => {
+    const acct = cashAccounts.find((a) => a.id === r.cash_account_id)
+    return acct ? `${acct.code} — ${acct.name}` : (r.cash_account_id ?? r.account ?? r.payment_method)
   }
   const totalReceivables = customers.reduce((sum, c) => sum + Math.max(0, custBalance(c)), 0)
   const customerInvoices = invoices.filter((i) => i.customer_id === customerId && i.status === "posted" && Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)) > 0)
@@ -107,10 +126,16 @@ export default function BillingPage() {
     // customer, be positive, and may not over-collect that customer's balance.
     if (!customerId) return setFormError("Select the customer paying this receipt.")
     if (!isPositive(amount)) return setFormError("Receipt amount must be greater than zero.")
+    if (!receiptCashAccountId) return setFormError("Select a cash account for this receipt. Create one on the Daybook page first if none exists.")
     const selectedCust = customers.find((c) => c.id === customerId)
     const bal = selectedCust ? custBalance(selectedCust) : 0
     if (allocInvoiceId && allocAmount > amount) return setFormError(`Allocation (${formatCurrency(allocAmount)}) cannot exceed the receipt amount (${formatCurrency(amount)}).`)
     if (allocInvoiceId && allocAmount <= 0) return setFormError("An allocation amount must be greater than zero.")
+    if (allocInvoiceId) {
+      const target = invoices.find((i) => i.id === allocInvoiceId)
+      const targetBal = target ? Number(target.balance_amount ?? Number(target.total_amount || 0) - Number(target.paid_amount || 0)) : 0
+      if (allocAmount > targetBal) return setFormError(`Allocation (${formatCurrency(allocAmount)}) exceeds invoice ${target?.invoice_no ?? ""} balance (${formatCurrency(targetBal)}).`)
+    }
     if (!allocInvoiceId && amount > bal && bal > 0) return setFormError(`Receipt (${formatCurrency(amount)}) exceeds ${selectedCust?.name || "this customer"}'s outstanding balance (${formatCurrency(bal)}). Allocate it to a specific invoice, or record the balance amount or less.`)
     setFormError("")
     const receiptNo = `RCT-2026-${String(receipts.length + 1).padStart(3, "0")}`
@@ -136,7 +161,7 @@ export default function BillingPage() {
     setIsPending(true)
     try {
       const created = await createReceipt({
-        customerId, account: paymentMethod, amount,
+        customerId, cashAccountId: receiptCashAccountId, account: paymentMethod, amount,
         referenceNo: referenceNo || undefined, notes: notes || undefined,
         clientToken: `receipt-${Date.now()}`,
         allocations: allocInvoiceId && allocAmount > 0 ? [{ invoiceId: allocInvoiceId, amount: allocAmount }] : [],
@@ -416,6 +441,15 @@ export default function BillingPage() {
               </div>
 
               <div>
+                <label className="block font-medium text-foreground mb-1">Cash account *</label>
+                <select value={receiptCashAccountId} onChange={(e) => setReceiptCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
+                  <option value="">Select account</option>
+                  {cashAccounts.filter((a) => a.account_kind === paymentMethod).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}
+                </select>
+                {cashAccounts.filter((a) => a.account_kind === paymentMethod).length === 0 && (<p className="mt-1 text-[11px] text-muted-foreground">No {paymentMethod} account yet — create one on the Daybook page.</p>)}
+              </div>
+
+              <div>
                 <label className="block font-medium text-foreground mb-1">Allocate to invoice (explicit allocation)</label>
                 <select value={allocInvoiceId} onChange={(e) => { setAllocInvoiceId(e.target.value); const inv = invoices.find((i) => i.id === e.target.value); setAllocAmount(inv ? Number(inv.balance_amount ?? Number(inv.total_amount || 0) - Number(inv.paid_amount || 0)) : 0) }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
                   <option value="">Unallocated (advance / on-account)</option>
@@ -499,8 +533,10 @@ export default function BillingPage() {
               date={printReceipt.date}
               customerName={printReceipt.customer_name}
               paymentMethod={printReceipt.payment_method}
+              account={receiptAccountLabel(printReceipt)}
               referenceNo={printReceipt.reference_no}
               amount={printReceipt.amount}
+              amountInWords={amountInWordsPKR(Number(printReceipt.amount || 0))}
               allocations={(printReceipt.invoice_allocations ?? printReceipt.allocations ?? []).map((a: any) => ({ invoiceNo: a.invoice_no, amount: a.amount }))}
               notes={printReceipt.notes}
             />
