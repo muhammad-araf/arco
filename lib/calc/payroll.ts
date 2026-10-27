@@ -68,6 +68,39 @@ export function advanceRecovery(
   return roundMoney(Math.min(advanceBalance, requestedRecovery));
 }
 
+export interface AttendanceCounts {
+  present: number;
+  half_day: number;
+  leave: number;
+  absent: number;
+  holiday: number;
+  overtime_hours?: number;
+}
+
+/**
+ * Eligible paid days from a real attendance summary (used by the payroll
+ * estimate, never by a pay run — runs recompute this server-side from
+ * attendance rows plus the configured payroll rules). Absent days never
+ * count; leave/holiday count only when the caller's rules pay them.
+ */
+export function eligibleDays(
+  counts: AttendanceCounts,
+  opts: { halfDayFactor?: number; leavePaid?: boolean; holidayPaid?: boolean; weeklyOffPaidDays?: number } = {},
+): number {
+  const halfDayFactor = opts.halfDayFactor ?? 0.5;
+  assertNonNegative(counts.present, "present");
+  assertNonNegative(counts.half_day, "half_day");
+  assertNonNegative(counts.leave, "leave");
+  assertNonNegative(counts.holiday, "holiday");
+  return roundMoney(
+    counts.present
+    + counts.half_day * halfDayFactor
+    + (opts.leavePaid ? counts.leave : 0)
+    + (opts.holidayPaid ? counts.holiday : 0)
+    + (opts.weeklyOffPaidDays ?? 0),
+  );
+}
+
 export interface PayrollBreakdown {
   basePay: number;
   overtimePay: number;

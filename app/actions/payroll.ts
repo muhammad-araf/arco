@@ -152,6 +152,19 @@ export async function updatePayrollRules(
 
 export type AttendanceStatus = "present" | "absent" | "half_day" | "leave" | "holiday";
 
+/** A payroll period that is approved, partially paid, or paid locks its
+ * month: later attendance changes must go through adjustPayroll (or a
+ * reversal), never through a silent re-mark. Draft periods do not lock. */
+async function lockedPeriodStatus(db: Db, employeeId: string, date: string): Promise<string | null> {
+  const month = Number(date.slice(5, 7));
+  const year = Number(date.slice(0, 4));
+  if (!month || !year) return null;
+  const { data } = await db.from("payroll_periods").select("status")
+    .eq("employee_id", employeeId).eq("month", month).eq("year", year)
+    .in("status", ["approved", "partially_paid", "paid"]).maybeSingle();
+  return data?.status ?? null;
+}
+
 export async function markAttendance(input: {
   employeeId: string;
   date: string; // YYYY-MM-DD
@@ -163,6 +176,8 @@ export async function markAttendance(input: {
   if (!db) return fail(error);
   const gate = await requireWrite(db);
   if ("error" in gate) return fail(gate.error);
+  const locked = await lockedPeriodStatus(db, input.employeeId, input.date);
+  if (locked) return fail(`Payroll for this month is ${locked} and locked: attendance can no longer be marked here. Use adjustPayroll on the approved period, or reverse it first.`);
   const ot = input.overtimeHours ?? 0;
   if (!Number.isFinite(ot) || ot < 0) return fail("overtimeHours must be >= 0.");
   const { data, error: iError } = await db
@@ -199,6 +214,8 @@ export async function correctAttendance(input: {
   const gate = await requireWrite(db);
   if ("error" in gate) return fail(gate.error);
   if (!input.reason?.trim()) return fail("A reason is mandatory for attendance corrections.");
+  const locked = await lockedPeriodStatus(db, input.employeeId, input.date);
+  if (locked) return fail(`Payroll for this month is ${locked} and locked: this correction is blocked. Use adjustPayroll on the approved period, or reverse it first.`);
   const { data: before } = await db.from("attendance").select("*")
     .eq("employee_id", input.employeeId).eq("date", input.date).maybeSingle();
   if (!before) return fail("No attendance row exists for this employee and date — mark it first.");
@@ -233,7 +250,7 @@ export async function listAttendance(filters: {
   if (!db) return fail(error);
   const gate = await requireRead(db);
   if ("error" in gate) return fail(gate.error);
-  let q = db.from("attendance").select("employee_id, date, status").order("date", { ascending: true });
+  let q = db.from("attendance").select("id, employee_id, date, status, overtime_hours, notes").order("date", { ascending: true });
   if (filters.employeeId) q = q.eq("employee_id", filters.employeeId);
   if (filters.from) q = q.gte("date", filters.from);
   if (filters.to) q = q.lte("date", filters.to);
@@ -298,6 +315,20 @@ export async function runPayroll(input: {
   try {
     if (!Number.isInteger(input.month) || input.month < 1 || input.month > 12) {
       return fail("month must be 1–12.");
+    }
+    // All run inputs are validated up front: bonus, deductions, pieces,
+    // advance recovery and overtime rate are never negative; previous
+    // balance is a signed carry-in (see module header), so it must only
+    // be finite, never NaN.
+    for (const [label, v] of [
+      ["bonus", input.bonus], ["deductions", input.deductions],
+      ["pieces", input.pieces], ["advanceRecoveryRequested", input.advanceRecoveryRequested],
+      ["overtimeRatePerHour", input.overtimeRatePerHour],
+    ] as const) {
+      if (v !== undefined && (!Number.isFinite(v) || v < 0)) return fail(`${label} must be >= 0.`);
+    }
+    if (input.previousBalance !== undefined && !Number.isFinite(input.previousBalance)) {
+      return fail("previousBalance must be a number.");
     }
     if (input.clientToken) {
       const { data: existing } = await db.from("payroll_periods").select("*")
