@@ -7,6 +7,7 @@ import { STOCK_WRITE } from "./auth-helpers";
 import { logAudit } from "@/lib/audit";
 import { roundWeight, stockBalanceFromRows } from "@/lib/calc";
 import { callAtomicStockTransition } from "@/lib/atomic";
+import { fifoAgeing } from "@/lib/stock-helpers";
 
 /**
  * Inventory server actions: ledger-derived stock summary, transfers and
@@ -198,12 +199,12 @@ export async function getStockSummary(): Promise<ActionResult> {
     const [rpc, godowns, products, parties] = await Promise.all([
       supabase.rpc("stock_summary"),
       supabase.from("godowns").select("id, name"),
-      supabase.from("products").select("id, name, min_stock"),
+      supabase.from("products").select("id, name, min_stock, category"),
       supabase.from("parties").select("id, name"),
     ]);
     const godownName = new Map((godowns.data ?? []).map((g: { id: string; name: string }) => [g.id, g.name]));
     const productInfo = new Map(
-      (products.data ?? []).map((p: { id: string; name: string; min_stock: number }) => [p.id, p]),
+      (products.data ?? []).map((p: { id: string; name: string; min_stock: number; category?: string }) => [p.id, p]),
     );
     const partyName = new Map((parties.data ?? []).map((p: { id: string; name: string }) => [p.id, p.name]));
     const byKey = new Map<
@@ -260,6 +261,9 @@ export async function getStockSummary(): Promise<ActionResult> {
         godown_name: godownName.get(e.godown_id) ?? e.godown_id,
         product_id: e.product_id,
         product_name: productInfo.get(e.product_id)?.name ?? e.product_id,
+        // Category is resolved server-side here (the page used to join
+        // it client-side from the masters list).
+        product_category: productInfo.get(e.product_id)?.category ?? null,
         // null party = company-owned stock with no recorded owner; a
         // party_id = stock held for / owned by that party.
         party_id: e.party_id,
@@ -281,6 +285,8 @@ export async function getStockLedger(filters?: {
   productId?: string;
   partyId?: string;
   voucherNo?: string;
+  /** Optional lot number filter (lot traceability). */
+  lotNumber?: string;
   from?: string;
   to?: string;
   limit?: number;
@@ -318,6 +324,7 @@ export async function getStockLedger(filters?: {
       if (filters?.productId) query = query.eq("product_id", filters.productId);
       if (filters?.partyId) query = query.eq("party_id", filters.partyId);
       if (filters?.voucherNo) query = query.eq("voucher_no", filters.voucherNo);
+      if (filters?.lotNumber) query = query.eq("lot_number", filters.lotNumber);
       if (filters?.from) query = query.gte("date", filters.from);
       if (toExclusive) query = query.lt("date", toExclusive);
       const { data, error, count } = await query.range(fromRow, toRow);
@@ -337,6 +344,7 @@ export async function getStockLedger(filters?: {
     if (filters?.productId) query = query.eq("product_id", filters.productId);
     if (filters?.partyId) query = query.eq("party_id", filters.partyId);
     if (filters?.voucherNo) query = query.eq("voucher_no", filters.voucherNo);
+    if (filters?.lotNumber) query = query.eq("lot_number", filters.lotNumber);
     if (filters?.from) query = query.gte("date", filters.from);
     if (toExclusive) query = query.lt("date", toExclusive);
     const { data, error } = await query;
@@ -347,16 +355,74 @@ export async function getStockLedger(filters?: {
   }
 }
 
+/**
+ * FIFO stock ageing per (godown, product, owner) pool, from ledger
+ * dates. APPROXIMATION, documented on the inventory tab: ledger rows
+ * are consumed oldest-first; opening_balances rows carry no ledger
+ * date and are excluded; buckets are the standard 0–30 / 31–60 /
+ * 61–90 / 90+ day buckets pending client confirmation of the bucket
+ * edges. Rows dated after today are ignored.
+ */
+export async function getStockAgeing(): Promise<ActionResult> {
+  try {
+    const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
+    const today = new Date().toISOString().slice(0, 10);
+    const { data, error } = await supabase
+      .from("stock_ledger")
+      .select("godown_id, product_id, party_id, date, inward_qty, outward_qty")
+      .order("date", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (error) return fail(error.message);
+    const pools = fifoAgeing((data ?? []) as { godown_id: string; product_id: string; party_id: string | null; date: string; inward_qty: number; outward_qty: number }[], today);
+    const [godowns, products, parties] = await Promise.all([
+      supabase.from("godowns").select("id, name"),
+      supabase.from("products").select("id, name"),
+      supabase.from("parties").select("id, name"),
+    ]);
+    const godownName = new Map((godowns.data ?? []).map((g: { id: string; name: string }) => [g.id, g.name]));
+    const productName = new Map((products.data ?? []).map((p: { id: string; name: string }) => [p.id, p.name]));
+    const partyName = new Map((parties.data ?? []).map((p: { id: string; name: string }) => [p.id, p.name]));
+    return ok(
+      pools.map((pool) => ({
+        ...pool,
+        godown_name: godownName.get(pool.godown_id) ?? pool.godown_id,
+        product_name: productName.get(pool.product_id) ?? pool.product_id,
+        party_name: pool.party_id ? (partyName.get(pool.party_id) ?? pool.party_id) : null,
+      })),
+    );
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
 /** Transfer register (read-only list; writes stay behind STOCK_WRITE). */
 export async function listTransfers(filters?: {
   status?: string;
   fromGodownId?: string;
   productId?: string;
+  /** 1-based page; when set, returns { rows, total, page, pageSize } (same paged pattern as the stock ledger). */
+  page?: number;
+  pageSize?: number;
 }): Promise<ActionResult> {
   try {
     const supabase = await createClient();
     const gate = await requireSignedIn(supabase);
     if (!gate.ok) return fail(gate.error);
+    if (filters?.page !== undefined) {
+      const pageSize = Math.min(Math.max(filters?.pageSize ?? 50, 1), 200);
+      const page = Math.max(filters.page, 1);
+      const fromRow = (page - 1) * pageSize;
+      const toRow = fromRow + pageSize - 1;
+      let query = supabase.from("godown_transfers").select("*", { count: "exact" }).order("date", { ascending: false });
+      if (filters?.status) query = query.eq("status", filters.status);
+      if (filters?.fromGodownId) query = query.eq("from_godown_id", filters.fromGodownId);
+      if (filters?.productId) query = query.eq("product_id", filters.productId);
+      const { data, error, count } = await query.range(fromRow, toRow);
+      if (error) return fail(error.message);
+      return ok({ rows: data, total: count ?? (data ?? []).length, page, pageSize });
+    }
     let query = supabase.from("godown_transfers").select("*").order("date", { ascending: false });
     if (filters?.status) query = query.eq("status", filters.status);
     if (filters?.fromGodownId) query = query.eq("from_godown_id", filters.fromGodownId);
@@ -374,11 +440,27 @@ export async function listAdjustments(filters?: {
   status?: string;
   godownId?: string;
   productId?: string;
+  /** 1-based page; when set, returns { rows, total, page, pageSize } (same paged pattern as the stock ledger). */
+  page?: number;
+  pageSize?: number;
 }): Promise<ActionResult> {
   try {
     const supabase = await createClient();
     const gate = await requireSignedIn(supabase);
     if (!gate.ok) return fail(gate.error);
+    if (filters?.page !== undefined) {
+      const pageSize = Math.min(Math.max(filters?.pageSize ?? 50, 1), 200);
+      const page = Math.max(filters.page, 1);
+      const fromRow = (page - 1) * pageSize;
+      const toRow = fromRow + pageSize - 1;
+      let query = supabase.from("stock_adjustments").select("*", { count: "exact" }).order("date", { ascending: false });
+      if (filters?.status) query = query.eq("status", filters.status);
+      if (filters?.godownId) query = query.eq("godown_id", filters.godownId);
+      if (filters?.productId) query = query.eq("product_id", filters.productId);
+      const { data, error, count } = await query.range(fromRow, toRow);
+      if (error) return fail(error.message);
+      return ok({ rows: data, total: count ?? (data ?? []).length, page, pageSize });
+    }
     let query = supabase.from("stock_adjustments").select("*").order("date", { ascending: false });
     if (filters?.status) query = query.eq("status", filters.status);
     if (filters?.godownId) query = query.eq("godown_id", filters.godownId);
