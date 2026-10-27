@@ -52,6 +52,11 @@ import {
   daybookClosing,
   ledgerRunningBalance,
 } from "@/lib/calc";
+import {
+  aggregateAllocations,
+  exclusiveToBound,
+  signedPartyOpening,
+} from "@/lib/calc/finance";
 
 type Db = Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>;
 
@@ -61,10 +66,73 @@ function fail(error: string): ActionResult {
   return { success: false, error };
 }
 
-function genNo(prefix: string): string {
+/**
+ * Server-side sequential document number via the next_doc_number RPC
+ * (same pattern as the stock actions). Falls back to a timestamp
+ * suffix only when the numbering table/RPC is not yet migrated, so a
+ * missing migration can never block posting — it only re-opens the
+ * same-millisecond collision window the old genNo had.
+ */
+async function nextDocNo(db: Db, series: string, prefix: string): Promise<string> {
+  const rpc = await db.rpc("next_doc_number", { p_series: series, p_prefix: prefix });
+  if (!rpc.error && typeof rpc.data === "string" && rpc.data) return rpc.data;
   const d = new Date();
   const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
   return `${prefix}-${ymd}-${Date.now().toString(36).toUpperCase().slice(-6)}`;
+}
+
+/**
+ * Cash account a cash movement must land in. Every receipt, vendor
+ * payment and paid expense now carries a selected account: a NULL
+ * cash_account_id row is invisible in per-account daybook views, so
+ * creation fails closed instead of writing one. The account's kind
+ * must match the movement's kind (a bank account cannot receive a
+ * "cash" movement) — the UI filters selectors by kind.
+ */
+async function validateCashAccount(
+  db: Db,
+  cashAccountId: string | null | undefined,
+  kind: string,
+): Promise<{ ok: true; account: Record<string, unknown> } | { ok: false; error: string }> {
+  if (!cashAccountId) {
+    return { ok: false, error: "Select a cash account for this payment. Create one on the Daybook page first if none exists." };
+  }
+  const { data: acct } = await db.from("cash_accounts").select("*").eq("id", cashAccountId).maybeSingle();
+  if (!acct) return { ok: false, error: "The selected cash account does not exist." };
+  if ((acct as Record<string, unknown>).account_kind !== kind) {
+    return { ok: false, error: `The selected cash account is a ${(acct as Record<string, unknown>).account_kind} account, not a ${kind} account.` };
+  }
+  return { ok: true, account: acct as Record<string, unknown> };
+}
+
+/**
+ * Sum of opening_balances evidence rows for one party (kind 'party',
+ * as_of on or before the statement's `to` date). createOpeningBalance
+ * writes ONLY the evidence row — it never touches parties.opening_
+ * balance — so these rows are additional opening, not a second copy
+ * of the master field. If an operator ever sets BOTH the master field
+ * and an evidence row for the same amount, the two WILL double-count:
+ * the statement return value breaks the two apart (masterOpening vs
+ * evidenceOpening) so that is visible instead of hidden. Rows dated
+ * after `to` are excluded; rows dated inside the period are folded
+ * into opening so the closing balance stays correct.
+ */
+async function partyEvidenceOpening(
+  db: Db,
+  partyId: string,
+  to: string,
+  balanceType: string | null | undefined,
+): Promise<{ total: number; raw: number }> {
+  const toDate = to.slice(0, 10);
+  const { data } = await db.from("opening_balances").select("amount, as_of")
+    .eq("balance_kind", "party").eq("party_id", partyId);
+  let raw = 0;
+  for (const r of data ?? []) {
+    if (String((r as Record<string, unknown>).as_of ?? "").slice(0, 10) <= toDate) {
+      raw = roundMoney(raw + (Number((r as Record<string, unknown>).amount) || 0));
+    }
+  }
+  return { total: signedPartyOpening(raw, balanceType), raw };
 }
 
 function pos(value: unknown, name: string): number | null {
@@ -446,7 +514,7 @@ export async function createPurchase(input: PurchaseInput): Promise<ActionResult
     const { data, error: iError } = await db
       .from("purchases")
       .insert({
-        purchase_no: genNo("PUR"),
+        purchase_no: await nextDocNo(db, "purchase", "PUR"),
         date: input.date ?? new Date().toISOString(),
         vendor_id: input.vendorId,
         invoice_ref: input.invoiceRef ?? null,
@@ -568,6 +636,17 @@ export async function reversePurchase(id: string, reason: string): Promise<Actio
     if (Number(purchase.paid_amount) > 0) {
       return fail("Purchase has payments allocated; reverse the payments first, then reverse the purchase.");
     }
+    // Posted returns already took stock out and credited the vendor
+    // for part of this purchase. Reversing the whole purchase as well
+    // would double-apply every return (double stock-out, double
+    // credit), so reversal is blocked while a posted return exists.
+    // There is no return-reversal action yet: a blocked purchase stays
+    // blocked until one is added (see final report / coordinator note).
+    const { data: postedReturns } = await db.from("purchase_returns").select("id")
+      .eq("purchase_id", id).eq("status", "posted").limit(1);
+    if ((postedReturns ?? []).length > 0) {
+      return fail("Purchase has posted returns; reversing it would double-apply those returns. Reverse the returns first (no return-reversal action exists yet), then reverse the purchase.");
+    }
     const { data: items } = await db.from("purchase_items").select("*").eq("purchase_id", id);
     if (purchase.receipt_status === "received") {
       for (const item of items ?? []) {
@@ -632,6 +711,75 @@ export async function listPurchaseReturns(purchaseId?: string): Promise<ActionRe
   return { success: true, data };
 }
 
+/**
+ * Purchase-return guards, shared by create and post so a draft written
+ * before a guard existed (or raced with another return) cannot post
+ * past it:
+ * - line ownership: every return line must name a line of THIS purchase;
+ *   a line from another purchase (or a missing line) fails, never skips.
+ * - cumulative quantity: returns already recorded against a line
+ *   (draft + posted, excluding reversed) plus this return must not
+ *   exceed the line's purchased quantity — otherwise stock goes
+ *   negative and the vendor is over-credited.
+ * - price: a return price above the line's purchase price over-credits
+ *   the vendor, so it fails. Quantity must be > 0 (a 0-qty line is a
+ *   no-op return, not a return).
+ * `excludeReturnId` is the return being posted, so its own lines are
+ * not counted twice in the cumulative check.
+ */
+async function validateReturnLines(
+  db: Db,
+  purchase: Record<string, unknown>,
+  items: { purchaseItemId: string; quantity: number; unitPrice: number }[],
+  excludeReturnId?: string,
+): Promise<{ ok: true; lines: { purchase_item_id: string; quantity: number; unit_price: number; line_total: number }[] } | { ok: false; error: string }> {
+  const { data: origItems } = await db.from("purchase_items").select("*").eq("purchase_id", purchase.id);
+  const origById = new Map<string, Record<string, unknown>>();
+  for (const o of origItems ?? []) origById.set(String((o as Record<string, unknown>).id), o as Record<string, unknown>);
+  // Aggregate duplicate lines for the same purchase item within one request.
+  const byItem = new Map<string, { quantity: number; unitPrice: number }>();
+  for (const item of items) {
+    const qty = pos(item.quantity, "quantity");
+    if (qty === null) return { ok: false, error: "Return quantities must be > 0." };
+    const price = nonNeg(item.unitPrice, "unitPrice");
+    if (price === null) return { ok: false, error: "Return prices must be >= 0." };
+    const orig = origById.get(item.purchaseItemId);
+    if (!orig) return { ok: false, error: `Return line ${item.purchaseItemId} does not belong to purchase ${purchase.purchase_no}.` };
+    if (price > (Number(orig.unit_price) || 0)) {
+      return { ok: false, error: `Return price ${price} exceeds the purchase price ${orig.unit_price} for that line; a return cannot credit more than was paid.` };
+    }
+    const cur = byItem.get(item.purchaseItemId);
+    if (cur) {
+      if (price !== cur.unitPrice) return { ok: false, error: "Duplicate return lines for one purchase line must carry the same price." };
+      cur.quantity = roundMoney(cur.quantity + qty);
+    } else byItem.set(item.purchaseItemId, { quantity: qty, unitPrice: price });
+  }
+  // Cumulative quantity already returned against each line.
+  const { data: priorReturns } = await db.from("purchase_returns").select("id")
+    .eq("purchase_id", purchase.id).neq("status", "reversed");
+  const priorIds = (priorReturns ?? [])
+    .map((r) => String((r as Record<string, unknown>).id))
+    .filter((id) => id !== excludeReturnId);
+  const returnedQty = new Map<string, number>();
+  if (priorIds.length) {
+    const { data: priorLines } = await db.from("purchase_return_items").select("*").in("return_id", priorIds);
+    for (const l of priorLines ?? []) {
+      const k = String((l as Record<string, unknown>).purchase_item_id);
+      returnedQty.set(k, roundMoney((returnedQty.get(k) ?? 0) + (Number((l as Record<string, unknown>).quantity) || 0)));
+    }
+  }
+  const lines = [];
+  for (const [purchaseItemId, v] of byItem) {
+    const orig = origById.get(purchaseItemId)!;
+    const already = returnedQty.get(purchaseItemId) ?? 0;
+    if (roundMoney(already + v.quantity) > (Number(orig.quantity) || 0)) {
+      return { ok: false, error: `Return quantity ${v.quantity} for a line already returned ${already} exceeds its purchased quantity ${orig.quantity}.` };
+    }
+    lines.push({ purchase_item_id: purchaseItemId, quantity: v.quantity, unit_price: v.unitPrice, line_total: roundMoney(v.quantity * v.unitPrice) });
+  }
+  return { ok: true, lines };
+}
+
 export async function createPurchaseReturn(input: {
   purchaseId: string;
   reason: string;
@@ -652,22 +800,16 @@ export async function createPurchaseReturn(input: {
     if (!input.items?.length) return fail("At least one return line is required.");
     const { data: purchase } = await db.from("purchases").select("*").eq("id", input.purchaseId).single();
     if (!purchase || purchase.status !== "posted") {
-      return fail("Returns link to a posted original purchase.");
+      return fail("Returns link to a posted original purchase (a draft or reversed purchase cannot be returned).");
     }
-    const lines = [];
-    let total = 0;
-    for (const item of input.items) {
-      const qty = nonNeg(item.quantity, "quantity");
-      const price = nonNeg(item.unitPrice, "unitPrice");
-      if (qty === null || price === null) return fail("Return quantities and prices must be >= 0.");
-      const lineTotal = roundMoney(qty * price);
-      total = roundMoney(total + lineTotal);
-      lines.push({ purchase_item_id: item.purchaseItemId, quantity: qty, unit_price: price, line_total: lineTotal });
-    }
+    const checked = await validateReturnLines(db, purchase, input.items);
+    if (!checked.ok) return fail(checked.error);
+    const lines = checked.lines;
+    const total = lines.reduce((s, l) => roundMoney(s + l.line_total), 0);
     const { data, error: iError } = await db
       .from("purchase_returns")
       .insert({
-        return_no: genNo("PRT"), purchase_id: input.purchaseId,
+        return_no: await nextDocNo(db, "purchase_return", "PRT"), purchase_id: input.purchaseId,
         date: input.date ?? new Date().toISOString(), reason: input.reason,
         total_amount: total, status: "draft",
         client_token: input.clientToken ?? null, created_by: gate.actor.userId,
@@ -697,11 +839,23 @@ export async function postPurchaseReturn(id: string): Promise<ActionResult> {
     if (ret.status !== "draft") return fail("Only a draft return can be posted.");
     const { data: purchase } = await db.from("purchases").select("*").eq("id", ret.purchase_id).single();
     if (!purchase) return fail("Original purchase not found.");
+    // Re-check the guards at post time: a draft created earlier (or a
+    // concurrent return) must not post past them, and a purchase
+    // reversed after the draft was created cannot take a return.
+    if (purchase.status !== "posted") {
+      return fail("The original purchase is no longer posted, so this return cannot be posted.");
+    }
     const { data: lines } = await db.from("purchase_return_items").select("*").eq("return_id", id);
+    const rechecked = await validateReturnLines(
+      db, purchase,
+      (lines ?? []).map((l) => ({ purchaseItemId: l.purchase_item_id, quantity: Number(l.quantity) || 0, unitPrice: Number(l.unit_price) || 0 })),
+      id,
+    );
+    if (!rechecked.ok) return fail(rechecked.error);
     if (purchase.receipt_status === "received") {
       for (const line of lines ?? []) {
         const { data: orig } = await db.from("purchase_items").select("*").eq("id", line.purchase_item_id).maybeSingle();
-        if (!orig) continue;
+        if (!orig) return fail(`Return line ${line.purchase_item_id} no longer matches a line of purchase ${purchase.purchase_no}; the return cannot be posted.`);
         if (orig.item_type === "seed" && purchase.godown_id) {
           await stockEntry(db, {
             date: ret.date, voucherType: "purchase_return", voucherId: ret.id,
@@ -842,7 +996,7 @@ export async function createInvoice(input: {
     const { data, error: iError } = await db
       .from("customer_invoices")
       .insert({
-        invoice_no: genNo("INV"), date: input.date ?? new Date().toISOString(),
+        invoice_no: await nextDocNo(db, "invoice", "INV"), date: input.date ?? new Date().toISOString(),
         customer_id: input.customerId, source_type: input.sourceType,
         source_id: input.sourceId ?? null, source_ref: input.sourceRef ?? null,
         total_amount: total, paid_amount: 0, balance_amount: total,
@@ -992,6 +1146,8 @@ export async function createReceipt(input: {
     }
     const amount = pos(input.amount, "amount");
     if (amount === null) return fail("Receipt amount must be > 0.");
+    const cashCheck = await validateCashAccount(db, input.cashAccountId, input.account);
+    if (!cashCheck.ok) return fail(cashCheck.error);
     let allocated = 0;
     const allocRows = [];
     for (const a of input.allocations ?? []) {
@@ -1006,7 +1162,7 @@ export async function createReceipt(input: {
     const { data, error: iError } = await db
       .from("customer_receipts")
       .insert({
-        receipt_no: genNo("RCT"), date: input.date ?? new Date().toISOString(),
+        receipt_no: await nextDocNo(db, "receipt", "RCT"), date: input.date ?? new Date().toISOString(),
         customer_id: input.customerId, cash_account_id: input.cashAccountId ?? null,
         account: input.account, payment_method: input.paymentMethod ?? "cash",
         amount, unapplied_amount: roundMoney(amount - allocated),
@@ -1054,6 +1210,10 @@ export async function postReceipt(id: string, opts: { reason?: string } = {}): P
     if (!receipt) return fail("Receipt not found.");
     if (receipt.status === "posted") return { success: true, data: receipt };
     if (receipt.status !== "draft") return fail(`Only a draft receipt can be posted (status: ${receipt.status}).`);
+    // Receipts drafted before cash accounts were required may carry a
+    // NULL account; posting one would write a NULL cash row.
+    const receiptCashCheck = await validateCashAccount(db, receipt.cash_account_id, receipt.account);
+    if (!receiptCashCheck.ok) return fail(receiptCashCheck.error);
     const { data: allocs } = await db.from("invoice_allocations").select("*").eq("receipt_id", id);
     for (const a of allocs ?? []) {
       const { data: inv } = await db.from("customer_invoices").select("*").eq("id", a.invoice_id).maybeSingle();
@@ -1227,22 +1387,36 @@ export async function allocatePayment(input: {
     }
     const amount = pos(input.amount, "amount");
     if (amount === null) return fail("Payment amount must be > 0.");
-    let allocated = 0;
+    // Cash must land in a real account (see validateCashAccount).
+    const cashCheck = await validateCashAccount(db, input.cashAccountId, input.account);
+    if (!cashCheck.ok) return fail(cashCheck.error);
+    // Aggregate duplicate targets FIRST: two lines to the same purchase
+    // previously each passed the balance check alone and then either
+    // over-allocated together or hit the allocations unique key.
+    const allocations: { targetType: "purchase" | "expense" | "payroll"; targetId: string; amount: number }[] = [];
     for (const a of input.allocations ?? []) {
       const amt = pos(a.amount, "allocation amount");
       if (amt === null) return fail("Each allocation amount must be > 0.");
-      allocated = roundMoney(allocated + amt);
+      allocations.push({ targetType: a.targetType, targetId: a.targetId, amount: amt });
     }
+    const merged = aggregateAllocations(allocations) as typeof allocations;
+    const allocated = merged.reduce((s, a) => roundMoney(s + a.amount), 0);
     if (allocated > amount) return fail(`Allocations (${allocated}) exceed the payment amount (${amount}).`);
-    // Validate targets before moving any money.
-    for (const a of input.allocations ?? []) {
+    // Validate targets before moving any money, including the vendor
+    // match: a payment from vendor A must never settle vendor B's
+    // purchase or expense. Payroll targets carry no vendor, so the
+    // match check does not apply to them.
+    for (const a of merged) {
       if (a.targetType === "purchase") {
         const { data: pur } = await db.from("purchases").select("*").eq("id", a.targetId).maybeSingle();
         if (!pur || pur.status !== "posted") return fail(`Purchase ${a.targetId} is not posted.`);
+        if (pur.vendor_id !== input.vendorId) return fail(`Purchase ${pur.purchase_no} belongs to another vendor; it cannot be settled by this vendor's payment.`);
         if (Number(a.amount) > Number(pur.balance_amount)) return fail(`Allocation exceeds purchase ${pur.purchase_no} balance.`);
       } else if (a.targetType === "expense") {
         const { data: exp } = await db.from("expenses").select("*").eq("id", a.targetId).maybeSingle();
         if (!exp || exp.status !== "posted" || exp.settlement !== "credit") return fail(`Expense ${a.targetId} is not a posted credit expense.`);
+        if (!exp.vendor_id) return fail(`Expense ${exp.expense_no} has no vendor, so no vendor payment can settle it.`);
+        if (exp.vendor_id !== input.vendorId) return fail(`Expense ${exp.expense_no} belongs to another vendor; it cannot be settled by this vendor's payment.`);
         if (Number(a.amount) > Number(exp.balance_amount)) return fail(`Allocation exceeds expense ${exp.expense_no} balance.`);
       } else {
         const { data: pr } = await db.from("payroll_periods").select("*").eq("id", a.targetId).maybeSingle();
@@ -1256,7 +1430,7 @@ export async function allocatePayment(input: {
     const { data: payment, error: iError } = await db
       .from("vendor_payments")
       .insert({
-        payment_no: genNo("PAY"), date: input.date ?? new Date().toISOString(),
+        payment_no: await nextDocNo(db, "vendor_payment", "PAY"), date: input.date ?? new Date().toISOString(),
         vendor_id: input.vendorId, cash_account_id: input.cashAccountId ?? null,
         account: input.account, payment_method: input.paymentMethod ?? "cash",
         amount, settlement_kind: settlementKind, reference_no: input.referenceNo ?? null,
@@ -1267,9 +1441,9 @@ export async function allocatePayment(input: {
       .select()
       .single();
     if (iError) return fail(iError.message);
-    if (input.allocations?.length) {
+    if (merged.length) {
       const { error: aError } = await db.from("payment_allocations").insert(
-        input.allocations.map((a) => ({
+        merged.map((a) => ({
           payment_id: payment.id, target_type: a.targetType, target_id: a.targetId, amount: a.amount,
         })),
       );
@@ -1288,7 +1462,7 @@ export async function allocatePayment(input: {
       delta: amount, notes: "Vendor payable settled (allocations + any unallocated advance)",
       userId: gate.actor.userId,
     });
-    for (const a of input.allocations ?? []) {
+    for (const a of merged) {
       if (a.targetType === "purchase") await refreshPurchasePaid(db, a.targetId);
       else if (a.targetType === "expense") await refreshExpensePaid(db, a.targetId);
       else {
@@ -1370,6 +1544,14 @@ export async function reverseVendorPayment(id: string, reason: string): Promise<
             balance_amount: balance,
             status: paid <= 0 ? "approved" : balance <= 0 ? "paid" : "partially_paid",
           }).eq("id", a.target_id);
+          // Remove the payroll_payments row this payment created, or
+          // payroll history keeps showing money that was reversed.
+          // payroll_payments carries no payment link, so the match is
+          // the exact note allocatePayment wrote, plus payroll + amount.
+          await db.from("payroll_payments").delete()
+            .eq("payroll_id", a.target_id)
+            .eq("amount", Number(a.amount))
+            .eq("notes", `Via vendor payment ${pay.payment_no}`);
         }
       }
     }
@@ -1439,10 +1621,26 @@ export async function createExpense(input: {
       return fail("Expense category and payee are required.");
     }
     const settlement = input.settlement ?? "paid";
+    // A credit expense with no vendor posts with zero ledger effect
+    // yet shows as posted — a payable owed to nobody. Block it here.
+    if (settlement === "credit" && !input.vendorId) {
+      return fail("A credit expense needs a vendor: the unpaid amount has to be owed to someone.");
+    }
+    // A paid expense moves cash, so it needs a real cash account (and
+    // one whose kind matches the payment method).
+    if (settlement === "paid") {
+      const cashCheck = await validateCashAccount(db, input.cashAccountId, input.paymentMethod ?? "cash");
+      if (!cashCheck.ok) return fail(cashCheck.error);
+    } else if (input.cashAccountId) {
+      // Credit expenses move no cash, so only existence is checked —
+      // the kind match is a paid-expense rule.
+      const { data: acct } = await db.from("cash_accounts").select("id").eq("id", input.cashAccountId).maybeSingle();
+      if (!acct) return fail("The selected cash account does not exist.");
+    }
     const { data, error: iError } = await db
       .from("expenses")
       .insert({
-        expense_no: genNo("EXP"), date: input.date ?? new Date().toISOString(),
+        expense_no: await nextDocNo(db, "expense", "EXP"), date: input.date ?? new Date().toISOString(),
         category_name: input.categoryName.trim(), category_id: input.categoryId ?? null,
         payee: input.payee.trim(), vendor_id: input.vendorId ?? null,
         amount, payment_method: input.paymentMethod ?? "cash",
@@ -1470,7 +1668,15 @@ export async function postExpense(id: string, opts: { reason?: string } = {}): P
     if (!exp) return fail("Expense not found.");
     if (exp.status === "posted") return { success: true, data: exp };
     if (exp.status !== "draft") return fail(`Only a draft expense can be posted (status: ${exp.status}).`);
+    if (exp.settlement === "credit" && !exp.vendor_id) {
+      return fail("A credit expense needs a vendor; this draft has none, so posting it would record a payable owed to nobody.");
+    }
     if (exp.settlement === "paid") {
+      // Paid drafts written before cash accounts were required may
+      // still carry a NULL account; posting one would write a NULL
+      // cash row, so they fail closed instead.
+      const cashCheck = await validateCashAccount(db, exp.cash_account_id, exp.payment_method);
+      if (!cashCheck.ok) return fail(cashCheck.error);
       // Cash outflow, once. The account kind comes from the payment method;
       // a precise cash_account_id is used when one was chosen.
       await cashEntry(db, {
@@ -1546,7 +1752,7 @@ export async function reverseExpense(id: string, reason: string): Promise<Action
     }
     const { data: updated, error: uError } = await db
       .from("expenses")
-      .update({ status: "reversed", reversal_reason: reason, balance_amount: 0 })
+      .update({ status: "reversed", reversal_reason: reason, paid_amount: 0, balance_amount: 0 })
       .eq("id", id)
       .eq("status", "posted")
       .select()
@@ -1596,7 +1802,7 @@ export async function postTransfer(input: {
     const { data: from } = await db.from("cash_accounts").select("*").eq("id", input.fromAccountId).maybeSingle();
     const { data: to } = await db.from("cash_accounts").select("*").eq("id", input.toAccountId).maybeSingle();
     if (!from || !to) return fail("Both transfer accounts must exist.");
-    const transferNo = genNo("TRF");
+    const transferNo = await nextDocNo(db, "transfer", "TRF");
     const date = input.date ?? new Date().toISOString();
     const { data, error: iError } = await db
       .from("cash_transfers")
@@ -1643,45 +1849,100 @@ export async function getDaybook(input: {
   const gate = await requireSensitiveRead(db);
   if ("error" in gate) return fail(gate.error);
   try {
-    let opening = 0;
+    // The `to` day is inclusive: a plain YYYY-MM-DD bound becomes
+    // `< next day` (B5), so today's rows are no longer dropped.
+    const toExclusive = exclusiveToBound(input.to);
+    const toDate = input.to.slice(0, 10);
     let accountLabel = input.accountKind ?? "all accounts";
-    if (input.accountId) {
-      // Independent reads: the account row and its prior ledger rows do not
-      // depend on each other, so fetch them together (was sequential).
-      const [{ data: acct }, { data: prior }] = await Promise.all([
-        db.from("cash_accounts").select("*").eq("id", input.accountId).maybeSingle(),
-        db.from("cash_ledger").select("debit, credit")
-          .eq("cash_account_id", input.accountId).lt("date", input.from),
-      ]);
-      if (!acct) return fail("Cash account not found.");
-      accountLabel = `${acct.code} — ${acct.name}`;
-      opening = roundMoney(Number(acct.opening_balance) || 0);
-      for (const r of prior ?? []) {
-        opening = roundMoney(opening + (Number(r.debit) || 0) - (Number(r.credit) || 0));
+    // Accounts that contribute a master opening to this view.
+    let acctQuery = db.from("cash_accounts").select("id, code, name, account_kind, opening_balance, is_active");
+    if (input.accountId) acctQuery = acctQuery.eq("id", input.accountId);
+    else if (input.accountKind) acctQuery = acctQuery.eq("account_kind", input.accountKind).eq("is_active", true);
+    else acctQuery = acctQuery.eq("is_active", true);
+    const [{ data: openingAccts }, { data: allAccts }] = await Promise.all([
+      acctQuery,
+      db.from("cash_accounts").select("id, code, name, account_kind"),
+    ]);
+    if (input.accountId && !(openingAccts ?? []).length) return fail("Cash account not found.");
+    if (input.accountId && openingAccts?.[0]) {
+      const a = openingAccts[0] as Record<string, unknown>;
+      accountLabel = `${a.code} — ${a.name}`;
+    }
+    const labelById = new Map<string, Record<string, unknown>>();
+    for (const a of allAccts ?? []) labelById.set(String((a as Record<string, unknown>).id), a as Record<string, unknown>);
+
+    // Per-account groups. A group key is the cash_account_id, or
+    // `kind:<kind>` for legacy rows written before accounts existed
+    // (NULL cash_account_id). Each group carries its own running
+    // balance: the old single merged chain mixed unrelated accounts
+    // into one meaningless column.
+    type Group = { key: string; cashAccountId: string | null; code: string; name: string; accountKind: string; opening: number };
+    const groups = new Map<string, Group>();
+    const groupFor = (cashAccountId: string | null, kind: string): Group => {
+      const key = cashAccountId ?? `kind:${kind}`;
+      let g = groups.get(key);
+      if (!g) {
+        const acct = cashAccountId ? labelById.get(cashAccountId) : undefined;
+        g = {
+          key,
+          cashAccountId,
+          code: acct ? String(acct.code) : "—",
+          name: acct ? String(acct.name) : `Unassigned ${kind} rows`,
+          accountKind: acct ? String(acct.account_kind) : kind,
+          opening: 0,
+        };
+        groups.set(key, g);
       }
-    } else if (input.accountKind) {
-      const [{ data: accts }, { data: prior }] = await Promise.all([
-        db.from("cash_accounts").select("opening_balance")
-          .eq("account_kind", input.accountKind).eq("is_active", true),
-        db.from("cash_ledger").select("debit, credit")
-          .eq("account", input.accountKind).lt("date", input.from),
-      ]);
-      for (const a of accts ?? []) opening = roundMoney(opening + (Number(a.opening_balance) || 0));
-      for (const r of prior ?? []) {
-        opening = roundMoney(opening + (Number(r.debit) || 0) - (Number(r.credit) || 0));
-      }
-    } else {
-      const [{ data: accts }, { data: prior }] = await Promise.all([
-        db.from("cash_accounts").select("opening_balance").eq("is_active", true),
-        db.from("cash_ledger").select("debit, credit").lt("date", input.from),
-      ]);
-      for (const a of accts ?? []) opening = roundMoney(opening + (Number(a.opening_balance) || 0));
-      for (const r of prior ?? []) {
-        opening = roundMoney(opening + (Number(r.debit) || 0) - (Number(r.credit) || 0));
+      return g;
+    };
+    for (const a of openingAccts ?? []) {
+      const r = a as Record<string, unknown>;
+      const g = groupFor(String(r.id), String(r.account_kind));
+      g.opening = roundMoney(g.opening + (Number(r.opening_balance) || 0));
+    }
+    // Migration opening_balances rows (kind 'cash') with a real account
+    // join that account's opening. Rows with NO account cannot be
+    // attributed to an account or kind, so they are honoured only in
+    // the all-accounts view, as unattributedOpening (see below) — the
+    // write shape carries no account for them, which is reported as a
+    // shape gap rather than guessed into a kind.
+    const { data: cashEvidence } = await db.from("opening_balances").select("amount, as_of, cash_account_id")
+      .eq("balance_kind", "cash");
+    let evidenceOpening = 0;
+    let unattributedOpening = 0;
+    for (const r of cashEvidence ?? []) {
+      const row = r as Record<string, unknown>;
+      if (String(row.as_of ?? "").slice(0, 10) > toDate) continue;
+      const amt = Number(row.amount) || 0;
+      const acctId = row.cash_account_id ? String(row.cash_account_id) : null;
+      if (acctId && (!input.accountId || input.accountId === acctId)) {
+        const acct = labelById.get(acctId);
+        if (!acct) continue;
+        if (input.accountKind && String(acct.account_kind) !== input.accountKind) continue;
+        // Only accounts in this view's opening set carry evidence;
+        // an inactive account's evidence is left out with its master
+        // opening (matching the previous active-only opening rule).
+        const inView = (openingAccts ?? []).some((a) => String((a as Record<string, unknown>).id) === acctId);
+        if (!inView) continue;
+        const g = groupFor(acctId, String(acct.account_kind));
+        g.opening = roundMoney(g.opening + amt);
+        evidenceOpening = roundMoney(evidenceOpening + amt);
+      } else if (!acctId && !input.accountId && !input.accountKind) {
+        unattributedOpening = roundMoney(unattributedOpening + amt);
       }
     }
+    // Prior movements (before `from`) belong in each group's opening.
+    let priorQ = db.from("cash_ledger").select("debit, credit, cash_account_id, account").lt("date", input.from);
+    if (input.accountId) priorQ = priorQ.eq("cash_account_id", input.accountId);
+    else if (input.accountKind) priorQ = priorQ.eq("account", input.accountKind);
+    const { data: prior } = await priorQ;
+    for (const r of prior ?? []) {
+      const row = r as Record<string, unknown>;
+      const g = groupFor(row.cash_account_id ? String(row.cash_account_id) : null, String(row.account));
+      g.opening = roundMoney(g.opening + (Number(row.debit) || 0) - (Number(row.credit) || 0));
+    }
     let q = db.from("cash_ledger").select("*")
-      .gte("date", input.from).lte("date", input.to)
+      .gte("date", input.from).lt("date", toExclusive)
       .order("date", { ascending: true }).order("created_at", { ascending: true });
     if (input.accountId) q = q.eq("cash_account_id", input.accountId);
     else if (input.accountKind) q = q.eq("account", input.accountKind);
@@ -1691,26 +1952,47 @@ export async function getDaybook(input: {
     let payments = 0;
     let transfersIn = 0;
     let transfersOut = 0;
-    let running = opening;
+    const runningByGroup = new Map<string, number>();
+    for (const g of groups.values()) runningByGroup.set(g.key, g.opening);
     const entries = (rows ?? []).map((r) => {
-      const debit = Number(r.debit) || 0;
-      const credit = Number(r.credit) || 0;
+      const row = r as Record<string, unknown>;
+      const debit = Number(row.debit) || 0;
+      const credit = Number(row.credit) || 0;
       receipts = roundMoney(receipts + debit);
       payments = roundMoney(payments + credit);
-      if (r.voucher_type === "transfer") {
+      if (row.voucher_type === "transfer") {
         transfersIn = roundMoney(transfersIn + debit);
         transfersOut = roundMoney(transfersOut + credit);
       }
-      running = cashRunningBalance(running, debit, credit);
-      return { ...r, running_balance: running };
+      const g = groupFor(row.cash_account_id ? String(row.cash_account_id) : null, String(row.account));
+      const running = cashRunningBalance(runningByGroup.get(g.key) ?? g.opening, debit, credit);
+      runningByGroup.set(g.key, running);
+      return {
+        ...row,
+        running_balance: running,
+        account_balance: running,
+        account_label: g.cashAccountId ? `${g.code} — ${g.name}` : g.name,
+      };
     });
+    const balances = [...groups.values()]
+      .filter((g) => groups.has(g.key) && (runningByGroup.has(g.key) || (openingAccts ?? []).some((a) => String((a as Record<string, unknown>).id) === g.cashAccountId)))
+      .map((g) => ({
+        cashAccountId: g.cashAccountId,
+        code: g.code,
+        name: g.name,
+        accountKind: g.accountKind,
+        opening: g.opening,
+        closing: runningByGroup.get(g.key) ?? g.opening,
+      }));
+    const groupOpening = [...groups.values()].reduce((s, g) => roundMoney(s + g.opening), 0);
+    const opening = roundMoney(groupOpening + unattributedOpening);
     const closing = daybookClosing(opening, receipts, payments);
     return {
       success: true,
       data: {
         account: accountLabel, from: input.from, to: input.to,
         opening, receipts, payments, transfersIn, transfersOut,
-        closing, entries,
+        closing, entries, balances, evidenceOpening, unattributedOpening,
       },
     };
   } catch (err) {
@@ -1732,18 +2014,17 @@ export async function getPartyStatement(input: {
   try {
     const { data: party } = await db.from("parties").select("*").eq("id", input.partyId).maybeSingle();
     if (!party) return fail("Party not found.");
-    const signedOpening = party.balance_type === "payable"
-      ? -roundMoney(Number(party.opening_balance) || 0)
-      : roundMoney(Number(party.opening_balance) || 0);
+    const masterOpening = signedPartyOpening(Number(party.opening_balance) || 0, party.balance_type);
+    const evidence = await partyEvidenceOpening(db, input.partyId, input.to, party.balance_type);
     const { data: prior } = await db.from("party_ledger").select("debit, credit")
       .eq("party_id", input.partyId).lt("date", input.from);
-    let opening = signedOpening;
+    let opening = roundMoney(masterOpening + evidence.total);
     for (const r of prior ?? []) {
       opening = roundMoney(opening + (Number(r.debit) || 0) - (Number(r.credit) || 0));
     }
     const { data: rows, error: qError } = await db.from("party_ledger").select("*")
       .eq("party_id", input.partyId)
-      .gte("date", input.from).lte("date", input.to)
+      .gte("date", input.from).lt("date", exclusiveToBound(input.to))
       .order("date", { ascending: true }).order("created_at", { ascending: true });
     if (qError) return fail(qError.message);
     let charges = 0;
@@ -1761,6 +2042,7 @@ export async function getPartyStatement(input: {
       success: true,
       data: {
         party, from: input.from, to: input.to, opening,
+        masterOpening, evidenceOpening: evidence.total,
         charges, settlements, closing: running, entries,
         // Sign convention: closing > 0 = receivable, < 0 = payable.
         closingKind: running > 0 ? "receivable" : running < 0 ? "payable" : "settled",
@@ -1803,7 +2085,7 @@ export async function getPL(input: {
   try {
     const warnings: string[] = [];
     const { data: invoices, error: iError } = await db.from("customer_invoices").select("source_type, total_amount")
-      .eq("status", "posted").gte("date", input.from).lte("date", input.to);
+      .eq("status", "posted").gte("date", input.from).lt("date", exclusiveToBound(input.to));
     if (iError) return fail(iError.message);
     let serviceRevenue = 0;
     let productSales = 0;
@@ -1815,12 +2097,12 @@ export async function getPL(input: {
       else otherRevenue = roundMoney(otherRevenue + amt);
     }
     const { data: expenses } = await db.from("expenses").select("amount, category_name")
-      .eq("status", "posted").gte("date", input.from).lte("date", input.to);
+      .eq("status", "posted").gte("date", input.from).lt("date", exclusiveToBound(input.to));
     let operatingExpenses = 0;
     for (const e of expenses ?? []) operatingExpenses = roundMoney(operatingExpenses + (Number(e.amount) || 0));
     const { data: payroll } = await db.from("payroll_periods").select("net_payable")
       .in("status", ["approved", "partially_paid", "paid"])
-      .gte("period_start", input.from).lte("period_start", input.to);
+      .gte("period_start", input.from).lt("period_start", exclusiveToBound(input.to));
     let payrollCost = 0;
     for (const p of payroll ?? []) payrollCost = roundMoney(payrollCost + (Number(p.net_payable) || 0));
     // Packaging: consumed-bag cost from bardana consumption rows only.
@@ -1830,7 +2112,7 @@ export async function getPL(input: {
       packagingCost = roundMoney(input.packagingCostAmount);
     } else {
       const { data: consumed } = await db.from("bardana_ledger").select("out_qty, total_cost, voucher_type")
-        .gte("date", input.from).lte("date", input.to);
+        .gte("date", input.from).lt("date", exclusiveToBound(input.to));
       let cost = 0;
       let bagsOut = 0;
       for (const r of consumed ?? []) {
