@@ -9,7 +9,7 @@ import {
   CheckCircle2,
   Package,
 } from "lucide-react"
-import { listPurchases, createPurchase, postPurchase, reversePurchase, listPurchaseReturns, createPurchaseReturn, allocatePayment } from "@/app/actions/finance"
+import { listPurchases, createPurchase, postPurchase, reversePurchase, listPurchaseReturns, createPurchaseReturn, postPurchaseReturn, allocatePayment, listCashAccounts } from "@/app/actions/finance"
 import { listParties, listGodowns, listProducts } from "@/app/actions/masters"
 import { PurchaseVoucher, Party, Godown, Product } from "@/lib/types/database"
 import { formatCurrency, formatWeight, formatDate } from "@/lib/utils"
@@ -48,6 +48,13 @@ export default function PurchasesPage() {
   const [retPrice, setRetPrice] = React.useState<number>(0)
   const [retReason, setRetReason] = React.useState("")
   const [retPending, setRetPending] = React.useState(false)
+  const [retPostPending, setRetPostPending] = React.useState<string | null>(null)
+  const [cashAccounts, setCashAccounts] = React.useState<any[]>([])
+  const [payCashAccountId, setPayCashAccountId] = React.useState("")
+  const [payAccountKind, setPayAccountKind] = React.useState<"cash" | "bank" | "online">("cash")
+  const [payPurchaseId, setPayPurchaseId] = React.useState("")
+  const [payAmount, setPayAmount] = React.useState<number>(0)
+  const [payPending, setPayPending] = React.useState(false)
   const purchaseGuard = React.useRef(false)
   const [vendorId, setVendorId] = React.useState("")
   const [godownId, setGodownId] = React.useState("")
@@ -61,8 +68,9 @@ export default function PurchasesPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [pu, pa, g, pr, re] = await Promise.all([listPurchases(), listParties(), listGodowns(), listProducts(), listPurchaseReturns()])
-      const failed = [pu, pa, g, pr, re].find((x) => !x.success)
+      const [pu, pa, g, pr, re, ca] = await Promise.all([listPurchases(), listParties(), listGodowns(), listProducts(), listPurchaseReturns(), listCashAccounts()])
+      const failed = [pu, pa, g, pr, re, ca].find((x) => !x.success)
+      setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
       if (failed) setFormError(failed.error ?? "Could not load purchase data.")
       const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
       const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
@@ -90,10 +98,14 @@ export default function PurchasesPage() {
   React.useEffect(() => { loadData() }, [loadData])
 
   React.useEffect(() => {
+    if (cashAccounts.length > 0 && !payCashAccountId) {
+      const first = cashAccounts.find((a) => a.account_kind === payAccountKind) ?? cashAccounts[0]
+      if (first) { setPayCashAccountId(first.id); setPayAccountKind(first.account_kind) }
+    }
     if (vendors.length > 0 && !vendorId) setVendorId(vendors[0].id)
     if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
     if (products.length > 0 && !productId) setProductId(products[0].id)
-  }, [vendors, godowns, products, vendorId, godownId, productId])
+  }, [vendors, godowns, products, vendorId, godownId, productId, cashAccounts, payCashAccountId, payAccountKind])
 
   const totalAmount = quantity * unitPrice
   const balanceAmount = totalAmount - paidAmount
@@ -109,6 +121,7 @@ export default function PurchasesPage() {
     if (!isPositive(quantity)) return setFormError("Quantity must be greater than zero.")
     if (!isPositive(unitPrice)) return setFormError("Unit price must be greater than zero.")
     if (paidAmount < 0) return setFormError("Paid amount cannot be negative.")
+    if (paidAmount > 0 && !payCashAccountId) return setFormError("Select a cash account for the payment at purchase. Create one on the Daybook page first if none exists.")
     if (paidAmount > totalAmount) return setFormError(`Paid amount (${formatCurrency(paidAmount)}) exceeds the invoice total (${formatCurrency(totalAmount)}). A payment is allocated to a specific invoice and cannot overpay it.`)
     setFormError("")
     const selectedVendor = vendors.find((v) => v.id === vendorId)
@@ -167,16 +180,22 @@ export default function PurchasesPage() {
         return
       }
       let payNote = ""
+      let payOk = false
       if (paidAmount > 0) {
         const pay = await allocatePayment({
-          vendorId, account: "cash", amount: paidAmount, settlementKind: "purchase",
+          vendorId, cashAccountId: payCashAccountId, account: payAccountKind, amount: paidAmount, settlementKind: "purchase",
           clientToken: `vendorpay-${Date.now()}`,
           allocations: [{ targetType: "purchase", targetId: (created.data as any).id, amount: paidAmount }],
         })
-        payNote = pay.success ? ` Paid ${formatCurrency(paidAmount)} allocated to it.` : ` Payment of ${formatCurrency(paidAmount)} could not be allocated: ${pay.error ?? "unknown error"} — record it as a vendor payment separately.`
+        payOk = pay.success
+        payNote = pay.success ? ` Paid ${formatCurrency(paidAmount)} allocated to it.` : ` Payment of ${formatCurrency(paidAmount)} could not be allocated: ${pay.error ?? "unknown error"} — pay it later from the Pay section below.`
       }
       const row: any = posted.data ?? created.data
-      setFormNotice(`${row.purchase_no ?? draftPurchase.purchase_no} posted — payable of ${formatCurrency(row.balance_amount ?? draftPurchase.balance_amount)} added to ${draftPurchase.vendor_name || "the vendor"}.${payNote}`)
+      // The notice reads the post-payment balance: the posted row still
+      // shows the pre-payment balance, so use the draft's balance
+      // (total − paid) once the payment has landed.
+      const balanceAfter = payOk ? draftPurchase.balance_amount : (row.balance_amount ?? draftPurchase.balance_amount)
+      setFormNotice(`${row.purchase_no ?? draftPurchase.purchase_no} posted — remaining balance ${formatCurrency(balanceAfter)} owed to ${draftPurchase.vendor_name || "the vendor"}.${payNote}`)
       setShowConfirm(false)
       setIsModalOpen(false)
       setDraftPurchase(null)
@@ -205,11 +224,52 @@ export default function PurchasesPage() {
         setFormError(res.error ?? "Could not record the purchase return.")
         return
       }
-      setFormNotice("Purchase return recorded against the posted purchase.")
+      // B6: a return only takes effect when posted (stock out, vendor
+      // credit, purchase balance). Post it now; if posting fails the
+      // return stays a draft and the notice says so plainly.
+      const createdReturn: any = res.data
+      const postedReturn = await postPurchaseReturn(createdReturn.id)
+      if (!postedReturn.success) {
+        setFormNotice(`Purchase return ${createdReturn.return_no ?? ""} saved as a draft awaiting posting — posting failed: ${postedReturn.error ?? "unknown error"}. Post it from the draft returns list below.`)
+      } else {
+        setFormNotice(`Purchase return ${(postedReturn.data as any)?.return_no ?? createdReturn.return_no ?? ""} posted — stock out and vendor credit applied against ${purchase.purchase_no}.`)
+      }
       await loadData()
     } finally {
       setRetPending(false)
     }
+  }
+
+  const handlePostDraftReturn = async (returnId: string) => {
+    if (retPostPending) return
+    setRetPostPending(returnId)
+    try {
+      const res = await postPurchaseReturn(returnId)
+      if (!res.success) { setFormError(res.error ?? "Could not post the purchase return."); return }
+      setFormNotice(`Purchase return ${(res.data as any)?.return_no ?? ""} posted — stock out and vendor credit applied.`)
+      await loadData()
+    } finally { setRetPostPending(null) }
+  }
+
+  const handlePayPurchase = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (payPending) return
+    const purchase = purchases.find((x) => x.id === payPurchaseId)
+    if (!purchase || purchase.status !== "posted") return setFormError("Select a posted purchase to pay.")
+    if (!(payAmount > 0)) return setFormError("Payment amount must be greater than zero.")
+    if (payAmount > Number(purchase.balance_amount)) return setFormError(`Payment (${formatCurrency(payAmount)}) exceeds the purchase balance (${formatCurrency(Number(purchase.balance_amount))}).`)
+    if (!payCashAccountId) return setFormError("Select a cash account for this payment.")
+    setPayPending(true)
+    try {
+      const res = await allocatePayment({
+        vendorId: purchase.vendor_id, cashAccountId: payCashAccountId, account: payAccountKind,
+        amount: payAmount, settlementKind: "purchase", clientToken: `vendorpay-${Date.now()}`,
+        allocations: [{ targetType: "purchase", targetId: purchase.id, amount: payAmount }],
+      })
+      if (!res.success) { setFormError(res.error ?? "Could not record the payment."); return }
+      setFormNotice(`Paid ${formatCurrency(payAmount)} against ${purchase.purchase_no}. Remaining balance: ${formatCurrency(Number(purchase.balance_amount) - payAmount)}.`)
+      await loadData()
+    } finally { setPayPending(false) }
   }
 
   // Spec §1.1: reversal never deletes. The invoice stays visible as
@@ -318,6 +378,16 @@ export default function PurchasesPage() {
                     </span>
                   </td>
                   <td className="py-3 text-center">
+                    {p.status === "posted" && Number(p.balance_amount) > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => { setPayPurchaseId(p.id); setPayAmount(Number(p.balance_amount)) }}
+                        className="px-2 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer"
+                        title="Pay this posted purchase now"
+                      >
+                        Pay
+                      </button>
+                    )}
                     {p.status === "posted" && (
                       <button
                         type="button"
@@ -335,6 +405,18 @@ export default function PurchasesPage() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="expensive-card p-5">
+        <h2 className="text-sm font-bold text-foreground mb-1">Pay a posted purchase</h2>
+        <p className="text-xs text-muted-foreground mb-4">Pay a posted purchase later, in full or in part. The payment leaves the selected cash account and settles only that vendor&apos;s purchase.</p>
+        <form onSubmit={handlePayPurchase} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          <div><label className="block font-medium text-foreground mb-1">Posted purchase *</label><select value={payPurchaseId} onChange={(e) => { setPayPurchaseId(e.target.value); const pu = purchases.find((x) => x.id === e.target.value); if (pu) setPayAmount(Number(pu.balance_amount)) }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select purchase</option>{purchases.filter((x) => x.status === "posted" && Number(x.balance_amount) > 0).map((x) => (<option key={x.id} value={x.id}>{x.purchase_no} — balance {formatCurrency(Number(x.balance_amount))}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1">Payment amount *</label><input type="number" value={payAmount} onChange={(e) => setPayAmount(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1">Paid from *</label><select value={payAccountKind} onChange={(e) => { const k = e.target.value as "cash" | "bank" | "online"; setPayAccountKind(k); const first = cashAccounts.find((a) => a.account_kind === k); setPayCashAccountId(first ? first.id : "") }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="cash">Cash</option><option value="bank">Bank</option><option value="online">Online</option></select></div>
+          <div><label className="block font-medium text-foreground mb-1">Cash account *</label><select value={payCashAccountId} onChange={(e) => setPayCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.filter((a) => a.account_kind === payAccountKind).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}</select>{cashAccounts.filter((a) => a.account_kind === payAccountKind).length === 0 && (<p className="mt-1 text-[11px] text-muted-foreground">No {payAccountKind} account yet — create one on the Daybook page.</p>)}</div>
+          <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={payPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{payPending ? "Paying…" : "Pay purchase"}</button></div>
+        </form>
       </div>
 
       {/* Creation Modal */}
@@ -455,6 +537,26 @@ export default function PurchasesPage() {
                   />
                 </div>
               </div>
+              {paidAmount > 0 && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-medium text-foreground mb-1">Payment account kind</label>
+                    <select value={payAccountKind} onChange={(e) => { const k = e.target.value as "cash" | "bank" | "online"; setPayAccountKind(k); const first = cashAccounts.find((a) => a.account_kind === k); setPayCashAccountId(first ? first.id : "") }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                      <option value="cash">Cash</option>
+                      <option value="bank">Bank</option>
+                      <option value="online">Online</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block font-medium text-foreground mb-1">Cash account for this payment *</label>
+                    <select value={payCashAccountId} onChange={(e) => setPayCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                      <option value="">Select account</option>
+                      {cashAccounts.filter((a) => a.account_kind === payAccountKind).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}
+                    </select>
+                    {cashAccounts.filter((a) => a.account_kind === payAccountKind).length === 0 && (<p className="mt-1 text-[11px] text-muted-foreground">No {payAccountKind} account yet — create one on the Daybook page.</p>)}
+                  </div>
+                </div>
+              )}
 
               <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 flex justify-between items-center">
                 <div>
@@ -499,7 +601,19 @@ export default function PurchasesPage() {
       />
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Purchase Returns</h2>
-        <p className="text-xs text-muted-foreground mb-4">Returns need a posted purchase and a reason, and return the first line of the purchase. {returns.length} return(s) on record.</p>
+        <p className="text-xs text-muted-foreground mb-4">Returns need a posted purchase and a reason, and return the first line of the purchase. A return takes effect only when posted: stock out, vendor credit and purchase balance all update on posting. {returns.length} return(s) on record.</p>
+        {returns.filter((r: any) => r.status === "draft").length > 0 && (
+          <div className="mb-4 space-y-2">
+            <p className="text-xs font-semibold text-foreground">Draft returns awaiting posting</p>
+            {returns.filter((r: any) => r.status === "draft").map((r: any) => (
+              <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs">
+                <span className="font-mono font-bold">{r.return_no}</span>
+                <span className="text-muted-foreground">{formatCurrency(Number(r.total_amount || 0))} — draft only, nothing has moved yet</span>
+                <button type="button" disabled={retPostPending === r.id} onClick={() => handlePostDraftReturn(r.id)} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{retPostPending === r.id ? "Posting…" : "Post return"}</button>
+              </div>
+            ))}
+          </div>
+        )}
         <form onSubmit={handlePurchaseReturn} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
           <div><label className="block font-medium text-foreground mb-1">Posted purchase *</label><select value={retPurchaseId} onChange={(e) => setRetPurchaseId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select purchase</option>{purchases.filter((x) => x.status === "posted").map((x) => (<option key={x.id} value={x.id}>{x.purchase_no}</option>))}</select></div>
           <div><label className="block font-medium text-foreground mb-1">Return quantity *</label><input type="number" value={retQty} onChange={(e) => setRetQty(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
