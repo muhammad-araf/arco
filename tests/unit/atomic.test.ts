@@ -123,10 +123,12 @@ describe("callAtomicStockTransition", () => {
   };
 
   it("passes the voucher, lines, and token through to the rpc", async () => {
-    let seen: { fn: string; args: Record<string, unknown> } | null = null;
+    const seen: { current: { fn: string; args: Record<string, unknown> } | null } = {
+      current: null,
+    };
     const client: RpcCapable = {
       rpc: async (fn, args) => {
-        seen = { fn, args };
+        seen.current = { fn, args };
         return {
           data: { outcome: "transitioned", status: "posted", voucher: { id: "v-1" } },
           error: null,
@@ -135,8 +137,8 @@ describe("callAtomicStockTransition", () => {
     };
     const res = await callAtomicStockTransition(client, baseArgs);
     expect(res.ok).toBe(true);
-    expect(seen?.fn).toBe("atomic_stock_transition");
-    const args = seen?.args as Record<string, unknown>;
+    expect(seen.current?.fn).toBe("atomic_stock_transition");
+    const args = seen.current?.args as Record<string, unknown>;
     expect(args.p_voucher_table).toBe("incoming_goods");
     expect(args.p_client_token).toBe("inward:post-v-1");
     expect(args.p_lines).toEqual([

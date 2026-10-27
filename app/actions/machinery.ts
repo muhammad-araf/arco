@@ -6,11 +6,11 @@ import { requireRole, requireSignedIn, type Actor } from "./auth";
 import { MACHINERY_WRITE } from "./auth-helpers";
 import {
   roundWeight,
-  ledgerRunningBalance,
   stockBalanceFromRows,
   machineryCharge,
 } from "@/lib/calc";
 import type { RateBasis } from "@/lib/types/database";
+import { callAtomicStockTransition } from "@/lib/atomic";
 
 /**
  * Machinery / service-job server actions (spec §7).
@@ -123,22 +123,6 @@ async function checkIdempotency(supabase: Db, scope: string, clientToken?: strin
   return null;
 }
 
-async function storeIdempotency(
-  supabase: Db,
-  scope: string,
-  clientToken: string | undefined,
-  voucherType: string,
-  voucherId: string,
-  voucherNo: string,
-  result: unknown,
-): Promise<void> {
-  if (!clientToken) return;
-  await supabase.from("idempotency_keys").upsert(
-    { client_token: clientToken, scope, voucher_type: voucherType, voucher_id: voucherId, voucher_no: voucherNo, result },
-    { onConflict: "client_token" },
-  );
-}
-
 async function stockBalance(supabase: Db, godownId: string, productId: string, partyId: string | null): Promise<number> {
   let query = supabase
     .from("stock_ledger")
@@ -150,40 +134,6 @@ async function stockBalance(supabase: Db, godownId: string, productId: string, p
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   return stockBalanceFromRows((data ?? []) as { inward_qty: number; outward_qty: number }[]);
-}
-
-async function appendLedger(
-  supabase: Db,
-  row: {
-    voucher_type: string;
-    voucher_id: string;
-    voucher_no: string;
-    godown_id: string;
-    product_id: string;
-    party_id: string | null;
-    inward_qty: number;
-    outward_qty: number;
-    notes?: string;
-  },
-  by: string,
-): Promise<void> {
-  const prev = await stockBalance(supabase, row.godown_id, row.product_id, row.party_id);
-  const running = ledgerRunningBalance(prev, row.inward_qty, row.outward_qty);
-  const { error } = await supabase.from("stock_ledger").insert({
-    voucher_type: row.voucher_type,
-    voucher_id: row.voucher_id,
-    voucher_no: row.voucher_no,
-    godown_id: row.godown_id,
-    product_id: row.product_id,
-    party_id: row.party_id,
-    inward_qty: row.inward_qty,
-    outward_qty: row.outward_qty,
-    unit: "kg",
-    running_balance: running,
-    notes: row.notes ?? null,
-    created_by: by,
-  });
-  if (error) throw new Error(error.message);
 }
 
 /** Billable quantity for machineryCharge: bag count on per_bag, kg otherwise. */
@@ -369,7 +319,8 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
     if (replay) return replay;
     const { data: job, error } = await supabase.from("machinery_jobs").select("*").eq("id", id).single();
     if (error) return fail(error.message);
-    if (job.status === "posted") return fail(`Job ${job.job_no} is already posted`);
+    // Already posted is a successful replay, not a second posting.
+    if (job.status === "posted") return ok(job);
     if (job.status !== "draft") return fail(`Only a draft can be posted (status: ${job.status})`);
     if (!job.godown_id) return fail(`Job ${job.job_no} has no godown, so its stock cannot be posted`);
     // Charge is fixed at draft time (see header note). The stored
@@ -388,53 +339,53 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
         `Insufficient stock for job ${job.job_no}: product ${job.input_product_id} has ${available} kg available in this godown${ownerParty ? " for this owner" : ""}, job needs ${inputQty} kg`,
       );
     }
-    const by = gate.actor.userId;
-    await appendLedger(
-      supabase,
-      {
-        voucher_type: "machinery",
-        voucher_id: job.id,
-        voucher_no: job.job_no,
-        godown_id: job.godown_id,
-        product_id: job.input_product_id,
-        party_id: ownerParty,
-        inward_qty: 0,
-        outward_qty: inputQty,
-      },
-      by,
-    );
-    if (job.output_product_id && outputQty > 0) {
-      await appendLedger(
-        supabase,
-        {
-          voucher_type: "machinery",
-          voucher_id: job.id,
-          voucher_no: job.job_no,
-          godown_id: job.godown_id,
-          product_id: job.output_product_id,
-          // Output of a customer-owned job belongs to the owner, not
-          // the company — same party scope as the input.
-          party_id: ownerParty,
-          inward_qty: outputQty,
-          outward_qty: 0,
-        },
-        by,
-      );
-    }
+    // Atomic post (B4): input + output legs + flip + key in one
+    // transaction via atomic_stock_transition (see inward.ts).
     // Waste is recorded on the job header only; it is never stocked.
-    const { data: posted, error: uError } = await supabase
-      .from("machinery_jobs")
-      .update({ status: "posted", posted_at: new Date().toISOString() })
-      .eq("id", id)
-      .eq("status", "draft")
-      .select()
-      .single();
-    if (uError) return fail(uError.message);
+    const jobLines = [
+      {
+        lineNo: 0,
+        godownId: job.godown_id,
+        productId: job.input_product_id,
+        partyId: ownerParty,
+        inwardQty: 0,
+        outwardQty: inputQty,
+      },
+    ];
+    if (job.output_product_id && outputQty > 0) {
+      jobLines.push({
+        lineNo: 1,
+        godownId: job.godown_id,
+        productId: job.output_product_id,
+        // Output of a customer-owned job belongs to the owner, not
+        // the company — same party scope as the input.
+        partyId: ownerParty,
+        inwardQty: outputQty,
+        outwardQty: 0,
+      });
+    }
+    const transition = await callAtomicStockTransition(supabase, {
+      voucherTable: "machinery_jobs",
+      voucherId: id,
+      fromStatuses: ["draft"],
+      toStatus: "posted",
+      voucherType: "machinery",
+      voucherNo: job.job_no,
+      entryKind: "post",
+      lines: jobLines,
+      createdBy: gate.actor.userId,
+      clientToken: clientToken ?? null,
+      scope: "machinery:post",
+    });
+    if (!transition.ok) return fail(transition.error);
+    if (transition.result.outcome === "invalid") {
+      return fail(`Only a draft can be posted (status: ${transition.result.status})`);
+    }
+    const posted = transition.result.voucher as Record<string, unknown>;
     // No invoice and no receipt are created here: the service_charge
     // on this posted job is the charge record billing reads later
     // (createInvoice, sourceType "machinery_job", sourceId = job id).
     const result = { ...posted, service_charge: Number(posted.service_charge ?? 0) };
-    await storeIdempotency(supabase, "machinery:post", clientToken, "machinery", id, job.job_no, result);
     revalidateMachinery();
     return ok(result);
   } catch (e) {
@@ -454,6 +405,8 @@ export async function reverseJob(id: string, reason: string, clientToken?: strin
     if (replay) return replay;
     const { data: job, error } = await supabase.from("machinery_jobs").select("*").eq("id", id).single();
     if (error) return fail(error.message);
+    // Already reversed is a successful replay, not a second reversal.
+    if (job.status === "reversed") return ok(job);
     if (job.status !== "posted") {
       return fail(`Only a posted job can be reversed (status: ${job.status})`);
     }
@@ -471,49 +424,48 @@ export async function reverseJob(id: string, reason: string, clientToken?: strin
         );
       }
     }
-    const by = gate.actor.userId;
+    // Atomic reversal (B4): mirror legs + flip + key, one transaction.
+    const reverseLines = [];
     if (job.output_product_id && outputQty > 0) {
-      await appendLedger(
-        supabase,
-        {
-          voucher_type: "machinery",
-          voucher_id: job.id,
-          voucher_no: job.job_no,
-          godown_id: job.godown_id,
-          product_id: job.output_product_id,
-          party_id: ownerParty,
-          inward_qty: 0,
-          outward_qty: outputQty,
-          notes: `Reversal of ${job.job_no}: ${reason.trim()}`,
-        },
-        by,
-      );
-    }
-    await appendLedger(
-      supabase,
-      {
-        voucher_type: "machinery",
-        voucher_id: job.id,
-        voucher_no: job.job_no,
-        godown_id: job.godown_id,
-        product_id: job.input_product_id,
-        party_id: ownerParty,
-        inward_qty: inputQty,
-        outward_qty: 0,
+      reverseLines.push({
+        lineNo: 0,
+        godownId: job.godown_id,
+        productId: job.output_product_id,
+        partyId: ownerParty,
+        inwardQty: 0,
+        outwardQty: outputQty,
         notes: `Reversal of ${job.job_no}: ${reason.trim()}`,
-      },
-      by,
-    );
-    const { data: reversed, error: uError } = await supabase
-      .from("machinery_jobs")
-      .update({ status: "reversed", reversal_reason: reason.trim(), reversed_at: new Date().toISOString() })
-      .eq("id", id)
-      .eq("status", "posted")
-      .select()
-      .single();
-    if (uError) return fail(uError.message);
+      });
+    }
+    reverseLines.push({
+      lineNo: reverseLines.length,
+      godownId: job.godown_id,
+      productId: job.input_product_id,
+      partyId: ownerParty,
+      inwardQty: inputQty,
+      outwardQty: 0,
+      notes: `Reversal of ${job.job_no}: ${reason.trim()}`,
+    });
+    const transition = await callAtomicStockTransition(supabase, {
+      voucherTable: "machinery_jobs",
+      voucherId: id,
+      fromStatuses: ["posted"],
+      toStatus: "reversed",
+      voucherType: "machinery",
+      voucherNo: job.job_no,
+      entryKind: "reversal",
+      lines: reverseLines,
+      createdBy: gate.actor.userId,
+      clientToken: clientToken ?? null,
+      scope: "machinery:reverse",
+      reversalReason: reason.trim(),
+    });
+    if (!transition.ok) return fail(transition.error);
+    if (transition.result.outcome === "invalid") {
+      return fail(`Only a posted job can be reversed (status: ${transition.result.status})`);
+    }
+    const reversed = transition.result.voucher as Record<string, unknown>;
     const result = { ...reversed };
-    await storeIdempotency(supabase, "machinery:reverse", clientToken, "machinery", id, job.job_no, result);
     revalidateMachinery();
     return ok(result);
   } catch (e) {

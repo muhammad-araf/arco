@@ -5,7 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { requireRole, requireSignedIn, type Actor } from "./auth";
 import { STOCK_WRITE } from "./auth-helpers";
 import { logAudit } from "@/lib/audit";
-import { netWeight, roundMoney, roundWeight, ledgerRunningBalance, stockBalanceFromRows, aggregatePoolQuantities } from "@/lib/calc";
+import { netWeight, roundMoney, roundWeight, stockBalanceFromRows, aggregatePoolQuantities } from "@/lib/calc";
+import { callAtomicStockTransition } from "@/lib/atomic";
 
 /**
  * Inward (incoming goods) server actions.
@@ -94,29 +95,6 @@ async function checkIdempotency(
   return null;
 }
 
-async function storeIdempotency(
-  supabase: Db,
-  scope: string,
-  clientToken: string | undefined,
-  voucherType: string,
-  voucherId: string,
-  voucherNo: string,
-  result: unknown,
-): Promise<void> {
-  if (!clientToken) return;
-  await supabase.from("idempotency_keys").upsert(
-    {
-      client_token: clientToken,
-      scope,
-      voucher_type: voucherType,
-      voucher_id: voucherId,
-      voucher_no: voucherNo,
-      result,
-    },
-    { onConflict: "client_token" },
-  );
-}
-
 async function stockBalance(
   supabase: Db,
   godownId: string,
@@ -181,40 +159,6 @@ async function physicalBalance(
     (await stockBalance(supabase, godownId, productId, partyId)) +
       (await openingBalance(supabase, godownId, productId, partyId)),
   );
-}
-
-async function appendLedger(
-  supabase: Db,
-  row: {
-    voucher_type: string;
-    voucher_id: string;
-    voucher_no: string;
-    godown_id: string;
-    product_id: string;
-    party_id: string | null;
-    inward_qty: number;
-    outward_qty: number;
-    notes?: string;
-  },
-  by: string,
-): Promise<void> {
-  const prev = await stockBalance(supabase, row.godown_id, row.product_id, row.party_id);
-  const running = ledgerRunningBalance(prev, row.inward_qty, row.outward_qty);
-  const { error } = await supabase.from("stock_ledger").insert({
-    voucher_type: row.voucher_type,
-    voucher_id: row.voucher_id,
-    voucher_no: row.voucher_no,
-    godown_id: row.godown_id,
-    product_id: row.product_id,
-    party_id: row.party_id,
-    inward_qty: row.inward_qty,
-    outward_qty: row.outward_qty,
-    unit: "kg",
-    running_balance: running,
-    notes: row.notes ?? null,
-    created_by: by,
-  });
-  if (error) throw new Error(error.message);
 }
 
 // ---------------- Reads ----------------
@@ -383,10 +327,11 @@ export async function postInward(id: string, clientToken?: string): Promise<Acti
       .eq("id", id)
       .single();
     if (vError) return fail(vError.message);
-    if (voucher.status === "posted") return fail(`Inward ${voucher.voucher_no} is already posted`);
+    // Already posted is a successful replay, not an error: the post
+    // did happen, and re-posting must never write a second set of rows.
+    if (voucher.status === "posted") return ok(voucher);
     if (voucher.status !== "draft") return fail(`Only a draft can be posted (status: ${voucher.status})`);
 
-    const by = gate.actor.userId;
     // Owner tracking (stock_ledger.party_id = STOCK OWNER, not supplier):
     // company-owned inward -> party_id NULL; customer-owned -> owner party.
     const ledgerPartyId: string | null =
@@ -398,30 +343,36 @@ export async function postInward(id: string, clientToken?: string): Promise<Acti
       net_weight_kg: number;
     }[];
     if (!items.length) return fail("Cannot post an inward voucher with no items");
-    for (const item of items) {
-      await appendLedger(
-        supabase,
-        {
-          voucher_type: "inward",
-          voucher_id: voucher.id,
-          voucher_no: voucher.voucher_no,
-          godown_id: voucher.godown_id,
-          product_id: item.product_id,
-          party_id: ledgerPartyId,
-          inward_qty: roundWeight(item.net_weight_kg),
-          outward_qty: 0,
-        },
-        by,
-      );
+    // Atomic post (B4): the function locks the voucher row, inserts
+    // every ledger line, flips the status, and stores the idempotency
+    // key in ONE transaction. A concurrent post blocks on the lock
+    // and then replays ('already'); a crash rolls everything back,
+    // so a retry starts clean. Never fall back to a manual loop here.
+    const transition = await callAtomicStockTransition(supabase, {
+      voucherTable: "incoming_goods",
+      voucherId: id,
+      fromStatuses: ["draft"],
+      toStatus: "posted",
+      voucherType: "inward",
+      voucherNo: voucher.voucher_no,
+      entryKind: "post",
+      lines: items.map((item, i) => ({
+        lineNo: i,
+        godownId: voucher.godown_id,
+        productId: item.product_id,
+        partyId: ledgerPartyId,
+        inwardQty: roundWeight(item.net_weight_kg),
+        outwardQty: 0,
+      })),
+      createdBy: gate.actor.userId,
+      clientToken: clientToken ?? null,
+      scope: "inward:post",
+    });
+    if (!transition.ok) return fail(transition.error);
+    if (transition.result.outcome === "invalid") {
+      return fail(`Only a draft can be posted (status: ${transition.result.status})`);
     }
-    const { data: posted, error: uError } = await supabase
-      .from("incoming_goods")
-      .update({ status: "posted", posted_at: new Date().toISOString() })
-      .eq("id", id)
-      .eq("status", "draft")
-      .select()
-      .single();
-    if (uError) return fail(uError.message);
+    const posted = transition.result.voucher as Record<string, unknown>;
     const result = { ...posted, items };
     await logAudit(supabase, {
       action: "post",
@@ -433,7 +384,6 @@ export async function postInward(id: string, clientToken?: string): Promise<Acti
       userId: gate.actor.userId,
       userEmail: gate.actor.email,
     });
-    await storeIdempotency(supabase, "inward:post", clientToken, "inward", id, voucher.voucher_no, result);
     revalidateInward();
     return ok(result);
   } catch (e) {
@@ -462,6 +412,8 @@ export async function reverseInward(
       .eq("id", id)
       .single();
     if (vError) return fail(vError.message);
+    // Already reversed is a successful replay, not a second reversal.
+    if (voucher.status === "reversed") return ok(voucher);
     if (voucher.status !== "posted") {
       return fail(`Only a posted inward can be reversed (status: ${voucher.status})`);
     }
@@ -493,36 +445,35 @@ export async function reverseInward(
         );
       }
     }
-    const by = gate.actor.userId;
-    for (const item of items) {
-      await appendLedger(
-        supabase,
-        {
-          voucher_type: "inward",
-          voucher_id: voucher.id,
-          voucher_no: voucher.voucher_no,
-          godown_id: voucher.godown_id,
-          product_id: item.product_id,
-          party_id: ledgerPartyId,
-          inward_qty: 0,
-          outward_qty: roundWeight(item.net_weight_kg),
-          notes: `Reversal of ${voucher.voucher_no}: ${reason.trim()}`,
-        },
-        by,
-      );
+    // Atomic reversal (B4): mirror rows + status flip + idempotency
+    // key in one transaction via atomic_stock_transition (see post).
+    const transition = await callAtomicStockTransition(supabase, {
+      voucherTable: "incoming_goods",
+      voucherId: id,
+      fromStatuses: ["posted"],
+      toStatus: "reversed",
+      voucherType: "inward",
+      voucherNo: voucher.voucher_no,
+      entryKind: "reversal",
+      lines: items.map((item, i) => ({
+        lineNo: i,
+        godownId: voucher.godown_id,
+        productId: item.product_id,
+        partyId: ledgerPartyId,
+        inwardQty: 0,
+        outwardQty: roundWeight(item.net_weight_kg),
+        notes: `Reversal of ${voucher.voucher_no}: ${reason.trim()}`,
+      })),
+      createdBy: gate.actor.userId,
+      clientToken: clientToken ?? null,
+      scope: "inward:reverse",
+      reversalReason: reason.trim(),
+    });
+    if (!transition.ok) return fail(transition.error);
+    if (transition.result.outcome === "invalid") {
+      return fail(`Only a posted inward can be reversed (status: ${transition.result.status})`);
     }
-    const { data: reversed, error: uError } = await supabase
-      .from("incoming_goods")
-      .update({
-        status: "reversed",
-        reversal_reason: reason.trim(),
-        reversed_at: new Date().toISOString(),
-      })
-      .eq("id", id)
-      .eq("status", "posted")
-      .select()
-      .single();
-    if (uError) return fail(uError.message);
+    const reversed = transition.result.voucher as Record<string, unknown>;
     const result = { ...reversed, items };
     await logAudit(supabase, {
       action: "reverse",
@@ -535,7 +486,6 @@ export async function reverseInward(
       userId: gate.actor.userId,
       userEmail: gate.actor.email,
     });
-    await storeIdempotency(supabase, "inward:reverse", clientToken, "inward", id, voucher.voucher_no, result);
     revalidateInward();
     return ok(result);
   } catch (e) {

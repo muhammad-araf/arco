@@ -5,6 +5,8 @@ import { createClient } from "@/lib/supabase/server";
 import { requireRole, requireSignedIn, type Actor } from "./auth";
 import { STOCK_WRITE } from "./auth-helpers";
 import { logAudit } from "@/lib/audit";
+import { callAtomicStockTransition } from "@/lib/atomic";
+import { isUniqueViolation } from "@/lib/idempotency";
 import {
   roundWeight,
   ledgerRunningBalance,
@@ -25,8 +27,9 @@ import {
  *   (series "gatepass", prefix "GP"); a client-supplied pass number is
  *   never accepted, and a number is never reused — reversed/returned
  *   passes keep their number forever.
- * - Posting deducts stock exactly once (status guard + clientToken
- *   idempotency) and is blocked per line/godown by the stock guard:
+ * - Posting deducts stock exactly once (atomic_stock_transition:
+ *   one transaction, voucher-row lock, clientToken idempotency)
+ *   and is blocked per line/godown by the stock guard:
  *   no outward posting may drive any (godown, product, owner) balance
  *   negative. A line's partyId, when set, scopes the guard and the
  *   ledger row to that owner's stock (customer-owned dispatch); without
@@ -108,9 +111,12 @@ async function storeIdempotency(
   result: unknown,
 ): Promise<void> {
   if (!clientToken) return;
+  // The table's primary key is (client_token, scope): naming only
+  // client_token made Postgres reject this upsert, so stored tokens
+  // silently never landed and replays never hit (B4).
   await supabase.from("idempotency_keys").upsert(
     { client_token: clientToken, scope, voucher_type: voucherType, voucher_id: voucherId, voucher_no: voucherNo, result },
-    { onConflict: "client_token" },
+    { onConflict: "client_token,scope" },
   );
 }
 
@@ -159,6 +165,14 @@ async function physicalBalance(supabase: Db, godownId: string, productId: string
   );
 }
 
+/**
+ * Ledger writer for the paths the atomic function does NOT cover
+ * (gate-pass returns: the return records must land first, and the
+ * status flip depends on cumulative-return math). The row carries
+ * its (entry_kind, line_no) identity, and a unique-violation on that
+ * identity means this exact line is already written — skip it so a
+ * retry after a crash converges instead of failing on its own rows.
+ */
 async function appendLedger(
   supabase: Db,
   row: {
@@ -171,6 +185,8 @@ async function appendLedger(
     inward_qty: number;
     outward_qty: number;
     notes?: string;
+    entryKind: string;
+    lineNo: number;
   },
   by: string,
 ): Promise<void> {
@@ -189,7 +205,10 @@ async function appendLedger(
     running_balance: running,
     notes: row.notes ?? null,
     created_by: by,
+    entry_kind: row.entryKind,
+    line_no: row.lineNo,
   });
+  if (error && isUniqueViolation(error)) return;
   if (error) throw new Error(error.message);
 }
 
@@ -339,7 +358,8 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
       .eq("id", id)
       .single();
     if (error) return fail(error.message);
-    if (pass.status === "posted") return fail(`Gate pass ${pass.pass_no} is already posted`);
+    // Already posted is a successful replay, not a second posting.
+    if (pass.status === "posted") return ok(pass);
     if (pass.status !== "draft") return fail(`Only a draft can be posted (status: ${pass.status})`);
     const items = (pass.gate_pass_items ?? []) as {
       product_id: string;
@@ -368,31 +388,33 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
         );
       }
     }
-    const by = gate.actor.userId;
-    for (const item of items) {
-      await appendLedger(
-        supabase,
-        {
-          voucher_type: "gatepass",
-          voucher_id: pass.id,
-          voucher_no: pass.pass_no,
-          godown_id: pass.godown_id,
-          product_id: item.product_id,
-          party_id: item.party_id ?? null,
-          inward_qty: 0,
-          outward_qty: roundWeight(item.net_weight_kg),
-        },
-        by,
-      );
+    // Atomic post (B4): ledger lines + status flip + idempotency key
+    // in one transaction via atomic_stock_transition (see inward.ts).
+    const transition = await callAtomicStockTransition(supabase, {
+      voucherTable: "gate_passes",
+      voucherId: id,
+      fromStatuses: ["draft"],
+      toStatus: "posted",
+      voucherType: "gatepass",
+      voucherNo: pass.pass_no,
+      entryKind: "post",
+      lines: items.map((item, i) => ({
+        lineNo: i,
+        godownId: pass.godown_id,
+        productId: item.product_id,
+        partyId: item.party_id ?? null,
+        inwardQty: 0,
+        outwardQty: roundWeight(item.net_weight_kg),
+      })),
+      createdBy: gate.actor.userId,
+      clientToken: clientToken ?? null,
+      scope: "gatepass:post",
+    });
+    if (!transition.ok) return fail(transition.error);
+    if (transition.result.outcome === "invalid") {
+      return fail(`Only a draft can be posted (status: ${transition.result.status})`);
     }
-    const { data: posted, error: uError } = await supabase
-      .from("gate_passes")
-      .update({ status: "posted", dispatched_at: new Date().toISOString() })
-      .eq("id", id)
-      .eq("status", "draft")
-      .select()
-      .single();
-    if (uError) return fail(uError.message);
+    const posted = transition.result.voucher as Record<string, unknown>;
     const result = { ...posted, items };
     await logAudit(supabase, {
       action: "post",
@@ -404,7 +426,6 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
       userId: gate.actor.userId,
       userEmail: gate.actor.email,
     });
-    await storeIdempotency(supabase, "gatepass:post", clientToken, "gatepass", id, pass.pass_no, result);
     revalidateGatepass();
     return ok(result);
   } catch (e) {
@@ -431,6 +452,8 @@ export async function reverseGatePass(id: string, reason: string, clientToken?: 
     if (pass.status === "returned") {
       return fail(`Gate pass ${pass.pass_no} is already fully returned — its stock is already back, so a reversal would double-credit it`);
     }
+    // Already reversed is a successful replay, not a second reversal.
+    if (pass.status === "reversed") return ok(pass);
     if (pass.status !== "posted" && pass.status !== "partially_returned") {
       return fail(`Only a posted or partially returned gate pass can be reversed (status: ${pass.status})`);
     }
@@ -455,32 +478,35 @@ export async function reverseGatePass(id: string, reason: string, clientToken?: 
       (r) => ({ productId: r.product_id, partyId: r.party_id ?? null, qtyKg: roundWeight(r.qty_kg) }),
     );
     const toRestore = pass.status === "partially_returned" ? remainingReturnable(dispatchedPools, priorPools) : dispatchedPools;
-    const by = gate.actor.userId;
-    for (const item of toRestore) {
-      await appendLedger(
-        supabase,
-        {
-          voucher_type: "gatepass",
-          voucher_id: pass.id,
-          voucher_no: pass.pass_no,
-          godown_id: pass.godown_id,
-          product_id: item.productId,
-          party_id: item.partyId,
-          inward_qty: roundWeight(item.qtyKg),
-          outward_qty: 0,
-          notes: `Reversal of ${pass.pass_no}: ${reason.trim()}`,
-        },
-        by,
-      );
+    // Atomic reversal (B4): mirror rows + status flip + idempotency
+    // key in one transaction via atomic_stock_transition.
+    const transition = await callAtomicStockTransition(supabase, {
+      voucherTable: "gate_passes",
+      voucherId: id,
+      fromStatuses: ["posted", "partially_returned"],
+      toStatus: "reversed",
+      voucherType: "gatepass",
+      voucherNo: pass.pass_no,
+      entryKind: "reversal",
+      lines: toRestore.map((item, i) => ({
+        lineNo: i,
+        godownId: pass.godown_id,
+        productId: item.productId,
+        partyId: item.partyId,
+        inwardQty: roundWeight(item.qtyKg),
+        outwardQty: 0,
+        notes: `Reversal of ${pass.pass_no}: ${reason.trim()}`,
+      })),
+      createdBy: gate.actor.userId,
+      clientToken: clientToken ?? null,
+      scope: "gatepass:reverse",
+      reversalReason: reason.trim(),
+    });
+    if (!transition.ok) return fail(transition.error);
+    if (transition.result.outcome === "invalid") {
+      return fail(`Only a posted or partially returned gate pass can be reversed (status: ${transition.result.status})`);
     }
-    const { data: reversed, error: uError } = await supabase
-      .from("gate_passes")
-      .update({ status: "reversed", reversal_reason: reason.trim(), reversed_at: new Date().toISOString() })
-      .eq("id", id)
-      .in("status", ["posted", "partially_returned"])
-      .select()
-      .single();
-    if (uError) return fail(uError.message);
+    const reversed = transition.result.voucher as Record<string, unknown>;
     const result = { ...reversed, items };
     await logAudit(supabase, {
       action: "reverse",
@@ -493,7 +519,6 @@ export async function reverseGatePass(id: string, reason: string, clientToken?: 
       userId: gate.actor.userId,
       userEmail: gate.actor.email,
     });
-    await storeIdempotency(supabase, "gatepass:reverse", clientToken, "gatepass", id, pass.pass_no, result);
     revalidateGatepass();
     return ok(result);
   } catch (e) {
@@ -595,8 +620,22 @@ export async function returnGatePass(
       .select("id");
     if (insertError) return fail(insertError.message);
     const by = gate.actor.userId;
+    // Return-line identity: a pass can be returned more than once, so
+    // line numbers continue from the count of return rows already on
+    // the ledger — a second return never reuses a first return's
+    // (entry_kind, line_no). Two returns racing on the same base
+    // collide on the unique index instead of duplicating: the loser
+    // fails, and its retry recomputes the base and succeeds.
+    const { data: priorReturnLedger } = await supabase
+      .from("stock_ledger")
+      .select("id")
+      .eq("voucher_type", "gatepass")
+      .eq("voucher_id", pass.id)
+      .eq("entry_kind", "return");
+    const returnLineBase = (priorReturnLedger ?? []).length;
     try {
-      for (const ret of returns) {
+      for (let i = 0; i < returns.length; i++) {
+        const ret = returns[i];
         await appendLedger(
           supabase,
           {
@@ -609,6 +648,8 @@ export async function returnGatePass(
             inward_qty: roundWeight(ret.qtyKg),
             outward_qty: 0,
             notes: `Return of ${pass.pass_no}: ${input.reason.trim()}`,
+            entryKind: "return",
+            lineNo: returnLineBase + i,
           },
           by,
         );
