@@ -407,7 +407,7 @@ export default function ProductionPage() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full text-left border-collapse text-xs min-w-[720px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Batch No</th>
@@ -961,7 +961,7 @@ export default function ProductionPage() {
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Seed Recipes</h2>
         <p className="text-xs text-muted-foreground mb-4">Saving with an existing code creates a new version. Old versions are kept, never overwritten.</p>
-        <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Code</th><th className="pb-2">Name</th><th className="pb-2">Version</th><th className="pb-2">Expected yield</th></tr></thead>
+        <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Code</th><th className="pb-2">Name</th><th className="pb-2">Version</th><th className="pb-2">Expected yield</th></tr></thead>
           <tbody className="divide-y divide-border">
             {recipes.length === 0 && <tr><td colSpan={4} className="py-4 text-muted-foreground">No recipes yet — create the first one below.</td></tr>}
             {recipes.map((r: any) => (<tr key={r.id}><td className="py-2 font-mono">{r.code}</td><td className="py-2 font-semibold">{r.name}</td><td className="py-2">{r.version}</td><td className="py-2">{r.expected_yield_pct ?? "—"}%</td></tr>))}

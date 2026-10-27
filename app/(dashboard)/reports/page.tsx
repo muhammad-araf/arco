@@ -352,7 +352,7 @@ export default function ReportsPage() {
       {selectedReport === "stock" && (
         <div className="expensive-card p-5">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Product</th>
@@ -400,7 +400,7 @@ export default function ReportsPage() {
       {selectedReport === "bardana" && (
         <div className="expensive-card p-5">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Bardana / Bag Type</th>
@@ -440,7 +440,7 @@ export default function ReportsPage() {
       )}
       {selectedReport === "ledger" && (
         <div className="expensive-card p-5">
-          <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3">Type</th><th className="pb-3 text-right">Inward</th><th className="pb-3 text-right">Outward</th><th className="pb-3 text-right">Balance</th></tr></thead>
+          <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3">Type</th><th className="pb-3 text-right">Inward</th><th className="pb-3 text-right">Outward</th><th className="pb-3 text-right">Balance</th></tr></thead>
             <tbody className="divide-y divide-border">
               {ledgerRows.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No ledger rows in this period.</td></tr>}
               {ledgerRows.map((e: any) => (<tr key={e.id}><td className="py-2">{e.date?.slice(0, 10)}</td><td className="py-2 font-mono font-bold">{e.voucher_no}</td><td className="py-2">{e.voucher_type}</td><td className="py-2 text-right">{formatWeight(Number(e.inward_qty || 0))}</td><td className="py-2 text-right">{formatWeight(Number(e.outward_qty || 0))}</td><td className="py-2 text-right font-bold">{formatWeight(Number(e.running_balance || 0))}</td></tr>))}
@@ -471,7 +471,7 @@ export default function ReportsPage() {
                   rows={(stmt.entries ?? []).map((e: any) => ({ date: e.date?.slice(0, 10), voucherNo: e.voucher_no, type: e.entry_type, description: e.notes ?? "", debit: Number(e.debit || 0), credit: Number(e.credit || 0), balance: Number(e.running_balance || 0) }))}
                 />
               </div>
-              <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3 text-right">Debit</th><th className="pb-3 text-right">Credit</th><th className="pb-3 text-right">Balance</th></tr></thead>
+              <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3 text-right">Debit</th><th className="pb-3 text-right">Credit</th><th className="pb-3 text-right">Balance</th></tr></thead>
                 <tbody className="divide-y divide-border">
                   {(stmt.entries ?? []).map((e: any) => (<tr key={e.id}><td className="py-2">{e.date?.slice(0, 10)}</td><td className="py-2 font-mono">{e.voucher_no}</td><td className="py-2 text-right">{formatCurrency(Number(e.debit || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(e.credit || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.running_balance || 0))}</td></tr>))}
                 </tbody></table></div>

@@ -269,7 +269,7 @@ export default function PackingPage() {
           </h2>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full text-left border-collapse text-xs min-w-[640px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Bag / Bardana Type</th>
@@ -316,7 +316,7 @@ export default function PackingPage() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full text-left border-collapse text-xs min-w-[720px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Packing No</th>

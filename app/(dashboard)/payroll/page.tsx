@@ -406,7 +406,7 @@ export default function PayrollPage() {
           </div>
         )}
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full text-left border-collapse text-xs min-w-[720px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Code</th>
@@ -484,7 +484,7 @@ export default function PayrollPage() {
           <span className="text-xs text-muted-foreground font-mono">From recorded attendance, {attendanceDate ? `${attendanceDate.slice(0, 7)}` : ""}</span>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full text-left border-collapse text-xs min-w-[720px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Employee</th>
@@ -534,7 +534,7 @@ export default function PayrollPage() {
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Payroll Drafts (all months)</h2>
         <p className="text-xs text-muted-foreground mb-4">Drafts from every month, not just the current one. Approve a draft here, then pay it from the finalized list.</p>
-        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-center">Action</th></tr></thead>
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-center">Action</th></tr></thead>
           <tbody className="divide-y divide-border">
             {drafts.length === 0 && <tr><td colSpan={4} className="py-4 text-muted-foreground">No drafts — run a payroll below to create one.</td></tr>}
             {drafts.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? p.employee_id}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-center"><button type="button" onClick={() => handleApprove(p.id)} className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button></td></tr>))}
@@ -561,7 +561,7 @@ export default function PayrollPage() {
         {runWarnings.length > 0 && (
           <AlertBanner tone="warning" message={`Run warnings: ${runWarnings.join(" ")}`} />
         )}
-        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Gross</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Gross</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
             {periods.length === 0 && unpaid.length === 0 && <tr><td colSpan={7} className="py-4 text-muted-foreground">No payroll periods yet — run the first draft above.</td></tr>}
             {[...periods, ...unpaid.filter((u) => !periods.some((p) => p.id === u.id))].map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? p.employee_id}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}{p.status === "draft" && (<button type="button" onClick={() => handleApprove(p.id)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button>)}{(p.status === "approved" || p.status === "partially_paid") && Number(p.balance_amount || 0) > 0 && (<button type="button" onClick={() => openPay(p)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Pay</button>)}</td></tr>))}
@@ -596,7 +596,7 @@ export default function PayrollPage() {
           <div><label className="block font-medium text-foreground mb-1">Notes</label><input value={advNotes} onChange={(e) => setAdvNotes(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
           <div className="sm:col-span-4 flex justify-end"><button type="submit" className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer">Record advance</button></div>
         </form>
-        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Date</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-right">Recovered</th><th className="pb-2 text-center">Status</th></tr></thead>
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Date</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-right">Recovered</th><th className="pb-2 text-center">Status</th></tr></thead>
           <tbody className="divide-y divide-border">
             {advances.length === 0 && <tr><td colSpan={5} className="py-4 text-muted-foreground">No advances recorded yet.</td></tr>}
             {advances.map((a: any) => (<tr key={a.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === a.employee_id)?.full_name ?? a.employee_id}</td><td className="py-2">{a.date?.slice(0, 10)}</td><td className="py-2 text-right">{formatCurrency(Number(a.amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(a.recovered_amount || 0))}</td><td className="py-2 text-center">{a.status}</td></tr>))}

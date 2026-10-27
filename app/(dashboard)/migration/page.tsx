@@ -477,7 +477,7 @@ export default function MigrationPage() {
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Source Sheet</th>
@@ -650,7 +650,7 @@ export default function MigrationPage() {
       {activeTab === "opening_balances" && openingBalances.length > 0 && (
         <div className="expensive-card p-5">
           <h2 className="text-sm font-bold text-foreground mb-3">Recorded Balances ({openingBalances.length})</h2>
-          <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Kind</th><th className="pb-2">Entity</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-right">Quantity</th><th className="pb-2">As of</th></tr></thead>
+          <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Kind</th><th className="pb-2">Entity</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-right">Quantity</th><th className="pb-2">As of</th></tr></thead>
             <tbody className="divide-y divide-border">
               {openingBalances.map((b: any) => (<tr key={b.id}><td className="py-2">{b.balance_kind}</td><td className="py-2 font-mono">{b.entity_key}</td><td className="py-2 text-right">{formatCurrency(Number(b.amount || 0))}</td><td className="py-2 text-right">{formatWeight(Number(b.quantity || 0))}</td><td className="py-2">{b.as_of?.slice(0, 10)}</td></tr>))}
             </tbody></table></div>
@@ -762,7 +762,7 @@ export default function MigrationPage() {
                 </div>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
+                <table className="w-full text-left border-collapse min-w-[560px]">
                   <thead>
                     <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                       {parsedFile.headers.map((h, idx) => (

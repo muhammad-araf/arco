@@ -139,7 +139,7 @@ export default function DashboardPage() {
               <div><h2 className="text-sm font-bold text-foreground flex items-center gap-2"><Package className="h-4 w-4 text-emerald-500" />Stock by Product</h2></div>
               <Link href="/inventory" className="text-xs text-primary hover:underline font-semibold flex items-center gap-1">Full ledger <ArrowUpRight className="h-3.5 w-3.5" /></Link>
             </div>
-            <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2.5">Product / Grade</th><th className="pb-2.5 text-right">Available Weight</th><th className="pb-2.5 text-center">Status</th></tr></thead>
+            <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[560px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2.5">Product / Grade</th><th className="pb-2.5 text-right">Available Weight</th><th className="pb-2.5 text-center">Status</th></tr></thead>
               <tbody className="divide-y divide-border">
                 {productRows.length === 0 && <tr><td colSpan={3} className="py-8 text-center text-muted-foreground">No stock yet. Post an inward voucher.</td></tr>}
                 {productRows.map((item) => (

@@ -317,7 +317,7 @@ export default function MastersPage() {
       {activeTab === "products" && (
         <div className="expensive-card p-5">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Code</th>
@@ -379,7 +379,7 @@ export default function MastersPage() {
       {activeTab === "godowns" && (
         <div className="expensive-card p-5">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-[640px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Godown Code</th>
@@ -414,7 +414,7 @@ export default function MastersPage() {
       {activeTab === "parties" && (
         <div className="expensive-card p-5">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Party Code</th>
@@ -460,7 +460,7 @@ export default function MastersPage() {
       {activeTab === "machines" && (
         <div className="expensive-card p-5">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Plant Code</th>

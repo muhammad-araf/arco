@@ -461,7 +461,7 @@ export default function InventoryPage() {
                 </div>
                 {!collapsedGodowns.includes(g.id) && (
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse text-xs">
+                  <table className="w-full text-left border-collapse text-xs min-w-[640px]">
                     <thead>
                       <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                         <th className="pb-3 font-bold">Product / Grain</th>
@@ -519,7 +519,7 @@ export default function InventoryPage() {
       {activeTab === "ledger" && (
         <div className="expensive-card p-5">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Date & Time</th>
@@ -595,7 +595,7 @@ export default function InventoryPage() {
       {activeTab === "transfers" && (
         <div className="expensive-card p-5">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Transfer No</th>
@@ -638,7 +638,7 @@ export default function InventoryPage() {
       {activeTab === "adjustments" && (
         <div className="expensive-card p-5">
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
               <thead>
                 <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                   <th className="pb-3 font-bold">Adjustment No</th>

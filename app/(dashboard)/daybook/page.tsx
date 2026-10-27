@@ -335,7 +335,7 @@ export default function DaybookPage() {
       {accountBalances.length > 0 && (
         <div className="expensive-card p-5">
           <h2 className="text-sm font-bold text-foreground mb-3">Balances by account</h2>
-          <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Account</th><th className="pb-2">Kind</th><th className="pb-2 text-right">Opening</th><th className="pb-2 text-right">Closing</th></tr></thead>
+          <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Account</th><th className="pb-2">Kind</th><th className="pb-2 text-right">Opening</th><th className="pb-2 text-right">Closing</th></tr></thead>
             <tbody className="divide-y divide-border">
               {accountBalances.map((b: any, i: number) => (<tr key={b.cashAccountId ?? `kind-${b.accountKind}-${i}`}><td className="py-2 font-semibold">{b.cashAccountId ? `${b.code} — ${b.name}` : b.name}</td><td className="py-2 uppercase text-muted-foreground">{b.accountKind}</td><td className="py-2 text-right font-mono">{formatCurrency(Number(b.opening || 0))}</td><td className="py-2 text-right font-bold font-mono">{formatCurrency(Number(b.closing || 0))}</td></tr>))}
             </tbody></table></div>
@@ -352,7 +352,7 @@ export default function DaybookPage() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
+          <table className="w-full text-left border-collapse text-xs min-w-[720px]">
             <thead>
               <tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold">
                 <th className="pb-3 font-bold">Date & Time</th>
@@ -576,7 +576,7 @@ export default function DaybookPage() {
           <div><label className="block font-medium text-foreground mb-1">Opening balance</label><input type="number" value={acctOpening} onChange={(e) => setAcctOpening(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={acctPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{acctPending ? "Creating…" : "Create cash account"}</button></div>
         </form>
-        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Code</th><th className="pb-2">Name</th><th className="pb-2">Kind</th><th className="pb-2 text-right">Opening</th></tr></thead>
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Code</th><th className="pb-2">Name</th><th className="pb-2">Kind</th><th className="pb-2 text-right">Opening</th></tr></thead>
           <tbody className="divide-y divide-border">
             {cashAccounts.length === 0 && <tr><td colSpan={4} className="py-4 text-muted-foreground">No cash accounts yet — create the first one above.</td></tr>}
             {cashAccounts.map((a: any) => (<tr key={a.id}><td className="py-2 font-mono font-bold">{a.code}</td><td className="py-2">{a.name}</td><td className="py-2 uppercase text-muted-foreground">{a.account_kind}</td><td className="py-2 text-right font-mono">{formatCurrency(Number(a.opening_balance || 0))}</td></tr>))}
@@ -587,7 +587,7 @@ export default function DaybookPage() {
           <h2 className="text-sm font-bold text-foreground">Expenses in range</h2>
           <PrintButton label="Print daybook" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
         </div>
-        <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Expense</th><th className="pb-2">Category</th><th className="pb-2">Payee</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Expense</th><th className="pb-2">Category</th><th className="pb-2">Payee</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
             {expenses.length === 0 && <tr><td colSpan={5} className="py-4 text-muted-foreground">No expenses recorded yet.</td></tr>}
             {expenses.map((e: any) => (<tr key={e.id}><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.settlement ? ` (${e.settlement})` : ""}{e.status === "posted" && (<button type="button" onClick={() => setExpReverseTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
