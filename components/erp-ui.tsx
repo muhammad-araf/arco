@@ -451,6 +451,14 @@ export function ReversalDialog({
 }) {
   const [reasonCode, setReasonCode] = React.useState<string>(REVERSAL_REASONS[0])
   const [reason, setReason] = React.useState("")
+  // Reset on every open so a previous reversal's reason/code can never
+  // carry into the next reversal.
+  React.useEffect(() => {
+    if (open) {
+      setReasonCode(REVERSAL_REASONS[0])
+      setReason("")
+    }
+  }, [open ])
   const valid = reason.trim().length >= 3
   if (!open) return null
   return (
@@ -470,8 +478,9 @@ export function ReversalDialog({
       </div>
       <div className="space-y-3 text-xs">
         <div>
-          <label className="block font-medium text-foreground mb-1">Reason code *</label>
+          <label htmlFor="reversal-reason-code" className="block font-medium text-foreground mb-1">Reason code *</label>
           <select
+            id="reversal-reason-code"
             value={reasonCode}
             onChange={(e) => setReasonCode(e.target.value)}
             className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -484,10 +493,11 @@ export function ReversalDialog({
           </select>
         </div>
         <div>
-          <label className="block font-medium text-foreground mb-1">
+          <label htmlFor="reversal-reason" className="block font-medium text-foreground mb-1">
             Reason for reversal *
           </label>
           <textarea
+            id="reversal-reason"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={3}

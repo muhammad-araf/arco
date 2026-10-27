@@ -122,6 +122,16 @@ body {
   border-radius: 6px;
 }
 
+/* Same plain look as .plain-card. This class was used by dozens of
+   cards but had no definition, so those cards rendered with padding
+   only and no background or border. Defined here (not restyled) so
+   light and dark mode both show the intended plain box. */
+.expensive-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
 /* Print Optimization — print documents only (components/print/*).
    Pages render exactly one `.print-document` per print action; this
    block hides all app chrome and shows only that document, so a page

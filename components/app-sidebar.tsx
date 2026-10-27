@@ -15,6 +15,7 @@ import {
   Receipt,
   Wallet,
   Users2,
+  UserCog,
   BarChart3,
   Database,
   ChevronRight,
@@ -25,7 +26,6 @@ import {
   UploadCloud,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { ThemeToggle } from "./theme-toggle"
 import { type AppRole } from "@/app/actions/auth"
 
 const ROLE_LABELS: Record<AppRole, string> = {
@@ -83,7 +83,7 @@ const navSections: NavSection[] = [
       { title: "Reports", href: "/reports", icon: BarChart3 },
       { title: "Import", href: "/migration", icon: UploadCloud },
       { title: "Masters", href: "/masters", icon: Database },
-      { title: "Users", href: "/users", icon: Users2 },
+      { title: "Users", href: "/users", icon: UserCog },
       { title: "Audit", href: "/audit", icon: ShieldCheck },
     ],
   },
@@ -104,7 +104,7 @@ export function AppSidebar({
   // client-side getMyProfile call produced), so the name and role render
   // with the shell instead of popping in after a round trip.
   const actorLabel = displayName ?? email ?? "Operator"
-  const actorRole = role ? (ROLE_LABELS[role] ?? role) : "Not signed in"
+  const actorRole = role ? (ROLE_LABELS[role] ?? role) : ""
 
   React.useEffect(() => {
     if (!isOpenMobile) return
@@ -123,7 +123,7 @@ export function AppSidebar({
   return (
     <>
       {/* Mobile Menu Trigger Bar */}
-      <div className="lg:hidden flex items-center justify-between p-3 border-b border-border bg-card sticky top-0 z-40">
+      <div className="lg:hidden w-full flex items-center justify-between p-3 border-b border-border bg-card sticky top-0 z-40">
         <div className="flex items-center gap-2.5">
           <div className="h-8 w-8 rounded-lg bg-emerald-100 dark:bg-emerald-900 text-emerald-500 border border-emerald-300 dark:border-emerald-700 flex items-center justify-center font-bold">
             <Sprout className="h-5 w-5" />
@@ -134,7 +134,6 @@ export function AppSidebar({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <ThemeToggle />
           <button
             type="button"
             onClick={() => setIsOpenMobile(!isOpenMobile)}
@@ -244,7 +243,6 @@ export function AppSidebar({
                 <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">{actorRole}</div>
               </div>
             </div>
-            <ThemeToggle className="h-8 w-8 shrink-0" />
           </div>
         </div>
       </aside>

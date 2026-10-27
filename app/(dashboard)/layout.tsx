@@ -37,7 +37,7 @@ export default async function DashboardLayout({
   const actor = supabase ? await getCurrentActor(supabase).catch(() => null) : null
 
   return (
-    <div className="flex min-h-screen bg-background relative overflow-hidden">
+    <div className="flex flex-col lg:flex-row min-h-screen bg-background relative overflow-hidden">
       {/* Main Navigation Sidebar */}
       <AppSidebar
         displayName={actor?.displayName ?? null}
