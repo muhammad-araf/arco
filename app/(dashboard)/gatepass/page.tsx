@@ -23,6 +23,7 @@ import { getStockSummary } from "@/app/actions/inventory"
 import { listGodowns, listProducts, listParties, listPackagingTypes } from "@/app/actions/masters"
 import { getCompanySettings, getAppSetting } from "@/app/actions/settings"
 import { GatePassPrint } from "@/components/print/gate-pass-print"
+import { AttachmentFields } from "@/components/attachment-fields"
 import { PrintButton } from "@/components/print/print-button"
 import { GatePass, GatePassItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDate, formatDateTime } from "@/lib/utils"
@@ -108,6 +109,8 @@ export default function GatePassPage() {
   const [destination, setDestination] = React.useState("")
   const [receiverName, setReceiverName] = React.useState("")
   const [receiverContact, setReceiverContact] = React.useState("")
+  const [attachmentUrl, setAttachmentUrl] = React.useState("")
+  const [attachmentNote, setAttachmentNote] = React.useState("")
   const [dispatchMode, setDispatchMode] = React.useState("")
   const [vehicleNo, setVehicleNo] = React.useState("")
   const [driverName, setDriverName] = React.useState("")
@@ -305,6 +308,7 @@ export default function GatePassPage() {
         destination: destination.trim() || undefined, orderRef: orderRef || undefined, notes: notes || undefined,
         receiverName: receiverName.trim() || undefined, receiverContact: receiverContact.trim() || undefined,
         dispatchMode: dispatchMode || undefined,
+        attachmentUrl: attachmentUrl || undefined, attachmentNote: attachmentNote || undefined,
         items: items.map((it) => ({ productId: it.productId, bags: Number(it.bags), netWeightKg: Number(it.netWeight), remarks: it.remarks, partyId: it.ownerId || undefined, packagingTypeId: it.packagingTypeId || undefined })),
       })
       if (!created.success || !(created.data as any)?.id) {
@@ -915,6 +919,8 @@ export default function GatePassPage() {
                   </select>
                 </div>
 
+                <AttachmentFields url={attachmentUrl} note={attachmentNote} onUrlChange={setAttachmentUrl} onNoteChange={setAttachmentNote} idPrefix="gatepass" />
+
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="transporter-name">Transporter</label>
                   <input id="transporter-name"
@@ -1134,6 +1140,8 @@ export default function GatePassPage() {
                 driverPhone={selectedPassForPrint.driver_phone}
                 dispatchMode={selectedPassForPrint.dispatch_mode ?? undefined}
                 notes={selectedPassForPrint.notes}
+                attachmentUrl={(selectedPassForPrint as any).attachment_url ?? undefined}
+                attachmentNote={(selectedPassForPrint as any).attachment_note ?? undefined}
                 preparedBy={selectedPassForPrint.prepared_by ?? undefined}
                 approvedBy={selectedPassForPrint.approved_by ?? undefined}
                 receiverSignName={selectedPassForPrint.receiver_name ?? undefined}

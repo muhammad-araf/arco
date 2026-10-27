@@ -1854,6 +1854,9 @@ export async function createExpense(input: {
   paymentMethod?: "cash" | "bank";
   /** Optional: where the expense was incurred (godown, site, …). */
   location?: string;
+  /** Reference-only attachment link + note (never required). */
+  attachmentUrl?: string;
+  attachmentNote?: string;
   description?: string;
   date?: string;
   clientToken?: string;
@@ -1889,21 +1892,43 @@ export async function createExpense(input: {
       const { data: acct } = await db.from("cash_accounts").select("id").eq("id", input.cashAccountId).maybeSingle();
       if (!acct) return fail("The selected cash account does not exist.");
     }
+    const expenseNo = await nextDocNo(db, "expense", "EXP");
     const { data, error: iError } = await db
       .from("expenses")
       .insert({
-        expense_no: await nextDocNo(db, "expense", "EXP"), date: input.date ?? new Date().toISOString(),
+        expense_no: expenseNo, date: input.date ?? new Date().toISOString(),
         category_name: input.categoryName.trim(), category_id: input.categoryId ?? null,
         payee: input.payee.trim(), vendor_id: input.vendorId ?? null,
         amount, payment_method: input.paymentMethod ?? "cash",
         cash_account_id: input.cashAccountId ?? null, settlement,
         location: input.location?.trim() || null,
+        attachment_url: input.attachmentUrl?.trim() || null,
+        attachment_note: input.attachmentNote?.trim() || null,
         paid_amount: 0, balance_amount: amount,
         description: input.description ?? null, status: "draft",
         client_token: input.clientToken ?? null, created_by: gate.actor.userId,
       })
       .select()
       .single();
+    if (iError && /column .* does not exist/i.test(iError.message)) {
+      const { data: retryData, error: rError } = await db
+        .from("expenses")
+        .insert({
+          expense_no: expenseNo, date: input.date ?? new Date().toISOString(),
+          category_name: input.categoryName.trim(), category_id: input.categoryId ?? null,
+          payee: input.payee.trim(), vendor_id: input.vendorId ?? null,
+          amount, payment_method: input.paymentMethod ?? "cash",
+          cash_account_id: input.cashAccountId ?? null, settlement,
+          location: input.location?.trim() || null,
+          paid_amount: 0, balance_amount: amount,
+          description: input.description ?? null, status: "draft",
+          client_token: input.clientToken ?? null,
+        })
+        .select()
+        .single();
+      if (rError) return fail(rError.message);
+      return { success: true, data: retryData };
+    }
     if (iError) return fail(iError.message);
     return { success: true, data };
   } catch (err) {

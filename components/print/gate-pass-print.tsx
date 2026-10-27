@@ -49,6 +49,8 @@ export interface GatePassPrintProps {
   totalWeightKg?: number | string
   totalBags?: number | string
   notes?: string
+  attachmentUrl?: string
+  attachmentNote?: string
   preparedBy?: string
   approvedBy?: string
   securityName?: string
@@ -182,6 +184,14 @@ export function GatePassPrint(props: GatePassPrintProps) {
           <PrintSectionTitle>Notes</PrintSectionTitle>
           <p className="print-notes">{props.notes}</p>
         </>
+      ) : null}
+      {props.attachmentUrl ? (
+        <p className="print-notes">
+          Attachment:{" "}
+          <a href={props.attachmentUrl} target="_blank" rel="noreferrer">
+            {props.attachmentNote || props.attachmentUrl}
+          </a>
+        </p>
       ) : null}
 
       <PrintSectionTitle>Signatures</PrintSectionTitle>

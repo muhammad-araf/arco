@@ -336,6 +336,9 @@ export async function createGatePassDraft(input: {
   receiverContact?: string;
   /** How the goods leave: free text from the form select. */
   dispatchMode?: string;
+  /** Reference-only attachment link + note (never required). */
+  attachmentUrl?: string;
+  attachmentNote?: string;
   items: {
     productId: string;
     bags: number;
@@ -386,7 +389,7 @@ export async function createGatePassDraft(input: {
     const passNo = await nextDocNumber(supabase, "gatepass", "GP");
     const totalBags = input.items.reduce((s, i) => s + i.bags, 0);
     const totalWeight = roundWeight(input.items.reduce((s, i) => s + i.netWeightKg, 0));
-    const { data: pass, error } = await supabase
+    let { data: pass, error } = await supabase
       .from("gate_passes")
       .insert({
         pass_no: passNo,
@@ -402,6 +405,8 @@ export async function createGatePassDraft(input: {
         receiver_name: input.receiverName?.trim() || null,
         receiver_contact: input.receiverContact?.trim() || null,
         dispatch_mode: input.dispatchMode?.trim() || null,
+        attachment_url: input.attachmentUrl?.trim() || null,
+        attachment_note: input.attachmentNote?.trim() || null,
         prepared_by: actorName(gate.actor),
         status: "draft",
         total_bags: totalBags,
@@ -410,7 +415,38 @@ export async function createGatePassDraft(input: {
       })
       .select()
       .single();
-    if (error) return fail(error.message);
+    if (error) {
+      if (/column .* does not exist/i.test(error.message)) {
+        const retry = await supabase
+          .from("gate_passes")
+          .insert({
+            pass_no: passNo,
+            date: input.date ?? new Date().toISOString(),
+            customer_id: input.customerId,
+            godown_id: input.godownId,
+            destination: input.destination ?? null,
+            vehicle_no: input.vehicleNo.trim(),
+            driver_name: input.driverName.trim(),
+            driver_phone: input.driverPhone ?? null,
+            transporter: input.transporter ?? null,
+            order_ref: orderRef,
+            receiver_name: input.receiverName?.trim() || null,
+            receiver_contact: input.receiverContact?.trim() || null,
+            dispatch_mode: input.dispatchMode?.trim() || null,
+            prepared_by: actorName(gate.actor),
+            status: "draft",
+            total_bags: totalBags,
+            total_weight_kg: totalWeight,
+            notes: input.notes ?? null,
+          })
+          .select()
+          .single();
+        if (retry.error) return fail(retry.error.message);
+        pass = retry.data;
+      } else {
+        return fail(error.message);
+      }
+    }
     // party_id on the line (schema appendix column) scopes the guard and
     // the ledger row to the owner's stock pool; null = company-owned.
     const lines = input.items.map((item) => ({

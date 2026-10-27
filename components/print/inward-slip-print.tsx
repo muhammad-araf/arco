@@ -48,6 +48,8 @@ export interface InwardSlipPrintProps {
   totalTareKg?: number | string
   totalNetKg?: number | string
   notes?: string
+  attachmentUrl?: string
+  attachmentNote?: string
   receivedBy?: string
 }
 
@@ -154,6 +156,14 @@ export function InwardSlipPrint(props: InwardSlipPrintProps) {
           <PrintSectionTitle>Notes</PrintSectionTitle>
           <p className="print-notes">{props.notes}</p>
         </>
+      ) : null}
+      {props.attachmentUrl ? (
+        <p className="print-notes">
+          Attachment:{" "}
+          <a href={props.attachmentUrl} target="_blank" rel="noreferrer">
+            {props.attachmentNote || props.attachmentUrl}
+          </a>
+        </p>
       ) : null}
 
       <PrintSectionTitle>Received By</PrintSectionTitle>

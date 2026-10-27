@@ -20,6 +20,7 @@ import { listInward, getInward, createInwardDraft, postInward, reverseInward } f
 import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
 import { getCompanySettings } from "@/app/actions/settings"
 import { InwardSlipPrint } from "@/components/print/inward-slip-print"
+import { AttachmentFields } from "@/components/attachment-fields"
 import { PrintButton } from "@/components/print/print-button"
 import { IncomingGoodsVoucher, IncomingGoodsItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatCurrency, formatDate } from "@/lib/utils"
@@ -48,6 +49,8 @@ export default function InwardPage() {
   const [receivedBy, setReceivedBy] = React.useState("")
   const [byHand, setByHand] = React.useState(false)
   const [nature, setNature] = React.useState("")
+  const [attachmentUrl, setAttachmentUrl] = React.useState("")
+  const [attachmentNote, setAttachmentNote] = React.useState("")
   const [searchQuery, setSearchQuery] = React.useState("")
   const [fromDate, setFromDate] = React.useState("")
   const [toDate, setToDate] = React.useState("")
@@ -262,6 +265,7 @@ export default function InwardPage() {
         biltyNo: biltyNo || undefined, vehicleNo: vehicleNo || undefined,
         driverName: driverName || undefined, driverPhone: driverPhone || undefined, notes: notes || undefined,
         receivedBy: receivedBy || undefined, byHand, nature: nature || undefined,
+        attachmentUrl: attachmentUrl || undefined, attachmentNote: attachmentNote || undefined,
         isCustomerOwned: ownerId ? true : false, ownerPartyId: ownerId || undefined,
         items: items.map((it) => ({
           productId: it.productId, bags: Number(it.bags), grossWeightKg: Number(it.grossWeight),
@@ -649,6 +653,9 @@ export default function InwardPage() {
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                   />
                 </div>
+                <div className="sm:col-span-2">
+                  <AttachmentFields url={attachmentUrl} note={attachmentNote} onUrlChange={setAttachmentUrl} onNoteChange={setAttachmentNote} idPrefix="inward" />
+                </div>
               </div>
 
               {/* Multi-line Items Section */}
@@ -911,6 +918,8 @@ export default function InwardPage() {
             totalBags={selectedVoucherForPrint.total_bags}
             totalNetKg={selectedVoucherForPrint.total_net_weight_kg}
             notes={selectedVoucherForPrint.notes}
+            attachmentUrl={(selectedVoucherForPrint as any).attachment_url ?? undefined}
+            attachmentNote={(selectedVoucherForPrint as any).attachment_note ?? undefined}
           />
         </div>
       )}

@@ -20,6 +20,7 @@ import { listParties } from "@/app/actions/masters"
 import { DaybookPrint } from "@/components/print/daybook-print"
 import { PrintButton } from "@/components/print/print-button"
 import { ExpenseVoucher, CashLedgerEntry } from "@/lib/types/database"
+import { AttachmentFields, AttachmentLink } from "@/components/attachment-fields"
 import { formatCurrency, formatDateTime, formatDate } from "@/lib/utils"
 import { exportReportToCsv, exportToExcel, exportToPdf } from "@/lib/export-utils"
 import { logExport } from "@/app/actions/audit-log"
@@ -89,6 +90,8 @@ export default function DaybookPage() {
   const [paymentMethod, setPaymentMethod] = React.useState<"cash" | "bank">("cash")
   const [location, setLocation] = React.useState("")
   const [description, setDescription] = React.useState("")
+  const [attachmentUrl, setAttachmentUrl] = React.useState("")
+  const [attachmentNote, setAttachmentNote] = React.useState("")
   const [expSettlement, setExpSettlement] = React.useState<"paid" | "credit">("paid")
   const [expVendorId, setExpVendorId] = React.useState("")
   const [expCashAccountId, setExpCashAccountId] = React.useState("")
@@ -233,6 +236,7 @@ export default function DaybookPage() {
         categoryName, categoryId: expCategoryId || undefined, payee: payee.trim(), amount, paymentMethod,
         location: location.trim() || undefined,
         description: description.trim(), settlement: expSettlement,
+        attachmentUrl: attachmentUrl || undefined, attachmentNote: attachmentNote || undefined,
         vendorId: expSettlement === "credit" ? expVendorId : undefined,
         cashAccountId: expSettlement === "paid" ? expCashAccountId : undefined,
         clientToken: submissionToken(expenseTokenRef, "expense"),
@@ -644,6 +648,8 @@ export default function DaybookPage() {
                 />
               </div>
 
+              <AttachmentFields url={attachmentUrl} note={attachmentNote} onUrlChange={setAttachmentUrl} onNoteChange={setAttachmentNote} idPrefix="expense" />
+
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
                   type="button"
@@ -706,7 +712,7 @@ export default function DaybookPage() {
         <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Expense</th><th className="pb-2">Category</th><th className="pb-2">Payee</th><th className="pb-2">Location</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
             {expenses.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No expenses recorded yet.</td></tr>}
-            {expenses.map((e: any) => (<tr key={e.id}><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}</td><td className="py-2 text-muted-foreground">{e.location || "—"}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.settlement ? ` (${e.settlement})` : ""}{e.status === "posted" && (<button type="button" onClick={() => setExpReverseTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
+            {expenses.map((e: any) => (<tr key={e.id}><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}{(e as any).attachment_url ? (<div><AttachmentLink url={(e as any).attachment_url} note={(e as any).attachment_note} /></div>) : null}</td><td className="py-2 text-muted-foreground">{e.location || "—"}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.settlement ? ` (${e.settlement})` : ""}{e.status === "posted" && (<button type="button" onClick={() => setExpReverseTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
           </tbody></table>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>Showing {expenses.length === 0 ? 0 : (expensePage - 1) * expensePageSize + 1}–{(expensePage - 1) * expensePageSize + expenses.length} of {totalExpenses} expenses</span>

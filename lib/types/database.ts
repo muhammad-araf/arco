@@ -373,6 +373,8 @@ export interface GatePass {
   total_bags: number
   total_weight_kg: number
   notes?: string
+  attachment_url?: string | null
+  attachment_note?: string | null
   items: GatePassItem[]
   created_at: string
   dispatched_at?: string
@@ -453,6 +455,8 @@ export interface ExpenseVoucher {
   payment_method: "cash" | "bank"
   description: string
   status: VoucherStatus
+  attachment_url?: string | null
+  attachment_note?: string | null
   created_at: string
 }
 

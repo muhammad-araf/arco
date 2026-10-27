@@ -297,6 +297,9 @@ export async function createInwardDraft(input: {
   /** Free-text receiving classification. No classification list is
    *  invented here — free text until the client confirms one. */
   nature?: string;
+  /** Reference-only attachment link + note (never required). */
+  attachmentUrl?: string;
+  attachmentNote?: string;
   isCustomerOwned?: boolean;
   ownerPartyId?: string;
   items: InwardItemInput[];
@@ -407,13 +410,17 @@ export async function createInwardDraft(input: {
       received_by: input.receivedBy?.trim() ? input.receivedBy.trim() : null,
       by_hand: input.byHand ?? false,
       nature: input.nature?.trim() ? input.nature.trim() : null,
+      attachment_url: input.attachmentUrl?.trim() ? input.attachmentUrl.trim() : null,
+      attachment_note: input.attachmentNote?.trim() ? input.attachmentNote.trim() : null,
     };
     let headerRes = await supabase.from("incoming_goods").insert(headerRow).select().single();
     if (headerRes.error && isMissingColumn(headerRes.error.message)) {
-      const { received_by: _rb, by_hand: _bh, nature: _n, ...legacyRow } = headerRow;
+      const { received_by: _rb, by_hand: _bh, nature: _n, attachment_url: _au, attachment_note: _an, ...legacyRow } = headerRow;
       void _rb;
       void _bh;
       void _n;
+      void _au;
+      void _an;
       headerRes = await supabase.from("incoming_goods").insert(legacyRow).select().single();
       if (!headerRes.error) {
         columnsWarning =
