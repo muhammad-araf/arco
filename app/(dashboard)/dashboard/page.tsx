@@ -22,9 +22,12 @@ export default function DashboardPage() {
   const [inward, setInward] = React.useState<Row[]>([])
   const [batches, setBatches] = React.useState<Row[]>([])
   const [passes, setPasses] = React.useState<Row[]>([])
-  const [receivables, setReceivables] = React.useState(0)
-  const [payables, setPayables] = React.useState(0)
-  const [cashOpening, setCashOpening] = React.useState(0)
+  // Financial totals are null for roles outside Owner/Admin +
+  // Accountant (see getDashboardData): null renders as "—", never 0,
+  // so a restricted role is never shown a misleading zero balance.
+  const [receivables, setReceivables] = React.useState<number | null>(null)
+  const [payables, setPayables] = React.useState<number | null>(null)
+  const [cashOpening, setCashOpening] = React.useState<number | null>(null)
   const [latestPassNo, setLatestPassNo] = React.useState<string | null>(null)
   // "Today" is client state, set in an effect (TodayBadge pattern): reading
   // new Date() during render makes this route un-prerenderable under
@@ -53,9 +56,9 @@ export default function DashboardPage() {
       setBatches(Array.isArray(data.batchesToday) ? data.batchesToday : [])
       setPasses(Array.isArray(data.passesToday) ? data.passesToday : [])
       setGodowns(Array.isArray(data.godowns) ? data.godowns : [])
-      setReceivables(num(data.receivables))
-      setPayables(num(data.payables))
-      setCashOpening(num(data.cashOpening))
+      setReceivables(data.receivables === null || data.receivables === undefined ? null : num(data.receivables))
+      setPayables(data.payables === null || data.payables === undefined ? null : num(data.payables))
+      setCashOpening(data.cashOpening === null || data.cashOpening === undefined ? null : num(data.cashOpening))
       setLatestPassNo(data.latestPassNo ?? null)
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : String(err))
@@ -120,7 +123,7 @@ export default function DashboardPage() {
         </div>
         <div className="expensive-card p-4 flex flex-col justify-between">
           <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cash</span><div className="h-8 w-8 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center"><Wallet className="h-4 w-4" /></div></div>
-          <div className="my-3"><div className="text-2xl font-black text-foreground">{formatCurrency(cashOpening)}</div><div className="text-xs text-muted-foreground mt-1 font-medium">Opening balances</div></div>
+          <div className="my-3"><div className="text-2xl font-black text-foreground">{cashOpening === null ? "—" : formatCurrency(cashOpening)}</div><div className="text-xs text-muted-foreground mt-1 font-medium">{cashOpening === null ? "Restricted to Owner/Admin and Accountant" : "Opening balances"}</div></div>
           <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>See live balances on the Daybook page</span><Link href="/daybook?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">Daybook <ArrowUpRight className="h-3 w-3" /></Link></div>
         </div>
       </div>
@@ -169,8 +172,8 @@ export default function DashboardPage() {
           <div className="expensive-card p-5">
             <h2 className="text-sm font-bold text-foreground mb-1 flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />Money Owed</h2>
             <div className="space-y-3.5">
-              <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20"><div className="text-xs text-muted-foreground font-medium">Customer Receivables</div><div className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{formatCurrency(receivables)}</div></div>
-              <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/20"><div className="text-xs text-muted-foreground font-medium">Vendor Payables</div><div className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1">{formatCurrency(payables)}</div></div>
+              <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20"><div className="text-xs text-muted-foreground font-medium">Customer Receivables</div><div className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{receivables === null ? "—" : formatCurrency(receivables)}</div></div>
+              <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/20"><div className="text-xs text-muted-foreground font-medium">Vendor Payables</div><div className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1">{payables === null ? "—" : formatCurrency(payables)}</div></div>
             </div>
             <Link href="/payroll?filter=unpaid" className="mt-3 flex items-center justify-between p-3 rounded-lg bg-card border border-border hover:bg-muted transition-colors"><span className="text-xs text-muted-foreground font-medium">Payroll due</span><span className="text-xs font-bold text-foreground flex items-center gap-1">Open payroll <ArrowUpRight className="h-3.5 w-3.5 text-primary" /></span></Link>
             <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs"><Link href="/billing?filter=receivable" className="text-primary hover:underline font-semibold">Customer Invoices</Link><Link href="/purchases?filter=payable" className="text-primary hover:underline font-semibold">Vendor Bills</Link></div>
