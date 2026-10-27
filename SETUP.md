@@ -52,6 +52,36 @@ it once per project, or drop the policies first on a re-run.
    (it falls back to the JS aggregation automatically), just slower as
    the ledger grows.
 
+4. `supabase/migration-rls-base-tables.sql` — **security, required
+   before go-live.** Enables RLS on every base table from `schema.sql`
+   (masters, stock/cash ledgers, vouchers, doc numbering, idempotency
+   keys) with role-scoped policies, and defines the
+   `public.current_app_role()` lookup the policies use. Idempotent
+   (safe to re-run).
+5. `supabase/migration-rls-finance-replace.sql` — **security, required
+   before go-live, apply after step 4.** Drops the old finance
+   "authenticated full" policies from `schema-finance.sql` (which let
+   any authenticated user rewrite `profiles`, including their own
+   role) and replaces them with role-scoped policies: profiles
+   writable only by Owner/Admin, finance/payroll writes restricted by
+   role, audit_log inserts restricted to recognised operators and
+   reads restricted to Owner/Admin and Accountant. Idempotent (safe
+   to re-run).
+
+> **Live verification of steps 4–5 (cannot be done from this repo —
+> there is no live database here).** After applying, in the live
+> project: (a) sign in as a Storekeeper and confirm a stock write
+> succeeds, a payroll write fails, and a direct PostgREST `UPDATE` on
+> `profiles` fails; (b) sign in as a user with no `profiles` row and
+> confirm every action fails closed; (c) sign in as Owner/Admin and
+> confirm a stock write, a role change, and an audit read all succeed;
+> (d) confirm effective policies (`select * from pg_policies where
+> schemaname = 'public'`) and GRANTs (`\z` in psql) match the two
+> migration files. Also confirm in **Authentication → Sign-ups**
+> that self-registration is OFF: the code now denies profile-less
+> users everywhere, but the toggle itself is a project setting this
+> repo cannot set.
+
 > **Demo data — read before delivery.** `supabase/schema.sql` ships NO
 > demo business data (the old §5 sample godowns, products, machines,
 > parties, and employees were removed). But a live database created from
@@ -112,7 +142,19 @@ recorded once in the masters (see §6).
 | Payroll payments | Owner/Admin, HR/payroll, Accountant |
 | Payroll register / unpaid salaries / attendance reads | Owner/Admin, HR/payroll, Accountant |
 | Profiles, role changes, payroll-rule changes | Owner/Admin only |
+| Stock writes: inward, transfers, adjustments, gate passes | Owner/Admin, Storekeeper |
+| Production writes: recipes, recipe versions, batches | Owner/Admin, Production operator |
+| Machinery writes: service-job drafts, posts, reversals | Owner/Admin, Production operator |
+| Master-data writes: godowns, products, parties, machines, packaging types, employees | Owner/Admin only |
+| Stock/master reads (lists, single rows, ledger, summary) | any signed-in operator |
 | Everything else write-like | never Read-only manager |
+
+A signed-in user with no `profiles` row, an inactive profile, or an
+unrecognised role string is denied by every gate — `getCurrentActor`
+never defaults to Owner/Admin. Legacy `owner` / `admin` role spellings
+are treated as Owner/Admin wherever the app checks a role, and the
+last-admin guard in `setUserRole` counts all three spellings, so the
+business cannot demote its way into a lockout through a legacy row.
 
 Salary detail, profit/loss and bank/cash reports are therefore never
 visible to Storekeeper / Production / Gate / Read-only roles through
@@ -120,23 +162,29 @@ these actions, even if a page links to them.
 
 ## 5. RLS approach (stated, with the reason)
 
-**Recommended and implemented:** RLS is **enabled** on every new table
-in `schema-finance.sql` with an authenticated-user policy
-(`auth.role() = 'authenticated'`), and server-side role checks in the
-actions are the real enforcement. The two layers are complementary:
-RLS stops anonymous / stolen-anon-key access to the tables, while
-`requireRole()` stops an authenticated Storekeeper from posting a
-payroll run.
+**Implemented:** RLS is **enabled on every table** — the finance
+tables from `schema-finance.sql` (as replaced by
+`migration-rls-finance-replace.sql`) and the base tables from
+`schema.sql` (via `migration-rls-base-tables.sql`). Policies are
+role-scoped, not "any authenticated user": reads are open to any
+signed-in operator for business tables, while writes require the
+role(s) in the §4 matrix, resolved through
+`public.current_app_role()` (a SECURITY DEFINER lookup on `profiles`
+via `auth.uid()`). The two layers are complementary: RLS stops a
+direct PostgREST call from bypassing the app, while `requireRole()`
+in the actions is the primary gate the UI flows through.
 
-**Why RLS is not enabled on the pre-existing tables here:** tables from
-`schema.sql` (stock ledger, cash ledger, masters) are owned by the
-sibling core modules; enabling RLS on them from this slice could break
-their actions before they add their own role gates. Before go-live,
-enable RLS on those tables too with the same authenticated policy and
-re-run the core modules' checks. Additionally, after first deploy, a
-Supabase owner should revoke `UPDATE`/`DELETE` on `audit_log` for the
-authenticated role in the dashboard — the table's policies already
-grant only INSERT/SELECT, so this is belt-and-braces for append-only.
+Two deliberate exceptions, both documented in the migration files:
+(1) `packaging_types` UPDATE also allows Production operator, because
+batch posting consumes/restores `current_stock` there — creating a
+packaging type stays Owner/Admin only. (2) Draft-cleanup DELETEs are
+allowed only on still-draft voucher headers (and, for recipes, on a
+header with no lines yet); posted history can never be deleted
+through a policy. `audit_log` has no UPDATE/DELETE policy and its
+UPDATE/DELETE grants are revoked in the finance migration, so it stays
+append-only. The old "authenticated full" policy text in
+`schema-finance.sql` is superseded by the replacement migration and
+must not be re-applied on its own after step 5 of §2.
 
 ## 6. Posting rules (the invariants the code protects)
 
