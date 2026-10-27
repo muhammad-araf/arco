@@ -25,7 +25,8 @@ import { GatePassPrint } from "@/components/print/gate-pass-print"
 import { PrintButton } from "@/components/print/print-button"
 import { GatePass, GatePassItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDate, formatDateTime } from "@/lib/utils"
-import { exportToCSV } from "@/lib/export-utils"
+import { exportReportToCsv, exportToExcel, exportToPdf } from "@/lib/export-utils"
+import { logExport } from "@/app/actions/audit-log"
 import {
   AlertBanner,
   ConfirmDialog,
@@ -373,7 +374,33 @@ export default function GatePassPage() {
       ? gatePasses.filter((gp) => gp.status === "posted")
       : gatePasses
 
+  // Shared by the CSV / Excel / PDF buttons: one definition of the export
+  // rows, columns, title and totals, so all formats agree.
+  const getGatepassExport = () => ({
+    rows: gatePasses.map((gp) => ({
+      pass_no: gp.pass_no, date: gp.date, customer: gp.customer_name,
+      destination: gp.destination || "Direct", godown: gp.godown_name,
+      vehicle_no: gp.vehicle_no, driver_name: gp.driver_name,
+      driver_phone: gp.driver_phone || "N/A", bags: gp.total_bags,
+      weight_kg: gp.total_weight_kg, status: gp.status,
+    })),
+    filename: "authorized_gate_passes",
+    columns: [{ key: "pass_no", label: "Pass no" }, { key: "date", label: "Date" }, { key: "customer", label: "Customer" }, { key: "destination", label: "Destination" }, { key: "godown", label: "Godown" }, { key: "vehicle_no", label: "Vehicle" }, { key: "driver_name", label: "Driver" }, { key: "driver_phone", label: "Driver phone" }, { key: "bags", label: "Bags" }, { key: "weight_kg", label: "Weight (kg)" }, { key: "status", label: "Status" }],
+    options: { title: "Authorized Gate Passes", totals: { bags: gatePasses.reduce((a, gp) => a + (gp.total_bags || 0), 0), weight_kg: gatePasses.reduce((a, gp) => a + (gp.total_weight_kg || 0), 0) } },
+    report: "gate_passes",
+  })
+  const handleGatepassExport = async (format: "csv" | "xlsx" | "pdf") => {
+    const e = getGatepassExport()
+    const ok = format === "csv"
+      ? exportReportToCsv(e.rows, e.filename, e.columns as any, e.options as any)
+      : format === "xlsx"
+        ? await exportToExcel(e.rows, e.filename, e.columns as any, e.options as any)
+        : await exportToPdf(e.rows, e.filename, e.columns as any, e.options as any)
+    if (ok) void logExport({ report: e.report, format })
+  }
+
   if (isLoading) return <GatepassSkeleton />
+
 
   return (
     <div className="space-y-6">
@@ -392,30 +419,32 @@ export default function GatePassPage() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => {
-              exportToCSV(
-                gatePasses.map((gp) => ({
-                  pass_no: gp.pass_no,
-                  date: gp.date,
-                  customer: gp.customer_name,
-                  destination: gp.destination || "Direct",
-                  godown: gp.godown_name,
-                  vehicle_no: gp.vehicle_no,
-                  driver_name: gp.driver_name,
-                  driver_phone: gp.driver_phone || "N/A",
-                  bags: gp.total_bags,
-                  weight_kg: gp.total_weight_kg,
-                  status: gp.status,
-                })),
-                "authorized_gate_passes"
-              )
-            }}
+            onClick={() => void handleGatepassExport("csv")}
             className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
-            title="Download CSV / Excel"
+            title="Download CSV"
           >
             <Download className="h-4 w-4 text-emerald-500" />
             <span>Export CSV</span>
           </button>
+          <button
+            type="button"
+            onClick={() => void handleGatepassExport("xlsx")}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+            title="Download Excel"
+          >
+            <Download className="h-4 w-4 text-emerald-500" />
+            <span>Export Excel</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleGatepassExport("pdf")}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+            title="Download PDF"
+          >
+            <Download className="h-4 w-4 text-emerald-500" />
+            <span>Export PDF</span>
+          </button>
+
 
           <button
             type="button"

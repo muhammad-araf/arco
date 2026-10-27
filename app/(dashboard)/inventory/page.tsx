@@ -21,7 +21,8 @@ import { getStockSummary, getStockLedger, createTransfer, postTransfer, reverseT
 import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
 import { StockLedgerEntry, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDateTime } from "@/lib/utils"
-import { exportToCSV } from "@/lib/export-utils"
+import { exportReportToCsv, exportToExcel, exportToPdf } from "@/lib/export-utils"
+import { logExport } from "@/app/actions/audit-log"
 import {
   AlertBanner,
   ConfirmDialog,
@@ -261,7 +262,26 @@ export default function InventoryPage() {
     }
   }
 
+  // Shared by the CSV / Excel / PDF buttons: one definition of the active
+  // tab's rows, columns, title and totals, so all formats agree.
+  const getInventoryExport = () => {
+    if (activeTab === "summary") return { rows: filteredSummary.map((r) => ({ godown: r.godown_name, product: r.product_name, owner: r.party_name || "Company", stock_kg: r.balance_kg, min_stock: r.min_stock_kg || 0, below_min: r.below_min_stock ? "yes" : "no" })), filename: "godown_stock_summary", columns: [{ key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "owner", label: "Owner" }, { key: "stock_kg", label: "Stock (kg)" }, { key: "min_stock", label: "Min stock" }, { key: "below_min", label: "Below min" }], options: { title: "Godown Stock Summary", totals: { stock_kg: filteredSummary.reduce((a, r) => a + (Number(r.balance_kg) || 0), 0) } }, report: "inventory_summary" }
+    if (activeTab === "transfers") return { rows: transfers.map((t: any) => ({ transfer_no: t.transfer_no, date: t.date, from: godowns.find((g) => g.id === t.from_godown_id)?.name ?? "Not set", to: godowns.find((g) => g.id === t.to_godown_id)?.name ?? "Not set", product: products.find((x) => x.id === t.product_id)?.name ?? t.product_id, quantity_kg: t.quantity, status: t.status })), filename: "transfers", columns: [{ key: "transfer_no", label: "Transfer no" }, { key: "date", label: "Date" }, { key: "from", label: "From" }, { key: "to", label: "To" }, { key: "product", label: "Product" }, { key: "quantity_kg", label: "Quantity (kg)" }, { key: "status", label: "Status" }], options: { title: "Stock Transfers", totals: { quantity_kg: transfers.reduce((a, t: any) => a + (Number(t.quantity) || 0), 0) } }, report: "inventory_transfers" }
+    if (activeTab === "adjustments") return { rows: adjustments.map((a: any) => ({ adjustment_no: a.adjustment_no, date: a.date, godown: godowns.find((g) => g.id === a.godown_id)?.name ?? a.godown_id, product: products.find((x) => x.id === a.product_id)?.name ?? a.product_id, before_kg: a.quantity_before, after_kg: a.quantity_after, status: a.status })), filename: "adjustments", columns: [{ key: "adjustment_no", label: "Adjustment no" }, { key: "date", label: "Date" }, { key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "before_kg", label: "Before (kg)" }, { key: "after_kg", label: "After (kg)" }, { key: "status", label: "Status" }], options: { title: "Stock Adjustments" }, report: "inventory_adjustments" }
+    return { rows: filteredLedger.map((e) => ({ date: e.date, voucher_no: e.voucher_no, type: e.voucher_type, godown: e.godown_name, product: e.product_name, inward_kg: e.inward_qty, outward_kg: e.outward_qty, balance_kg: e.running_balance, notes: e.notes || "" })), filename: "stock_movement_ledger", columns: [{ key: "date", label: "Date" }, { key: "voucher_no", label: "Voucher" }, { key: "type", label: "Type" }, { key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "inward_kg", label: "Inward (kg)" }, { key: "outward_kg", label: "Outward (kg)" }, { key: "balance_kg", label: "Balance (kg)" }, { key: "notes", label: "Notes" }], options: { title: "Stock Movement Ledger", totals: { inward_kg: filteredLedger.reduce((a, e) => a + (Number(e.inward_qty) || 0), 0), outward_kg: filteredLedger.reduce((a, e) => a + (Number(e.outward_qty) || 0), 0) } }, report: "inventory_ledger" }
+  }
+  const handleInventoryExport = async (format: "csv" | "xlsx" | "pdf") => {
+    const e = getInventoryExport()
+    const ok = format === "csv"
+      ? exportReportToCsv<Record<string, any>>(e.rows, e.filename, e.columns as any, e.options as any)
+      : format === "xlsx"
+        ? await exportToExcel<Record<string, any>>(e.rows, e.filename, e.columns as any, e.options as any)
+        : await exportToPdf<Record<string, any>>(e.rows, e.filename, e.columns as any, e.options as any)
+    if (ok) void logExport({ report: e.report, format })
+  }
+
   if (isLoading) return <InventorySkeleton />
+
 
   return (
     <div className="space-y-6">
@@ -279,60 +299,30 @@ export default function InventoryPage() {
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => {
-              if (activeTab === "summary") {
-                exportToCSV(
-                  filteredSummary.map((r) => ({
-                    godown: r.godown_name,
-                    product: r.product_name,
-                    owner: r.party_name || "Company",
-                    stock_kg: r.balance_kg,
-                    min_stock: r.min_stock_kg || 0,
-                    below_min: r.below_min_stock ? "yes" : "no",
-                  })),
-                  "godown_stock_summary"
-                )
-              } else if (activeTab === "transfers") {
-                exportToCSV(
-                  transfers.map((t: any) => ({
-                    transfer_no: t.transfer_no, date: t.date, from: godowns.find((g) => g.id === t.from_godown_id)?.name ?? "Not set",
-                    to: godowns.find((g) => g.id === t.to_godown_id)?.name ?? "Not set",
-                    product: products.find((x) => x.id === t.product_id)?.name ?? t.product_id,
-                    quantity_kg: t.quantity, status: t.status,
-                  })),
-                  "transfers"
-                )
-              } else if (activeTab === "adjustments") {
-                exportToCSV(
-                  adjustments.map((a: any) => ({
-                    adjustment_no: a.adjustment_no, date: a.date, godown: godowns.find((g) => g.id === a.godown_id)?.name ?? a.godown_id,
-                    product: products.find((x) => x.id === a.product_id)?.name ?? a.product_id,
-                    before_kg: a.quantity_before, after_kg: a.quantity_after, status: a.status,
-                  })),
-                  "adjustments"
-                )
-              } else {
-                exportToCSV(
-                  filteredLedger.map((e) => ({
-                    date: e.date,
-                    voucher_no: e.voucher_no,
-                    type: e.voucher_type,
-                    godown: e.godown_name,
-                    product: e.product_name,
-                    inward_kg: e.inward_qty,
-                    outward_kg: e.outward_qty,
-                    balance_kg: e.running_balance,
-                    notes: e.notes || "",
-                  })),
-                  "stock_movement_ledger"
-                )
-              }
-            }}
+            onClick={() => void handleInventoryExport("csv")}
             className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
-            title="Download CSV / Excel"
+            title="Download CSV"
           >
             <Download className="h-4 w-4 text-emerald-500" />
             <span>Export CSV</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleInventoryExport("xlsx")}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+            title="Download Excel"
+          >
+            <Download className="h-4 w-4 text-emerald-500" />
+            <span>Export Excel</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleInventoryExport("pdf")}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+            title="Download PDF"
+          >
+            <Download className="h-4 w-4 text-emerald-500" />
+            <span>Export PDF</span>
           </button>
 
           <button
