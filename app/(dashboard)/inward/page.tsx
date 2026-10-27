@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 import { listInward, getInward, createInwardDraft, postInward, reverseInward } from "@/app/actions/inward"
 import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
+import { getCompanySettings } from "@/app/actions/settings"
 import { InwardSlipPrint } from "@/components/print/inward-slip-print"
 import { PrintButton } from "@/components/print/print-button"
 import { IncomingGoodsVoucher, IncomingGoodsItem, Godown, Product, Party } from "@/lib/types/database"
@@ -42,6 +43,18 @@ export default function InwardPage() {
   const [parties, setParties] = React.useState<Party[]>([])
   const [owners, setOwners] = React.useState<Party[]>([])
   const [ownerId, setOwnerId] = React.useState("")
+  const [company, setCompany] = React.useState<{ name?: string; address?: string; phone?: string; email?: string; logoUrl?: string } | null>(null)
+  const [inwardDate, setInwardDate] = React.useState("")
+  const [receivedBy, setReceivedBy] = React.useState("")
+  const [byHand, setByHand] = React.useState(false)
+  const [nature, setNature] = React.useState("")
+  const [searchQuery, setSearchQuery] = React.useState("")
+  const [fromDate, setFromDate] = React.useState("")
+  const [toDate, setToDate] = React.useState("")
+  const [inwardPage, setInwardPage] = React.useState(1)
+  const [inwardTotal, setInwardTotal] = React.useState(0)
+  const [formWarning, setFormWarning] = React.useState("")
+  const filterRef = React.useRef({ search: "", from: "", to: "" })
 
   // Modal / Form state
   const [isFormOpen, setIsFormOpen] = React.useState(false)
@@ -73,8 +86,9 @@ export default function InwardPage() {
     grossWeight: number
     tareWeight: number
     rate: number
+    lotNo: string
   }[]>([
-    { productId: "", bags: 0, grossWeight: 0, tareWeight: 0, rate: 0 },
+    { productId: "", bags: 0, grossWeight: 0, tareWeight: 0, rate: 0, lotNo: "" },
   ])
 
   // Supabase-backed load: DB rows (incoming_goods + incoming_goods_items)
@@ -85,10 +99,13 @@ export default function InwardPage() {
   const [todayStr, setTodayStr] = React.useState<string | null>(null)
   React.useEffect(() => { setTodayStr(new Date().toISOString().slice(0, 10)) }, [])
 
-  const loadData = React.useCallback(async () => {
+  const loadInwardPage = async (page: number) => {
     setIsLoading(true)
     try {
-      const [v, g, pr, pa] = await Promise.all([listInward(), listGodowns(), listProducts(), listParties()])
+      const [v, g, pr, pa, co] = await Promise.all([
+        listInward({ page, pageSize: 50, search: filterRef.current.search || undefined, from: filterRef.current.from || undefined, to: filterRef.current.to || undefined }),
+        listGodowns(), listProducts(), listParties(), getCompanySettings(),
+      ])
       const failed = [v, g, pr, pa].find((r) => !r.success)
       if (failed) setFormError(failed.error ?? "Could not load inward data.")
       const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
@@ -98,7 +115,14 @@ export default function InwardPage() {
       setProducts(productList)
       setParties(partyList.filter((pt) => pt.type === "supplier" || pt.type === "both" || pt.type === "source"))
       setOwners(partyList)
-      setVouchers((Array.isArray(v.data) ? v.data : []).map((row: any) => ({
+      if (co.success && co.data) {
+        const c = co.data as { name?: string | null; address?: string | null; phone?: string | null; email?: string | null; logo_url?: string | null }
+        setCompany({ name: c.name ?? undefined, address: c.address ?? undefined, phone: c.phone ?? undefined, email: c.email ?? undefined, logoUrl: c.logo_url ?? undefined })
+      }
+      const rows = Array.isArray((v.data as any)?.rows) ? (v.data as any).rows : (Array.isArray(v.data) ? v.data : [])
+      setInwardTotal(Number((v.data as any)?.total) || rows.length)
+      setInwardPage(Number((v.data as any)?.page) || page)
+      setVouchers(rows.map((row: any) => ({
         ...row,
         party_name: partyList.find((x) => x.id === row.party_id)?.name ?? "Not set",
         godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? "Not set",
@@ -112,11 +136,14 @@ export default function InwardPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }
+
+  const loadData = React.useCallback(() => { void loadInwardPage(1) }, [])
 
   React.useEffect(() => {
     loadData()
     setDrillFilter(getUrlFilter())
+    setInwardDate(new Date().toISOString().slice(0, 10))
   }, [loadData])
 
   React.useEffect(() => {
@@ -136,6 +163,7 @@ export default function InwardPage() {
         grossWeight: 0,
         tareWeight: 0,
         rate: 0,
+        lotNo: "",
       },
     ])
   }
@@ -203,7 +231,7 @@ export default function InwardPage() {
     setDraftVoucher({
       id: `inw-${Date.now()}`,
       voucher_no: "", 
-      date: new Date().toISOString(),
+      date: inwardDate ? `${inwardDate}T00:00:00.000Z` : new Date().toISOString(),
       party_id: partyId,
       party_name: selectedParty?.name,
       godown_id: godownId,
@@ -230,12 +258,14 @@ export default function InwardPage() {
     setIsPending(true)
     try {
       const created = await createInwardDraft({
-        partyId, godownId, biltyNo: biltyNo || undefined, vehicleNo: vehicleNo || undefined,
+        partyId, godownId, date: inwardDate ? `${inwardDate}T00:00:00.000Z` : undefined,
+        biltyNo: biltyNo || undefined, vehicleNo: vehicleNo || undefined,
         driverName: driverName || undefined, driverPhone: driverPhone || undefined, notes: notes || undefined,
+        receivedBy: receivedBy || undefined, byHand, nature: nature || undefined,
         isCustomerOwned: ownerId ? true : false, ownerPartyId: ownerId || undefined,
         items: items.map((it) => ({
           productId: it.productId, bags: Number(it.bags), grossWeightKg: Number(it.grossWeight),
-          tareWeightKg: Number(it.tareWeight), ratePerUnit: Number(it.rate),
+          tareWeightKg: Number(it.tareWeight), ratePerUnit: Number(it.rate), lotNo: it.lotNo || undefined,
         })),
       })
       if (!created.success || !(created.data as any)?.id) {
@@ -248,6 +278,8 @@ export default function InwardPage() {
         return
       }
       const row: any = posted.data ?? created.data
+      const warns = [(created.data as any)?.biltyWarning, (created.data as any)?.columnsWarning].filter(Boolean).join(" ")
+      if (warns) setFormWarning(warns)
       setFormNotice(`${row.voucher_no} posted — ${formatWeight(row.total_net_weight_kg ?? draftVoucher.total_net_weight_kg)} added to ${draftVoucher.godown_name || "the godown"}.`)
       const fresh = await getInward((created.data as any).id)
       const serverRow: any = fresh.success ? fresh.data : row
@@ -304,6 +336,7 @@ export default function InwardPage() {
     <div className="space-y-6">
       <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
       <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
+      <AlertBanner tone="warning" message={formWarning} onDismiss={() => setFormWarning("")} />
       <AlertBanner tone="success" message={formNotice} onDismiss={() => setFormNotice("")} />
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -322,6 +355,24 @@ export default function InwardPage() {
           <Plus className="h-4 w-4" />
           <span>New Receiving Voucher</span>
         </button>
+      </div>
+
+      {/* List filters: free-text search + date range (server-side, via listInward filters) */}
+      <div className="expensive-card p-4 flex flex-wrap items-end gap-3 text-xs">
+        <div>
+          <label className="block font-medium text-foreground mb-1" htmlFor="inward-search">Search</label>
+          <input id="inward-search" type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Voucher, bilty or vehicle no." className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" />
+        </div>
+        <div>
+          <label className="block font-medium text-foreground mb-1" htmlFor="inward-from">From</label>
+          <input id="inward-from" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" />
+        </div>
+        <div>
+          <label className="block font-medium text-foreground mb-1" htmlFor="inward-to">To</label>
+          <input id="inward-to" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" />
+        </div>
+        <button type="button" onClick={() => { filterRef.current = { search: searchQuery, from: fromDate, to: toDate }; void loadInwardPage(1) }} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold cursor-pointer">Apply filters</button>
+        <button type="button" onClick={() => { setSearchQuery(""); setFromDate(""); setToDate(""); filterRef.current = { search: "", from: "", to: "" }; void loadInwardPage(1) }} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground font-semibold cursor-pointer">Clear</button>
       </div>
 
       {/* Inward Vouchers Table */}
@@ -414,6 +465,19 @@ export default function InwardPage() {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div className="expensive-card p-4 flex flex-wrap items-center justify-between gap-3 text-xs">
+        <span className="text-muted-foreground">
+          {inwardPage === 1
+            ? `Showing latest ${visibleVouchers.length} of ${inwardTotal} vouchers`
+            : `Showing rows ${(inwardPage - 1) * 50 + 1}–${(inwardPage - 1) * 50 + visibleVouchers.length} of ${inwardTotal} vouchers`}
+        </span>
+        <span className="flex items-center gap-2">
+          <button type="button" disabled={inwardPage <= 1} onClick={() => void loadInwardPage(inwardPage - 1)} className="px-3 py-1.5 rounded-lg bg-muted text-foreground font-semibold cursor-pointer disabled:opacity-50">Previous</button>
+          <span className="font-mono">Page {inwardPage} of {Math.max(1, Math.ceil(inwardTotal / 50))}</span>
+          <button type="button" disabled={inwardPage * 50 >= inwardTotal} onClick={() => void loadInwardPage(inwardPage + 1)} className="px-3 py-1.5 rounded-lg bg-muted text-foreground font-semibold cursor-pointer disabled:opacity-50">Next</button>
+        </span>
       </div>
 
       {/* Creation Modal */}
@@ -532,6 +596,49 @@ export default function InwardPage() {
                   />
                 </div>
 
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="inward-date">Date</label>
+                  <input id="inward-date"
+                    type="date"
+                    value={inwardDate}
+                    onChange={(e) => setInwardDate(e.target.value)}
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="received-by">Received By (staff)</label>
+                  <input id="received-by"
+                    type="text"
+                    value={receivedBy}
+                    onChange={(e) => setReceivedBy(e.target.value)}
+                    placeholder="Staff member who received the goods"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="nature">Nature (free text)</label>
+                  <input id="nature"
+                    type="text"
+                    value={nature}
+                    onChange={(e) => setNature(e.target.value)}
+                    placeholder="Receiving classification (free text)"
+                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-5">
+                  <input id="by-hand"
+                    type="checkbox"
+                    checked={byHand}
+                    onChange={(e) => setByHand(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  <label className="font-medium text-foreground" htmlFor="by-hand">Delivered by hand</label>
+                </div>
+
                 <div className="sm:col-span-2">
                   <label className="block font-medium text-foreground mb-1" htmlFor="remarks-quality-notes">Remarks / Quality Notes</label>
                   <input id="remarks-quality-notes"
@@ -567,7 +674,7 @@ export default function InwardPage() {
                     return (
                       <div
                         key={idx}
-                        className="grid grid-cols-1 sm:grid-cols-6 gap-2 p-2.5 rounded-lg bg-muted border border-border text-xs items-center"
+                        className="grid grid-cols-1 sm:grid-cols-7 gap-2 p-2.5 rounded-lg bg-muted border border-border text-xs items-center"
                       >
                         <div className="sm:col-span-2">
                           <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`product-${idx}`}>Product</label>
@@ -611,6 +718,17 @@ export default function InwardPage() {
                             type="number"
                             value={item.tareWeight}
                             onChange={(e) => handleItemChange(idx, "tareWeight", Number(e.target.value))}
+                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`lot-no-${idx}`}>Lot No. (optional)</label>
+                          <input id={`lot-no-${idx}`}
+                            type="text"
+                            value={item.lotNo}
+                            onChange={(e) => handleItemChange(idx, "lotNo", e.target.value)}
+                            placeholder="Leave empty for no lot tracking"
                             className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
                           />
                         </div>
@@ -775,6 +893,7 @@ export default function InwardPage() {
       {selectedVoucherForPrint && selectedVoucherForPrint.status === "posted" && (
         <div className="hidden print:block">
           <InwardSlipPrint
+            company={company ?? undefined}
             voucherNo={selectedVoucherForPrint.voucher_no}
             date={selectedVoucherForPrint.date}
             supplierName={selectedVoucherForPrint.party_name}
@@ -782,6 +901,9 @@ export default function InwardPage() {
             biltyNo={selectedVoucherForPrint.bilty_no}
             vehicleNo={selectedVoucherForPrint.vehicle_no}
             driverName={selectedVoucherForPrint.driver_name}
+            receivedBy={(selectedVoucherForPrint as any).received_by ?? undefined}
+            byHand={(selectedVoucherForPrint as any).by_hand ? "By hand" : undefined}
+            nature={(selectedVoucherForPrint as any).nature ?? undefined}
             items={selectedVoucherForPrint.items.map((it) => ({
               product: it.product_name, bags: it.bags_count, grossWeightKg: it.gross_weight_kg,
               tareWeightKg: it.tare_weight_kg, netWeightKg: it.net_weight_kg,
