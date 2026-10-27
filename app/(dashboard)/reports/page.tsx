@@ -13,6 +13,8 @@ import {
   ArrowUpRight,
 } from "lucide-react"
 import { getPL, getBardanaLedger, getPartyStatement, getVendorStatement } from "@/app/actions/finance"
+import { CustomerStatementPrint } from "@/components/print/customer-statement-print"
+import { PrintButton } from "@/components/print/print-button"
 import { getStockSummary, getStockLedger } from "@/app/actions/inventory"
 import { listPackagingTypes, listParties, listProducts } from "@/app/actions/masters"
 import { formatCurrency, formatWeight, formatBags } from "@/lib/utils"
@@ -39,6 +41,9 @@ export default function ReportsPage() {
   const [packingRecords, setPackingRecords] = React.useState<any[]>([])
   const [expenses, setExpenses] = React.useState<any[]>([])
   const [isLoading, setIsLoading] = React.useState(true)
+  const [cogsInput, setCogsInput] = React.useState("")
+  const [cogsBasisInput, setCogsBasisInput] = React.useState("")
+  const [appliedCogs, setAppliedCogs] = React.useState<{ amount: number; basis: string } | null>(null)
   const [dateFrom, setDateFrom] = React.useState("")
   const [dateTo, setDateTo] = React.useState("")
   // Month defaults come from a client-side effect, never from render
@@ -59,7 +64,7 @@ export default function ReportsPage() {
     try {
       setReportError("")
       const [plRes, sm, le, ba, pk, pa, pr] = await Promise.all([
-        getPL({ from: effFrom, to: effTo }),
+        getPL({ from: effFrom, to: effTo, ...(appliedCogs ? { cogsAmount: appliedCogs.amount, cogsBasis: appliedCogs.basis } : {}) }),
         getStockSummary(), getStockLedger({ from: effFrom, to: effTo }),
         getBardanaLedger({ from: effFrom, to: effTo }),
         listPackagingTypes(), listParties(), listProducts(),
@@ -92,7 +97,7 @@ export default function ReportsPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [effFrom, effTo])
+  }, [effFrom, effTo, appliedCogs])
 
   React.useEffect(() => {
     if (!effFrom || !effTo) return
@@ -290,9 +295,9 @@ export default function ReportsPage() {
               <div className="space-y-2">
                 <div className="flex justify-between p-2 rounded bg-muted">
                   <span className="text-foreground">Cost of Goods Sold (Raw Seeds)</span>
-                  <strong className="font-mono text-destructive">— not yet approved</strong>
+                  <strong className="font-mono text-destructive">{appliedCogs ? `-${formatCurrency(cogsAmount)}` : "— not yet approved"}</strong>
                 </div>
-                <p className="text-[11px] text-muted-foreground px-1">COGS needs an approved inventory valuation method (spec §15.1) and is excluded rather than estimated.</p>
+                <p className="text-[11px] text-muted-foreground px-1">{appliedCogs ? `Approved COGS supplied for this report: ${appliedCogs.basis || "no basis noted"}.` : "COGS needs an approved inventory valuation method (spec §15.1) and is excluded rather than estimated."}</p>
                 <div className="flex justify-between p-2 rounded bg-muted">
                   <span className="text-foreground">Packaging Material (Bags Consumed)</span>
                   <strong className="font-mono text-destructive">-{formatCurrency(bardanaCost)}</strong>
@@ -308,6 +313,22 @@ export default function ReportsPage() {
               </div>
             </div>
           </div>
+
+          <form
+            onSubmit={(e) => { e.preventDefault(); const amt = Number(cogsInput); if (!(amt >= 0) || !Number.isFinite(amt)) return; setAppliedCogs({ amount: amt, basis: cogsBasisInput.trim() }) }}
+            className="p-4 rounded-md bg-card border border-border space-y-3"
+          >
+            <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">Approved COGS for this period</h3>
+            <p className="text-[11px] text-muted-foreground">The accountant supplies the approved COGS valuation for this period; it is passed to the P&amp;L as-is and is not derived from purchases.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div><label className="block font-medium text-foreground mb-1">COGS amount (PKR)</label><input type="number" value={cogsInput} onChange={(e) => setCogsInput(e.target.value)} min="0" placeholder="e.g. 120000" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+              <div className="sm:col-span-2"><label className="block font-medium text-foreground mb-1">Valuation basis</label><input value={cogsBasisInput} onChange={(e) => setCogsBasisInput(e.target.value)} placeholder="e.g. Weighted-average closing stock valuation, approved 2026-10-27" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+            </div>
+            <div className="flex justify-end gap-2">
+              {appliedCogs && (<button type="button" onClick={() => { setAppliedCogs(null); setCogsInput(""); setCogsBasisInput("") }} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Clear COGS</button>)}
+              <button type="submit" className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer">Apply COGS to P&amp;L</button>
+            </div>
+          </form>
 
           {/* Net Profit Banner */}
           <div className="p-4 rounded-md bg-emerald-100 dark:bg-emerald-900 border border-emerald-300 dark:border-emerald-700 flex items-center justify-between">
@@ -436,7 +457,20 @@ export default function ReportsPage() {
           {!stmt && <EmptyState title="Select a party to view its statement" hint="Shows opening balance, charges, settlements and closing. A positive balance means the party owes you." />}
           {stmt && (
             <div>
-              <p className="text-xs text-muted-foreground mb-3">Opening: {formatCurrency(Number(stmt.opening || 0))} · Charges: {formatCurrency(Number(stmt.charges || 0))} · Settlements: {formatCurrency(Number(stmt.settlements || 0))} · Closing: {formatCurrency(Number(stmt.closing || 0))} ({stmt.closingKind})</p>
+              <p className="text-xs text-muted-foreground mb-3">Opening: {formatCurrency(Number(stmt.opening || 0))}{stmt.masterOpening !== undefined ? ` (master ${formatCurrency(Number(stmt.masterOpening || 0))}, migration evidence ${formatCurrency(Number(stmt.evidenceOpening || 0))})` : ""} · Charges: {formatCurrency(Number(stmt.charges || 0))} · Settlements: {formatCurrency(Number(stmt.settlements || 0))} · Closing: {formatCurrency(Number(stmt.closing || 0))} ({stmt.closingKind})</p>
+              <div className="flex justify-end mb-3"><PrintButton label="Print statement" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" /></div>
+              <div className="hidden print:block">
+                <CustomerStatementPrint
+                  customerName={stmt.party?.name}
+                  customerPhone={stmt.party?.phone}
+                  customerAddress={stmt.party?.address}
+                  dateFrom={effFrom}
+                  dateTo={effTo}
+                  openingBalance={Number(stmt.opening || 0)}
+                  closingBalance={Number(stmt.closing || 0)}
+                  rows={(stmt.entries ?? []).map((e: any) => ({ date: e.date?.slice(0, 10), voucherNo: e.voucher_no, type: e.entry_type, description: e.notes ?? "", debit: Number(e.debit || 0), credit: Number(e.credit || 0), balance: Number(e.running_balance || 0) }))}
+                />
+              </div>
               <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Date</th><th className="pb-3">Voucher</th><th className="pb-3 text-right">Debit</th><th className="pb-3 text-right">Credit</th><th className="pb-3 text-right">Balance</th></tr></thead>
                 <tbody className="divide-y divide-border">
                   {(stmt.entries ?? []).map((e: any) => (<tr key={e.id}><td className="py-2">{e.date?.slice(0, 10)}</td><td className="py-2 font-mono">{e.voucher_no}</td><td className="py-2 text-right">{formatCurrency(Number(e.debit || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(e.credit || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.running_balance || 0))}</td></tr>))}
