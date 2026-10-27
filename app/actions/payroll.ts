@@ -766,6 +766,107 @@ export async function getPayrollRegister(input: {
   return { success: true, data: { month: input.month, year: input.year, rows: data, totals } };
 }
 
+/**
+ * Payroll estimate for one month, computed server-side from the
+ * CONFIGURED payroll rules (app_settings 'payroll_rules') — never from
+ * hard-coded factors on the page. Read-only: it creates no periods and
+ * recovers no advances. The estimate assumes open advances are recovered
+ * in full; a real run recovers only the amount requested, capped by the
+ * balance. Piece-rate staff without a pieces count fall back to payable
+ * days x rate, exactly as a run without pieces does, and are flagged.
+ */
+export async function getPayrollEstimate(input: {
+  month: number;
+  year: number;
+}): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireRead(db);
+  if ("error" in gate) return fail(gate.error);
+  if (!Number.isInteger(input.month) || input.month < 1 || input.month > 12 || !Number.isInteger(input.year)) {
+    return fail("month must be 1–12 and year must be a year.");
+  }
+  const start = `${input.year}-${String(input.month).padStart(2, "0")}-01`;
+  const end = `${input.year}-${String(input.month).padStart(2, "0")}-${daysInMonth(input.year, input.month)}`;
+  const rules = await getPayrollRules(db);
+  const [emps, att, advs] = await Promise.all([
+    db.from("employees").select("*").eq("is_active", true).order("full_name", { ascending: true }),
+    db.from("attendance").select("*").gte("date", start).lte("date", end),
+    db.from("employee_advances").select("employee_id, amount, recovered_amount").eq("status", "open"),
+  ]);
+  if (emps.error) return fail(emps.error.message);
+  if (att.error) return fail(att.error.message);
+  if (advs.error) return fail(advs.error.message);
+  const rows = (emps.data ?? []).map((employee: any) => {
+    let present = 0; let half = 0; let leave = 0; let absent = 0; let holiday = 0; let overtimeHours = 0;
+    const markedDates = new Set<string>();
+    for (const r of (att.data ?? []) as any[]) {
+      if (r.employee_id !== employee.id) continue;
+      markedDates.add(r.date as string);
+      overtimeHours = roundMoney(overtimeHours + (Number(r.overtime_hours) || 0));
+      if (r.status === "present") present += 1;
+      else if (r.status === "half_day") half += 1;
+      else if (r.status === "leave") leave += 1;
+      else if (r.status === "absent") absent += 1;
+      else if (r.status === "holiday") holiday += 1;
+    }
+    let weeklyOffPaidDays = 0;
+    if (rules.weeklyOffPaid && rules.weeklyOffDays.length) {
+      const dim = daysInMonth(input.year, input.month);
+      for (let d = 1; d <= dim; d++) {
+        const iso = `${input.year}-${String(input.month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+        if (markedDates.has(iso)) continue;
+        if (rules.weeklyOffDays.includes(new Date(input.year, input.month - 1, d).getDay())) weeklyOffPaidDays += 1;
+      }
+    }
+    const payableDays = roundMoney(
+      present + half * rules.halfDayFactor + (rules.leavePaid ? leave : 0) + (rules.holidayPaid ? holiday : 0) + weeklyOffPaidDays,
+    );
+    const rate = roundMoney(Number(employee.base_rate) || 0);
+    let basePay: number;
+    let pieceFallback = false;
+    if (employee.pay_type === "daily") {
+      basePay = dailyPay(present + weeklyOffPaidDays, half, rate, rules.halfDayFactor);
+      if (rules.leavePaid && leave) basePay = roundMoney(basePay + leave * rate);
+      if (rules.holidayPaid && holiday) basePay = roundMoney(basePay + holiday * rate);
+    } else if (employee.pay_type === "monthly") {
+      if (rules.monthlyMode === "prorated") {
+        const dim = daysInMonth(input.year, input.month);
+        let denom = dim;
+        if (rules.prorationDenominator === "working" && rules.weeklyOffDays.length) {
+          let off = 0;
+          for (let d = 1; d <= dim; d++) {
+            if (rules.weeklyOffDays.includes(new Date(input.year, input.month - 1, d).getDay())) off += 1;
+          }
+          denom = Math.max(1, dim - off);
+        }
+        basePay = monthlyProratedPay(rate, payableDays, denom);
+      } else {
+        basePay = roundMoney(rate);
+      }
+    } else {
+      pieceFallback = true;
+      basePay = dailyPay(present, half, rate, rules.halfDayFactor);
+    }
+    const overtimeRate = rules.overtimeRatePerHour ?? 0;
+    const overtimePayAmount = overtimeHours > 0 && overtimeRate > 0 ? roundMoney(overtimeHours * overtimeRate) : 0;
+    const openAdvances = (advs.data ?? []).filter((a: any) => a.employee_id === employee.id)
+      .reduce((s: number, a: any) => roundMoney(s + (Number(a.amount) || 0) - (Number(a.recovered_amount) || 0)), 0);
+    const gross = roundMoney(basePay + overtimePayAmount);
+    const estimatedNet = Math.max(0, roundMoney(gross - openAdvances));
+    return {
+      employeeId: employee.id, employeeName: employee.full_name, payType: employee.pay_type,
+      present, half_day: half, leave, absent, holiday, overtime_hours: overtimeHours,
+      payableDays, basePay, overtimePay: overtimePayAmount, openAdvances, estimatedNet, pieceFallback,
+    };
+  });
+  const totals = rows.reduce((t, r) => ({
+    base: roundMoney(t.base + r.basePay), overtime: roundMoney(t.overtime + r.overtimePay),
+    advances: roundMoney(t.advances + r.openAdvances), net: roundMoney(t.net + r.estimatedNet),
+  }), { base: 0, overtime: 0, advances: 0, net: 0 });
+  return { success: true, data: { month: input.month, year: input.year, rules, rows, totals } };
+}
+
 export async function getUnpaidSalaries(): Promise<ActionResult> {
   const { db, error } = await getDb();
   if (!db) return fail(error);

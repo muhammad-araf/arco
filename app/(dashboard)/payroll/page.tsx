@@ -10,12 +10,11 @@ import {
   DollarSign,
   UserCheck,
 } from "lucide-react"
-import { markAttendance, correctAttendance, listAttendance, listPayroll, runPayroll, approvePayroll, payPayroll, getUnpaidSalaries, getAttendanceSummary, listAdvances, recordAdvance, adjustPayroll, reversePayroll, updatePayrollRules } from "@/app/actions/payroll"
+import { markAttendance, correctAttendance, listAttendance, listPayroll, runPayroll, approvePayroll, payPayroll, getUnpaidSalaries, getAttendanceSummary, listAdvances, recordAdvance, adjustPayroll, reversePayroll, updatePayrollRules, getPayrollRegister, listPayrollPayments, getPayrollEstimate } from "@/app/actions/payroll"
 import { listEmployees } from "@/app/actions/masters"
 import { listCashAccounts } from "@/app/actions/finance"
 import { Employee, AttendanceStatus } from "@/lib/types/database"
 import { formatCurrency } from "@/lib/utils"
-import { dailyPay, eligibleDays } from "@/lib/calc/payroll"
 import {
   AlertBanner,
   ConfirmDialog,
@@ -68,6 +67,14 @@ export default function PayrollPage() {
   const [runWarnings, setRunWarnings] = React.useState<string[]>([])
   const [runPending, setRunPending] = React.useState(false)
   const [summary, setSummary] = React.useState<any[]>([])
+  const [registerRows, setRegisterRows] = React.useState<any[]>([])
+  const [registerTotals, setRegisterTotals] = React.useState<any | null>(null)
+  const [estimate, setEstimate] = React.useState<any | null>(null)
+  const [estimateError, setEstimateError] = React.useState("")
+  const [payHistoryPeriodId, setPayHistoryPeriodId] = React.useState("")
+  const [payHistoryRows, setPayHistoryRows] = React.useState<any[]>([])
+  const [ledgerEmpId, setLedgerEmpId] = React.useState("")
+  const [ledgerPayments, setLedgerPayments] = React.useState<Record<string, any[]>>({})
   const [advances, setAdvances] = React.useState<any[]>([])
   const [cashAccounts, setCashAccounts] = React.useState<any[]>([])
   // Pay dialog
@@ -115,11 +122,12 @@ export default function PayrollPage() {
       const attYear = Number(attendanceDate.slice(0, 4))
       const attMonth = Number(attendanceDate.slice(5, 7))
       const range = monthRange(attYear, attMonth)
-      const [em, att, per, un, all, sum, adv, ca, attMonthPeriods] = await Promise.all([
+      const [em, att, per, un, all, sum, adv, ca, attMonthPeriods, reg, est] = await Promise.all([
         listEmployees(), listAttendance({ from: attendanceDate, to: attendanceDate }),
         listPayroll({ month: now.getMonth() + 1, year: now.getFullYear() }), getUnpaidSalaries(),
         listPayroll({}), getAttendanceSummary({ from: range.from, to: range.to }),
         listAdvances(), listCashAccounts(), listPayroll({ month: attMonth, year: attYear }),
+        getPayrollRegister({ month: attMonth, year: attYear }), getPayrollEstimate({ month: attMonth, year: attYear }),
       ])
       const failed = [em, att, per, un, all, sum, adv, ca, attMonthPeriods].find((x) => !x.success)
       if (failed) setFormError(failed.error ?? "Could not load payroll data.")
@@ -148,6 +156,11 @@ export default function PayrollPage() {
       setSummary(Array.isArray(sumData.employees) ? sumData.employees : [])
       setAdvances(Array.isArray(adv.data) ? adv.data : [])
       setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
+      const regData: any = reg.data ?? {}
+      setRegisterRows(Array.isArray(regData.rows) ? regData.rows : [])
+      setRegisterTotals(regData.totals ?? null)
+      if (est.success) { setEstimate(est.data); setEstimateError("") }
+      else { setEstimate(null); setEstimateError(est.error ?? "Payroll estimate unavailable.") }
       const locked = new Set<string>()
       for (const p of (Array.isArray(attMonthPeriods.data) ? attMonthPeriods.data : []) as any[]) {
         if (["approved", "partially_paid", "paid"].includes(p.status)) locked.add(p.employee_id)
@@ -161,13 +174,37 @@ export default function PayrollPage() {
   }, [attendanceDate])
 
   const mountLoadedFor = React.useRef<string | null>(null)
+  // Dashboard drill-down (?filter=unpaid) is read once on mount and then
+  // applied to the finalized list below — not just shown as a banner.
+  React.useEffect(() => { setDrillFilter(getUrlFilter()) }, [])
   React.useEffect(() => {
     if (!attendanceDate) return
     if (mountLoadedFor.current === attendanceDate) return
     mountLoadedFor.current = attendanceDate
     loadData()
-    setDrillFilter(getUrlFilter())
   }, [loadData, attendanceDate])
+
+  // Payment history for one selected period, and the employee ledger
+  // (periods + payments per employee) — both loaded on demand.
+  React.useEffect(() => {
+    if (!payHistoryPeriodId) { setPayHistoryRows([]); return }
+    listPayrollPayments(payHistoryPeriodId).then((res) => {
+      if (res.success) setPayHistoryRows(Array.isArray(res.data) ? res.data : [])
+      else setFormError(res.error ?? "Could not load payment history.")
+    })
+  }, [payHistoryPeriodId])
+  const ledgerPeriods = React.useMemo(
+    () => [...periods, ...unpaid, ...drafts].filter((p: any, i: number, arr: any[]) => arr.findIndex((x: any) => x.id === p.id) === i && (!ledgerEmpId || p.employee_id === ledgerEmpId)),
+    [periods, unpaid, drafts, ledgerEmpId],
+  )
+  React.useEffect(() => {
+    if (!ledgerEmpId) return
+    const missing = ledgerPeriods.filter((p: any) => !(p.id in ledgerPayments))
+    if (missing.length === 0) return
+    Promise.all(missing.map((p: any) => listPayrollPayments(p.id).then((res) => ({ id: p.id, rows: res.success && Array.isArray(res.data) ? res.data : [] }))))
+      .then((results) => setLedgerPayments((prev) => ({ ...prev, ...Object.fromEntries(results.map((r) => [r.id, r.rows])) })))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ledgerEmpId, ledgerPeriods.length])
 
   // Changed rows vs the saved roster: unchanged rows are never re-sent.
   const changedEmps = React.useMemo(() => employees.filter((emp) => {
@@ -340,17 +377,16 @@ export default function PayrollPage() {
     .filter((a: any) => a.employee_id === empId && a.status === "open")
     .reduce((s: number, a: any) => s + (Number(a.amount) || 0) - (Number(a.recovered_amount) || 0), 0)
 
-  const estimateRows = employees.map((emp) => {
-    const s: any = summary.find((x: any) => x.employeeId === emp.id) ?? { present: 0, half_day: 0, leave: 0, absent: 0, holiday: 0, overtime_hours: 0 }
-    const days = eligibleDays(
-      { present: s.present || 0, half_day: s.half_day || 0, leave: s.leave || 0, absent: s.absent || 0, holiday: s.holiday || 0 },
-      { halfDayFactor: 0.5, leavePaid: false, holidayPaid: true },
-    )
-    const base = emp.pay_type === "monthly" ? emp.base_rate : dailyPay(s.present || 0, s.half_day || 0, emp.base_rate, 0.5)
-    const openAdv = openAdvanceByEmp(emp.id)
-    return { emp, s, days, base, openAdv, net: Math.max(0, base - openAdv) }
-  })
-  const estimateTotals = estimateRows.reduce((a, r) => ({ base: a.base + r.base, adv: a.adv + r.openAdv, net: a.net + r.net }), { base: 0, adv: 0, net: 0 })
+  // Estimate comes from the server action, which applies the CONFIGURED
+  // payroll rules (half-day factor, leave/holiday paid, monthly mode,
+  // overtime rate). No factor is hard-coded on this page any more.
+  const estimateRows: any[] = Array.isArray(estimate?.rows) ? estimate.rows : []
+  const estimateTotals = estimate?.totals ?? { base: 0, overtime: 0, advances: 0, net: 0 }
+  const estimateRules = estimate?.rules
+  const visibleFinalized = React.useMemo(() => {
+    const merged = [...periods, ...unpaid.filter((u) => !periods.some((p) => p.id === u.id))]
+    return drillFilter === "unpaid" ? merged.filter((p: any) => Number(p.balance_amount || 0) > 0) : merged
+  }, [periods, unpaid, drillFilter])
 
   if (isLoading) return <PayrollSkeleton />
 
@@ -479,7 +515,7 @@ export default function PayrollPage() {
         <p className="text-[11px] text-muted-foreground mt-3">Saving again only sends rows you changed. Changing a saved mark needs a typed reason above, and marks in an approved or paid month are locked.</p>
       </div>
 
-      {/* Payroll Estimate from recorded attendance */}
+      {/* Payroll Estimate from recorded attendance — server-computed with configured rules */}
       <div className="expensive-card p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-sm font-bold text-foreground flex items-center gap-2">
@@ -488,6 +524,8 @@ export default function PayrollPage() {
           </h2>
           <span className="text-xs text-muted-foreground font-mono">From recorded attendance, {attendanceDate ? `${attendanceDate.slice(0, 7)}` : ""}</span>
         </div>
+        {estimateError && <p className="text-xs text-red-600 dark:text-red-400 mb-3">{estimateError} The estimate is not shown rather than computed from guessed rules.</p>}
+        {estimateRules && <p className="text-[11px] text-muted-foreground mb-3">Configured rules applied: half-day factor {estimateRules.halfDayFactor}, leave {estimateRules.leavePaid ? "paid" : "unpaid"}, holiday {estimateRules.holidayPaid ? "paid" : "unpaid"}, monthly mode {estimateRules.monthlyMode}, overtime rate {estimateRules.overtimeRatePerHour ?? "not set"}.</p>}
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs min-w-[720px]">
             <thead>
@@ -497,32 +535,35 @@ export default function PayrollPage() {
                 <th className="pb-3 font-bold text-right">Overtime hrs</th>
                 <th className="pb-3 font-bold text-right">Eligible Days</th>
                 <th className="pb-3 font-bold text-right">Base Earned</th>
+                <th className="pb-3 font-bold text-right">Overtime Pay</th>
                 <th className="pb-3 font-bold text-right">Open Advances</th>
                 <th className="pb-3 font-bold text-right">Estimated Net</th>
                 <th className="pb-3 font-bold text-center">Basis</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border font-mono">
-              {estimateRows.map(({ emp, s, days, base, openAdv, net }) => (
-                <tr key={emp.id} className="hover:bg-muted transition-colors">
-                  <td className="py-3 font-bold text-foreground font-sans">{emp.full_name}</td>
-                  <td className="py-3 text-right">{s.present || 0} / {s.half_day || 0} / {s.leave || 0} / {s.absent || 0} / {s.holiday || 0}</td>
-                  <td className="py-3 text-right">{s.overtime_hours || 0}</td>
-                  <td className="py-3 text-right">{days} days</td>
-                  <td className="py-3 text-right font-bold text-foreground">{formatCurrency(base)}</td>
-                  <td className="py-3 text-right text-destructive">-{formatCurrency(openAdv)}</td>
-                  <td className="py-3 text-right font-black text-emerald-600 dark:text-emerald-400 text-sm">{formatCurrency(net)}</td>
+              {estimateRows.map((r: any) => (
+                <tr key={r.employeeId} className="hover:bg-muted transition-colors">
+                  <td className="py-3 font-bold text-foreground font-sans">{r.employeeName}</td>
+                  <td className="py-3 text-right">{r.present || 0} / {r.half_day || 0} / {r.leave || 0} / {r.absent || 0} / {r.holiday || 0}</td>
+                  <td className="py-3 text-right">{r.overtime_hours || 0}</td>
+                  <td className="py-3 text-right">{r.payableDays} days</td>
+                  <td className="py-3 text-right font-bold text-foreground">{formatCurrency(r.basePay)}</td>
+                  <td className="py-3 text-right">{formatCurrency(r.overtimePay)}</td>
+                  <td className="py-3 text-right text-destructive">-{formatCurrency(r.openAdvances)}</td>
+                  <td className="py-3 text-right font-black text-emerald-600 dark:text-emerald-400 text-sm">{formatCurrency(r.estimatedNet)}</td>
                   <td className="py-3 text-center">
                     <span className="px-2 py-0.5 rounded-md bg-blue-500/15 text-blue-600 dark:text-blue-400 text-[10px] font-bold uppercase font-sans">Estimate</span>
-                    {emp.pay_type === "piece_rate" && <div className="text-[10px] text-amber-600 font-sans mt-0.5">pieces not counted — days fallback</div>}
+                    {r.pieceFallback && <div className="text-[10px] text-amber-600 font-sans mt-0.5">pieces not counted — days fallback</div>}
                   </td>
                 </tr>
               ))}
-              {employees.length > 0 && (
+              {estimateRows.length > 0 && (
                 <tr className="border-t-2 border-border font-bold">
                   <td className="py-3 font-sans" colSpan={4}>Estimate totals</td>
                   <td className="py-3 text-right">{formatCurrency(estimateTotals.base)}</td>
-                  <td className="py-3 text-right text-destructive">-{formatCurrency(estimateTotals.adv)}</td>
+                  <td className="py-3 text-right">{formatCurrency(estimateTotals.overtime)}</td>
+                  <td className="py-3 text-right text-destructive">-{formatCurrency(estimateTotals.advances)}</td>
                   <td className="py-3 text-right font-black text-emerald-600 dark:text-emerald-400 text-sm">{formatCurrency(estimateTotals.net)}</td>
                   <td className="py-3" />
                 </tr>
@@ -531,8 +572,45 @@ export default function PayrollPage() {
           </table>
         </div>
         <p className="text-[11px] text-muted-foreground mt-3">
-          Estimate from recorded attendance for this month (holidays paid, leave unpaid, half day at half rate) and open advances. Estimated net assumes open advances are recovered in full; a real run recovers only the amount requested, capped by the balance. Monthly staff are shown at their full base rate; overtime pay is not included because no overtime rate is applied here. This is a projection, not a pay run.
+          Estimate from recorded attendance for this month under the configured payroll rules, with overtime at the configured rate and open advances recovered in full. A real run recovers only the amount requested, capped by the balance. This is a projection, not a pay run.
         </p>
+      </div>
+
+      {/* Payroll register (spec §13.3): month totals + every period row */}
+      <div className="expensive-card p-5">
+        <h2 className="text-sm font-bold text-foreground mb-1">Payroll Register — {attendanceDate ? attendanceDate.slice(0, 7) : ""}</h2>
+        <p className="text-xs text-muted-foreground mb-4">Every non-reversed period for the month. Totals: gross {formatCurrency(Number(registerTotals?.gross || 0))} · net {formatCurrency(Number(registerTotals?.net || 0))} · paid {formatCurrency(Number(registerTotals?.paid || 0))} · balance {formatCurrency(Number(registerTotals?.balance || 0))}.</p>
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2 text-right">Gross</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status</th></tr></thead>
+          <tbody className="divide-y divide-border">
+            {registerRows.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No payroll periods for this month yet.</td></tr>}
+            {registerRows.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? p.employee_id}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}</td></tr>))}
+            {registerRows.length > 0 && (<tr className="border-t-2 border-border font-bold"><td className="py-2">Totals</td><td className="py-2 text-right">{formatCurrency(Number(registerTotals?.gross || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(registerTotals?.net || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(registerTotals?.paid || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(registerTotals?.balance || 0))}</td><td /></tr>)}
+          </tbody></table></div>
+      </div>
+
+      {/* Payment history + employee ledger */}
+      <div className="expensive-card p-5 grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="text-xs">
+          <h2 className="text-sm font-bold text-foreground mb-1">Payment History</h2>
+          <p className="text-muted-foreground mb-3">Pick a period to see every payment recorded against it.</p>
+          <select value={payHistoryPeriodId} onChange={(e) => setPayHistoryPeriodId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground mb-3"><option value="">Select period</option>{[...periods, ...unpaid, ...drafts].filter((p: any, i: number, arr: any[]) => arr.findIndex((x: any) => x.id === p.id) === i).map((p: any) => (<option key={p.id} value={p.id}>{employees.find((e) => e.id === p.employee_id)?.full_name ?? "Not set"} — {p.month}/{p.year} ({p.status})</option>))}</select>
+          {payHistoryPeriodId && payHistoryRows.length === 0 && <p className="text-muted-foreground">No payments recorded for this period yet.</p>}
+          {payHistoryRows.length > 0 && (<table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Date</th><th className="pb-2 text-right">Amount</th><th className="pb-2">Method</th><th className="pb-2">Reference</th></tr></thead><tbody className="divide-y divide-border">{payHistoryRows.map((r: any) => (<tr key={r.id}><td className="py-2">{r.date?.slice(0, 10)}</td><td className="py-2 text-right">{formatCurrency(Number(r.amount || 0))}</td><td className="py-2">{r.payment_method ?? r.account ?? "—"}</td><td className="py-2 font-mono">{r.reference_no ?? "—"}</td></tr>))}</tbody></table>)}
+        </div>
+        <div className="text-xs">
+          <h2 className="text-sm font-bold text-foreground mb-1">Employee Ledger</h2>
+          <p className="text-muted-foreground mb-3">All periods for one employee, each with its payments.</p>
+          <select value={ledgerEmpId} onChange={(e) => setLedgerEmpId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground mb-3"><option value="">Select employee</option>{employees.map((e) => (<option key={e.id} value={e.id}>{e.full_name}</option>))}</select>
+          {ledgerEmpId && ledgerPeriods.length === 0 && <p className="text-muted-foreground">No payroll periods for this employee yet.</p>}
+          {ledgerPeriods.map((p: any) => (
+            <div key={p.id} className="border border-border rounded-lg p-3 mb-2">
+              <div className="flex justify-between font-semibold"><span>{p.month}/{p.year} ({p.status})</span><span>Net {formatCurrency(Number(p.net_payable || 0))} · Paid {formatCurrency(Number(p.paid_amount || 0))} · Balance {formatCurrency(Number(p.balance_amount || 0))}</span></div>
+              {(ledgerPayments[p.id] ?? []).length > 0 ? (
+                <ul className="mt-2 space-y-1 text-muted-foreground">{(ledgerPayments[p.id] ?? []).map((r: any) => (<li key={r.id}>{r.date?.slice(0, 10)} — {formatCurrency(Number(r.amount || 0))} via {r.payment_method ?? r.account ?? "—"}{r.reference_no ? ` (${r.reference_no})` : ""}</li>))}</ul>
+              ) : (<p className="text-muted-foreground mt-1">No payments yet.</p>)}
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Drafts: all months */}
@@ -549,7 +627,7 @@ export default function PayrollPage() {
       {/* Run payroll */}
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Finalized Payroll</h2>
-        <p className="text-xs text-muted-foreground mb-4">Only approved or partially-paid periods with a balance appear here. Total unpaid: {formatCurrency(unpaidTotal)}.</p>
+        <p className="text-xs text-muted-foreground mb-4">Only approved or partially-paid periods with a balance appear here. Total unpaid: {formatCurrency(unpaidTotal)}.{drillFilter === "unpaid" ? " Dashboard drill-down applied: only periods with a balance are shown — clear the filter banner above to see all." : ""}</p>
         <form onSubmit={handleRunPayroll} className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs mb-4">
           <div><label className="block font-medium text-foreground mb-1" htmlFor="employee-2">Employee *</label><select id="employee-2" value={runEmployeeId} onChange={(e) => setRunEmployeeId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select employee</option>{employees.map((e) => (<option key={e.id} value={e.id}>{e.full_name}</option>))}</select></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="month">Month</label><input id="month" type="number" value={runMonth} onChange={(e) => setRunMonth(Number(e.target.value))} min="1" max="12" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
@@ -568,8 +646,8 @@ export default function PayrollPage() {
         )}
         <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Gross</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
-            {periods.length === 0 && unpaid.length === 0 && <tr><td colSpan={7} className="py-4 text-muted-foreground">No payroll periods yet — run the first draft above.</td></tr>}
-            {[...periods, ...unpaid.filter((u) => !periods.some((p) => p.id === u.id))].map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? "Not set"}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}{p.status === "draft" && (<button type="button" onClick={() => handleApprove(p.id)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button>)}{(p.status === "approved" || p.status === "partially_paid") && Number(p.balance_amount || 0) > 0 && (<button type="button" onClick={() => openPay(p)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Pay</button>)}</td></tr>))}
+            {visibleFinalized.length === 0 && <tr><td colSpan={7} className="py-4 text-muted-foreground">No payroll periods yet — run the first draft above.</td></tr>}
+            {visibleFinalized.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? "Not set"}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}{p.status === "draft" && (<button type="button" onClick={() => handleApprove(p.id)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button>)}{(p.status === "approved" || p.status === "partially_paid") && Number(p.balance_amount || 0) > 0 && (<button type="button" onClick={() => openPay(p)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Pay</button>)}</td></tr>))}
           </tbody></table></div>
       </div>
 
