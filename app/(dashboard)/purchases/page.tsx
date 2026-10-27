@@ -65,16 +65,19 @@ export default function PurchasesPage() {
   const [vendorId, setVendorId] = React.useState("")
   const [godownId, setGodownId] = React.useState("")
   const [invoiceRef, setInvoiceRef] = React.useState("")
-  const [productId, setProductId] = React.useState("")
-  const [quantity, setQuantity] = React.useState<number>(10000)
-  const [unitPrice, setUnitPrice] = React.useState<number>(115)
+  // Purchase lines: the form submits N lines (server already accepted
+  // items[]); each line is one seed product with its own qty/price.
+  const [lines, setLines] = React.useState([{ key: 1, productId: "", quantity: 10000, unitPrice: 115 }])
   const [paidAmount, setPaidAmount] = React.useState<number>(500000)
   const [notes, setNotes] = React.useState("")
+  const [page, setPage] = React.useState(1)
+  const [totalPurchases, setTotalPurchases] = React.useState(0)
+  const pageSize = 50
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [pu, pa, g, pr, re, ca] = await Promise.all([listPurchases(), listParties(), listGodowns(), listProducts(), listPurchaseReturns(), listCashAccounts()])
+      const [pu, pa, g, pr, re, ca] = await Promise.all([listPurchases({ page, pageSize }), listParties(), listGodowns(), listProducts(), listPurchaseReturns(), listCashAccounts()])
       const failed = [pu, pa, g, pr, re, ca].find((x) => !x.success)
       setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
       if (failed) setFormError(failed.error ?? "Could not load purchase data.")
@@ -84,7 +87,10 @@ export default function PurchasesPage() {
       setVendors(partyList.filter((x) => x.type === "supplier" || x.type === "both"))
       setGodowns(godownList); setProducts(productList)
       setReturns(Array.isArray(re.data) ? re.data : [])
-      setPurchases((Array.isArray(pu.data) ? pu.data : []).map((row: any) => ({
+      // Paged shape { rows, total } or the legacy plain array.
+      const puRows = Array.isArray(pu.data) ? pu.data : ((pu.data as any)?.rows ?? [])
+      setTotalPurchases(Array.isArray(pu.data) ? pu.data.length : Number((pu.data as any)?.total ?? 0))
+      setPurchases((puRows as any[]).map((row: any) => ({
         ...row,
         vendor_name: partyList.find((x) => x.id === row.vendor_id)?.name ?? "Not set",
         godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? "Not set",
@@ -97,11 +103,12 @@ export default function PurchasesPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [page])
 
   // Mount load: without this the page never leaves its skeleton —
   // isLoading starts true and only post-action handlers reloaded before.
-  React.useEffect(() => { loadData() }, [loadData])
+  // Dashboard drill-down links (?filter=payable) apply on mount too.
+  React.useEffect(() => { loadData(); setDrillFilter(getUrlFilter()) }, [loadData])
 
   React.useEffect(() => {
     if (cashAccounts.length > 0 && !payCashAccountId) {
@@ -110,30 +117,35 @@ export default function PurchasesPage() {
     }
     if (vendors.length > 0 && !vendorId) setVendorId(vendors[0].id)
     if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
-    if (products.length > 0 && !productId) setProductId(products[0].id)
-  }, [vendors, godowns, products, vendorId, godownId, productId, cashAccounts, payCashAccountId, payAccountKind])
+    if (products.length > 0 && !lines[0]?.productId) {
+      setLines((prev) => prev.map((l, i) => (i === 0 ? { ...l, productId: products[0].id } : l)))
+    }
+  }, [vendors, godowns, products, vendorId, godownId, lines, cashAccounts, payCashAccountId, payAccountKind])
 
-  const totalAmount = quantity * unitPrice
+  const totalAmount = lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0), 0)
   const balanceAmount = totalAmount - paidAmount
 
   const handleRecordPurchase = (e: React.FormEvent) => {
     e.preventDefault()
     if (isPending) return
-    // Spec §10: required fields, positive quantity and price, and payment
-    // may not exceed the invoice total — each failure says what to fix.
+    // Spec §10: required fields, positive quantity and price on EVERY
+    // line, and payment may not exceed the invoice total — each failure
+    // says what to fix.
     if (!vendorId) return setFormError("Select the supplier / vendor for this purchase.")
     if (!godownId) return setFormError("Select the godown receiving this purchase.")
-    if (!productId) return setFormError("Select the product being purchased.")
-    if (!isPositive(quantity)) return setFormError("Quantity must be greater than zero.")
-    if (!isPositive(unitPrice)) return setFormError("Unit price must be greater than zero.")
+    if (lines.length === 0) return setFormError("Add at least one purchase line.")
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].productId) return setFormError(`Line ${i + 1}: select the product being purchased.`)
+      if (!isPositive(lines[i].quantity)) return setFormError(`Line ${i + 1}: quantity must be greater than zero.`)
+      if (!isPositive(lines[i].unitPrice)) return setFormError(`Line ${i + 1}: unit price must be greater than zero.`)
+    }
     if (paidAmount < 0) return setFormError("Paid amount cannot be negative.")
     if (paidAmount > 0 && !payCashAccountId) return setFormError("Select a cash account for the payment at purchase. Create one on the Daybook page first if none exists.")
     if (paidAmount > totalAmount) return setFormError(`Paid amount (${formatCurrency(paidAmount)}) exceeds the invoice total (${formatCurrency(totalAmount)}). A payment is allocated to a specific invoice and cannot overpay it.`)
     setFormError("")
     const selectedVendor = vendors.find((v) => v.id === vendorId)
     const selectedGodown = godowns.find((g) => g.id === godownId)
-    const selectedProd = products.find((p) => p.id === productId)
-    const purchaseNo = `PUR-2026-${String(purchases.length + 1).padStart(3, "0")}`
+    const purchaseNo = `PUR-2026-${String(totalPurchases + 1).padStart(3, "0")}`
     setDraftPurchase({
       id: `pur-${Date.now()}`,
       purchase_no: purchaseNo,
@@ -148,19 +160,17 @@ export default function PurchasesPage() {
       balance_amount: balanceAmount,
       status: "posted",
       notes: notes || undefined,
-      items: [
-        {
-          id: `puri-${Date.now()}`,
-          purchase_id: `pur-${Date.now()}`,
-          product_id: productId,
-          product_name: selectedProd?.name,
-          item_type: "seed",
-          quantity,
-          unit: "kg",
-          unit_price: unitPrice,
-          line_total: totalAmount,
-        },
-      ],
+      items: lines.map((l, i) => ({
+        id: `puri-${Date.now()}-${i}`,
+        purchase_id: `pur-${Date.now()}`,
+        product_id: l.productId,
+        product_name: products.find((p) => p.id === l.productId)?.name,
+        item_type: "seed",
+        quantity: l.quantity,
+        unit: "kg",
+        unit_price: l.unitPrice,
+        line_total: (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0),
+      })),
       created_at: new Date().toISOString(),
     })
     setShowConfirm(true)
@@ -174,7 +184,7 @@ export default function PurchasesPage() {
       const created = await createPurchase({
         vendorId, invoiceRef: invoiceRef || undefined, godownId: godownId || undefined,
         notes: notes || undefined, clientToken: submissionToken(purchaseTokenRef, "purchase"),
-        items: [{ itemType: "seed", productId, quantity, unit: "kg", unitPrice }],
+        items: lines.map((l) => ({ itemType: "seed" as const, productId: l.productId, quantity: l.quantity, unit: "kg", unitPrice: l.unitPrice })),
       })
       if (!created.success || !(created.data as any)?.id) {
         setFormError(created.error ?? "Could not create the purchase draft.")
@@ -415,6 +425,13 @@ export default function PurchasesPage() {
             </tbody>
           </table>
         </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>Showing {visiblePurchases.length === 0 ? 0 : (page - 1) * pageSize + 1}–{(page - 1) * pageSize + visiblePurchases.length} of {totalPurchases} purchases</span>
+          <span className="flex gap-2">
+            <button type="button" disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="px-3 py-1.5 rounded-lg bg-card border border-border font-bold cursor-pointer disabled:opacity-50">Previous</button>
+            <button type="button" disabled={page * pageSize >= totalPurchases} onClick={() => setPage((p) => p + 1)} className="px-3 py-1.5 rounded-lg bg-card border border-border font-bold cursor-pointer disabled:opacity-50">Next</button>
+          </span>
+        </div>
       </div>
 
       <div className="expensive-card p-5">
@@ -483,45 +500,55 @@ export default function PurchasesPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="purchased-product">Purchased Product</label>
-                  <select id="purchased-product"
-                    value={productId}
-                    onChange={(e) => setProductId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  >
-                    {products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="quantity-kg">Quantity (kg)</label>
-                  <input id="quantity-kg"
-                    type="number"
-                    value={quantity}
-                    onChange={(e) => setQuantity(Number(e.target.value))}
-                    min="1"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="unit-price-kg-pkr">Unit Price / kg (PKR)</label>
-                  <input id="unit-price-kg-pkr"
-                    type="number"
-                    value={unitPrice}
-                    onChange={(e) => setUnitPrice(Number(e.target.value))}
-                    min="1"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
-                    required
-                  />
-                </div>
+              <div className="space-y-3">
+                <p className="text-[11px] text-muted-foreground">Purchase lines — add as many products as this invoice covers. The total is the sum of all lines.</p>
+                {lines.map((line, idx) => (
+                  <div key={line.key} className="grid grid-cols-3 gap-3 items-end">
+                    <div>
+                      <label className="block font-medium text-foreground mb-1" htmlFor={`purchased-product-${line.key}`}>Purchased Product *</label>
+                      <select id={`purchased-product-${line.key}`}
+                        value={line.productId}
+                        onChange={(e) => setLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, productId: e.target.value } : l)))}
+                        className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                      >
+                        <option value="">Select product</option>
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block font-medium text-foreground mb-1" htmlFor={`quantity-kg-${line.key}`}>Quantity (kg) *</label>
+                      <input id={`quantity-kg-${line.key}`}
+                        type="number"
+                        value={line.quantity}
+                        onChange={(e) => setLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, quantity: Number(e.target.value) } : l)))}
+                        min="1"
+                        className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
+                        required
+                      />
+                    </div>
+                    <div className="flex gap-2 items-end">
+                      <div className="flex-1">
+                        <label className="block font-medium text-foreground mb-1" htmlFor={`unit-price-kg-pkr-${line.key}`}>Unit Price / kg (PKR) *</label>
+                        <input id={`unit-price-kg-pkr-${line.key}`}
+                          type="number"
+                          value={line.unitPrice}
+                          onChange={(e) => setLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, unitPrice: Number(e.target.value) } : l)))}
+                          min="1"
+                          className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
+                          required
+                        />
+                      </div>
+                      {lines.length > 1 && (
+                        <button type="button" onClick={() => setLines((prev) => prev.filter((l) => l.key !== line.key))} className="px-2.5 py-2 rounded-lg bg-card border border-border text-red-600 dark:text-red-400 text-xs font-bold cursor-pointer" title={`Remove line ${idx + 1}`}>✕</button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <button type="button" onClick={() => setLines((prev) => [...prev, { key: Date.now(), productId: products[0]?.id ?? "", quantity: 0, unitPrice: 0 }])} className="px-3 py-1.5 rounded-lg bg-card border border-border text-xs font-bold cursor-pointer">+ Add line</button>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-muted border border-border">
