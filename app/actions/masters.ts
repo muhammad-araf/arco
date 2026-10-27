@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { requireRole, requireSignedIn } from "./auth";
+import { MASTERS_WRITE } from "./auth-helpers";
 
 /**
  * Master-data server actions (godowns, products, parties, machines,
@@ -44,6 +46,8 @@ async function listTable(
 ): Promise<ActionResult> {
   try {
     const supabase = await db();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     let query = supabase.from(table).select("*").order(orderBy);
     if (!includeInactive) query = query.eq("is_active", true);
     const { data, error } = await query;
@@ -58,6 +62,8 @@ async function getRow(table: string, id: string): Promise<ActionResult> {
   try {
     if (!id) return fail("id is required");
     const supabase = await db();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
     const { data, error } = await supabase
       .from(table)
       .select("*")
@@ -73,6 +79,8 @@ async function getRow(table: string, id: string): Promise<ActionResult> {
 async function createRow(table: string, row: Record<string, unknown>): Promise<ActionResult> {
   try {
     const supabase = await db();
+    const gate = await requireRole(supabase, MASTERS_WRITE);
+    if (!gate.ok) return fail(gate.error);
     const { data, error } = await supabase.from(table).insert(row).select().single();
     if (error) return fail(error.message);
     revalidateMasters();
@@ -86,6 +94,8 @@ async function deactivateRow(table: string, id: string): Promise<ActionResult> {
   try {
     if (!id) return fail("id is required");
     const supabase = await db();
+    const gate = await requireRole(supabase, MASTERS_WRITE);
+    if (!gate.ok) return fail(gate.error);
     const { data, error } = await supabase
       .from(table)
       .update({ is_active: false })
