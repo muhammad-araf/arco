@@ -4,6 +4,7 @@ import * as React from "react"
 import { EmptyState, AlertBanner } from "@/components/erp-ui"
 import { AuditSkeleton } from "@/components/route-skeletons"
 import { listAudit } from "@/app/actions/audit"
+import { exportReportToCsv } from "@/lib/export-utils"
 
 /**
  * Audit log viewer — reads audit_log through the owner_admin/accountant
@@ -17,6 +18,8 @@ export default function AuditPage() {
   const [from, setFrom] = React.useState("")
   const [to, setTo] = React.useState("")
   const [rows, setRows] = React.useState<any[]>([])
+  const [entityFilter, setEntityFilter] = React.useState("")
+  const [expanded, setExpanded] = React.useState<Record<string, boolean>>({})
   const [isLoading, setIsLoading] = React.useState(true)
   const [formError, setFormError] = React.useState("")
   const [searched, setSearched] = React.useState(false)
@@ -27,6 +30,7 @@ export default function AuditPage() {
       const res = await listAudit({
         userEmail: userFilter.trim() || undefined,
         action: actionFilter || undefined,
+        entityType: entityFilter || undefined,
         from: from || undefined,
         to: to || undefined,
       })
@@ -55,6 +59,7 @@ export default function AuditPage() {
       const res = await listAudit({
         userEmail: userFilter.trim() || undefined,
         action: actionFilter || undefined,
+        entityType: entityFilter || undefined,
         from: from || undefined,
         to: to || undefined,
       })
@@ -133,6 +138,26 @@ export default function AuditPage() {
             />
           </div>
         </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs mt-3">
+          <div>
+            <label className="block font-medium text-foreground mb-1" htmlFor="entity-type">Entity type</label>
+            <select id="entity-type" value={entityFilter} onChange={(e) => setEntityFilter(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+              <option value="">All entity types</option>
+              <option value="incoming_goods">incoming_goods</option>
+              <option value="production_batches">production_batches</option>
+              <option value="machinery_jobs">machinery_jobs</option>
+              <option value="packing_records">packing_records</option>
+              <option value="customer_invoices">customer_invoices</option>
+              <option value="expenses">expenses</option>
+              <option value="payroll_periods">payroll_periods</option>
+              <option value="app_settings">app_settings</option>
+              <option value="profiles">profiles</option>
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button type="button" onClick={() => exportReportToCsv(rows.map((r: any) => ({ when: r.created_at, user: r.user_email || r.user_id, action: r.action, entity_type: r.entity_type, entity_id: r.entity_id, voucher_no: r.voucher_no ?? "", reason: r.reason ?? "", before: r.before_summary ? JSON.stringify(r.before_summary) : "", after: r.after_summary ? JSON.stringify(r.after_summary) : "" })), "audit_log", [{ key: "when", label: "When" }, { key: "user", label: "User" }, { key: "action", label: "Action" }, { key: "entity_type", label: "Entity type" }, { key: "entity_id", label: "Entity id" }, { key: "voucher_no", label: "Voucher" }, { key: "reason", label: "Reason" }, { key: "before", label: "Before" }, { key: "after", label: "After" }], { title: "Audit Log" })} className="inline-flex px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold cursor-pointer">Export CSV</button>
+          </div>
+        </div>
         <button
           type="button"
           onClick={handleSearch}
@@ -141,7 +166,9 @@ export default function AuditPage() {
           Apply filters
         </button>
       </div>
-      {rows.length === 0 && !formError ? (
+      {isLoading && searched ? (
+        <AuditSkeleton />
+      ) : rows.length === 0 && !formError ? (
         <EmptyState
           title="No audit rows match these filters"
           hint="The audit log is empty for this filter, or nothing has been recorded yet."
@@ -156,7 +183,9 @@ export default function AuditPage() {
                   <th className="pb-3 font-bold">User</th>
                   <th className="pb-3 font-bold">Action</th>
                   <th className="pb-3 font-bold">Entity</th>
+                  <th className="pb-3 font-bold">Voucher</th>
                   <th className="pb-3 font-bold">Reason</th>
+                  <th className="pb-3 font-bold">Before / After</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
@@ -166,7 +195,21 @@ export default function AuditPage() {
                     <td className="py-2">{r.user_email || r.user_id || "—"}</td>
                     <td className="py-2 font-bold">{r.action}</td>
                     <td className="py-2 font-mono">{r.entity_type}{r.entity_id ? ` / ${String(r.entity_id).slice(0, 8)}` : ""}</td>
+                    <td className="py-2 font-mono font-bold">{r.voucher_no || "—"}</td>
                     <td className="py-2 text-muted-foreground">{r.reason || "—"}</td>
+                    <td className="py-2">
+                      {(r.before_summary || r.after_summary) ? (
+                        <div>
+                          <button type="button" onClick={() => setExpanded((prev) => ({ ...prev, [r.id]: !prev[r.id] }))} className="px-2 py-0.5 rounded-md bg-muted text-foreground text-[11px] font-semibold cursor-pointer">{expanded[r.id] ? "Hide details" : "Show before / after"}</button>
+                          {expanded[r.id] && (
+                            <div className="mt-2 space-y-1">
+                              <pre className="text-[11px] whitespace-pre-wrap break-words bg-muted rounded p-2 font-mono">Before: {r.before_summary ? JSON.stringify(r.before_summary, null, 2) : "—"}</pre>
+                              <pre className="text-[11px] whitespace-pre-wrap break-words bg-muted rounded p-2 font-mono">After: {r.after_summary ? JSON.stringify(r.after_summary, null, 2) : "—"}</pre>
+                            </div>
+                          )}
+                        </div>
+                      ) : "—"}
+                    </td>
                   </tr>
                 ))}
               </tbody>
