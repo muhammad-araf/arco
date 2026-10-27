@@ -9,7 +9,7 @@ export type ProductUnit = "kg" | "bag" | "maund"
 
 export type PartyType = "customer" | "supplier" | "both" | "source"
 
-export type VoucherStatus = "draft" | "posted" | "reversed" | "returned" | "partially_returned"
+export type VoucherStatus = "draft" | "posted" | "reversed" | "returned" | "partially_returned" | "awaiting_approval"
 
 export type RateBasis = "per_bag" | "per_50kg" | "per_kg" | "per_maund" | "fixed"
 
@@ -341,6 +341,8 @@ export interface GatePassItem {
   net_weight_kg: number
   gross_weight_kg?: number
   remarks?: string
+  packaging_type_id?: string | null
+  party_id?: string | null
 }
 
 export interface GatePass {
@@ -357,6 +359,16 @@ export interface GatePass {
   driver_phone?: string
   transporter?: string
   order_ref?: string
+  receiver_name?: string | null
+  receiver_contact?: string | null
+  dispatch_mode?: string | null
+  prepared_by?: string | null
+  approved_by?: string | null
+  rejection_reason?: string | null
+  reversal_reason?: string | null
+  return_reason?: string | null
+  returned_at?: string | null
+  reversed_at?: string | null
   status: VoucherStatus
   total_bags: number
   total_weight_kg: number
@@ -584,6 +596,8 @@ export interface GatePassReturn {
   party_id?: string | null;
   qty_kg: number;
   reason?: string;
+  condition?: string | null;
+  restock_decision?: "accepted" | "rejected" | null;
   date: string;
 }
 
