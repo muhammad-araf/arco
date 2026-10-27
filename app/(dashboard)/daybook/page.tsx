@@ -21,6 +21,8 @@ import { DaybookPrint } from "@/components/print/daybook-print"
 import { PrintButton } from "@/components/print/print-button"
 import { ExpenseVoucher, CashLedgerEntry } from "@/lib/types/database"
 import { formatCurrency, formatDateTime, formatDate } from "@/lib/utils"
+import { exportReportToCsv, exportToExcel, exportToPdf } from "@/lib/export-utils"
+import { logExport } from "@/app/actions/audit-log"
 import {
   AlertBanner,
   ConfirmDialog,
@@ -271,7 +273,27 @@ export default function DaybookPage() {
     { debit: 0, credit: 0 }
   )
 
+  // Daybook export (spec §16): the shown cashbook rows with title, date
+  // range, totals — CSV, Excel and PDF share this one definition.
+  const getDaybookExport = () => ({
+    rows: visibleLedger.map((r: any) => ({ date: r.date, voucher_no: r.voucher_no, type: r.voucher_type, account: (r as any).account_label ?? r.account, description: r.description, debit: r.debit, credit: r.credit, balance: r.running_balance })),
+    filename: "daybook",
+    columns: [{ key: "date", label: "Date" }, { key: "voucher_no", label: "Voucher" }, { key: "type", label: "Type" }, { key: "account", label: "Account" }, { key: "description", label: "Description" }, { key: "debit", label: "Cash in (Debit)" }, { key: "credit", label: "Cash out (Credit)" }, { key: "balance", label: "Balance" }],
+    options: { title: "Daybook", dateRange: `${fromDate} to ${toDate}`, filters: drillFilter ? [`Filter: ${drillFilter}`] : [], totals: { debit: ledgerTotals.debit, credit: ledgerTotals.credit } },
+    report: "daybook",
+  })
+  const handleDaybookExport = async (format: "csv" | "xlsx" | "pdf") => {
+    const e = getDaybookExport()
+    const ok = format === "csv"
+      ? exportReportToCsv(e.rows, e.filename, e.columns as any, e.options as any)
+      : format === "xlsx"
+        ? await exportToExcel(e.rows, e.filename, e.columns as any, e.options as any)
+        : await exportToPdf(e.rows, e.filename, e.columns as any, e.options as any)
+    if (ok) void logExport({ report: e.report, format, filters: { dateRange: `${fromDate} to ${toDate}` } })
+  }
+
   if (isLoading) return <DaybookSkeleton />
+
 
   return (
     <div className="space-y-6">
@@ -287,14 +309,37 @@ export default function DaybookPage() {
           </h1>
         </div>
 
-        <button
-          type="button"
-          onClick={() => setIsExpenseModalOpen(true)}
-          className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-        >
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleDaybookExport("csv")}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+          >
+            Export CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleDaybookExport("xlsx")}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+          >
+            Export Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleDaybookExport("pdf")}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+          >
+            Export PDF
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsExpenseModalOpen(true)}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+          >
           <Plus className="h-4 w-4" />
           <span>New Expense</span>
         </button>
+        </div>
       </div>
 
       {/* Liquidity Summary Cards */}
