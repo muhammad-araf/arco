@@ -13,7 +13,14 @@ import {
 } from "./production-helpers";
 import { isUniqueViolation } from "@/lib/idempotency";
 import {
+  writeCostLedgerRows,
+  getValuationMethod,
+  ingredientUnitCosts,
+  type CostLedgerEntry,
+} from "@/lib/cost-ledger";
+import {
   roundWeight,
+  roundMoney,
   ledgerRunningBalance,
   stockBalanceFromRows,
   yieldPct,
@@ -949,6 +956,61 @@ export async function postBatch(id: string, clientToken?: string, varianceReason
     }
     const result = { ...posted, inputs, outputs, variances, yield_pct: computedYield };
     await storeIdempotency(supabase, "batch:post", clientToken, "batch", id, batch.batch_no, result);
+    // Cost-ledger (wave 2, gated, best-effort): when cost_ledger_enabled
+    // is off this writes nothing; a ledger failure is logged, never a
+    // reason to fail a batch that already posted.
+    try {
+      const dbForCosts = supabase as unknown as Parameters<
+        typeof writeCostLedgerRows
+      >[0];
+      const method = await getValuationMethod(dbForCosts);
+      const methodSet =
+        method === "last_purchase_cost" || method === "average_cost";
+      const basis = methodSet ? method : "unconfirmed-method";
+      const unitCosts = await ingredientUnitCosts(
+        dbForCosts,
+        inputs.map((i) => i.product_id),
+        method,
+      );
+      const costEntries: CostLedgerEntry[] = [];
+      if (bags > 0) {
+        costEntries.push({
+          batchId: id,
+          costType: "packaging",
+          amount: packingCharge(bags, batch.packing_rate_per_bag ?? 0),
+          qtyKg: roundWeight(batch.actual_output_kg),
+          basis: "bags×rate",
+        });
+      }
+      for (const item of inputs) {
+        const unit = unitCosts.get(item.product_id) ?? null;
+        costEntries.push({
+          batchId: id,
+          costType: "input",
+          qtyKg: roundWeight(item.actual_qty_kg),
+          amount:
+            unit !== null
+              ? roundMoney(roundWeight(item.actual_qty_kg) * unit)
+              : null,
+          basis,
+        });
+      }
+      for (const out of outputs) {
+        costEntries.push({
+          batchId: id,
+          costType: "output",
+          qtyKg: roundWeight(out.qty_kg),
+          amount: null,
+          basis,
+        });
+      }
+      const costRes = await writeCostLedgerRows(dbForCosts, costEntries);
+      if (costRes.error) {
+        console.error("[cost-ledger] batch cost write failed:", costRes.error);
+      }
+    } catch (costErr) {
+      console.error("[cost-ledger] batch cost write failed:", costErr);
+    }
     await logAudit(supabase, {
       action: "post",
       entityType: "production_batch",

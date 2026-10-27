@@ -42,6 +42,7 @@ export default function SettingsPage() {
   const [timeout, setTimeout] = React.useState("60")
   const [cutoverDate, setCutoverDate] = React.useState("")
   const [gatepassApproval, setGatepassApproval] = React.useState(false)
+  const [costLedger, setCostLedger] = React.useState(false)
   const [tolerance, setTolerance] = React.useState("")
   const [biltyCheck, setBiltyCheck] = React.useState("warn")
 
@@ -76,6 +77,7 @@ export default function SettingsPage() {
         setTimeout(String(s.session_timeout_minutes))
         setCutoverDate(s.cutover_date ?? "")
         setGatepassApproval(s.gatepass_approval_required)
+        setCostLedger((s as any).cost_ledger_enabled === true)
         setTolerance(s.variance_tolerance_pct === null ? "" : String(s.variance_tolerance_pct))
         setBiltyCheck(s.bilty_duplicate_check)
       }
@@ -153,6 +155,7 @@ export default function SettingsPage() {
         ["session_timeout_minutes", timeoutNum],
         ["cutover_date", cutoverDate.trim() === "" ? null : cutoverDate.trim()],
         ["gatepass_approval_required", gatepassApproval],
+        ["cost_ledger_enabled", costLedger],
         ["variance_tolerance_pct", toleranceNum],
         ["bilty_duplicate_check", biltyCheck],
       ]
@@ -259,6 +262,7 @@ export default function SettingsPage() {
           <div><label className={labelCls} htmlFor="bilty-check">Bilty duplicate check</label><select id="bilty-check" value={biltyCheck} onChange={(e) => setBiltyCheck(e.target.value)} className={inputCls}><option value="off">Off</option><option value="warn">Warn</option><option value="block">Block</option></select></div>
           <div><label className={labelCls} htmlFor="variance-tolerance">Variance tolerance % (empty = disabled)</label><input id="variance-tolerance" type="number" min="0" max="100" step="0.01" value={tolerance} onChange={(e) => setTolerance(e.target.value)} placeholder="Empty = disabled" className={`${inputCls} font-mono`} /></div>
           <div className="flex items-end gap-2 pb-1"><input id="gatepass-approval" type="checkbox" checked={gatepassApproval} onChange={(e) => setGatepassApproval(e.target.checked)} className="h-4 w-4" /><label className="font-medium text-foreground" htmlFor="gatepass-approval">Gate pass approval required</label></div>
+          <div className="flex items-end gap-2 pb-1"><input id="cost-ledger-enabled" type="checkbox" checked={costLedger} onChange={(e) => setCostLedger(e.target.checked)} className="h-4 w-4" /><label className="font-medium text-foreground" htmlFor="cost-ledger-enabled">Production cost ledger enabled (off by default — when on, batch/job posts record cost rows)</label></div>
           <div className="sm:col-span-2 flex justify-end"><button type="submit" disabled={pending} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{pending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}<span>{pending ? "Saving…" : "Save settings"}</span></button></div>
         </form>
       </div>

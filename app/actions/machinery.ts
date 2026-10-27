@@ -11,6 +11,7 @@ import {
 } from "@/lib/calc";
 import type { RateBasis } from "@/lib/types/database";
 import { callAtomicStockTransition } from "@/lib/atomic";
+import { writeCostLedgerRows } from "@/lib/cost-ledger";
 import { logAudit } from "@/lib/audit";
 import {
   checkProductsActive,
@@ -406,6 +407,37 @@ export async function deleteJobDraft(id: string): Promise<ActionResult> {
 }
 
 // ---------------- Post ----------------
+/** Cost-ledger (wave 2, gated, best-effort): the posted job's stored
+ * service_charge, recorded against the job's own charge basis
+ * (rate_basis). When cost_ledger_enabled is off this writes nothing;
+ * a ledger failure is logged, never a reason to fail a job that
+ * already posted. */
+async function recordJobCost(
+  supabase: Db,
+  job: { id: string; service_charge?: number | null; rate_basis?: string | null },
+  inputKg: number,
+): Promise<void> {
+  try {
+    const res = await writeCostLedgerRows(
+      supabase as unknown as Parameters<typeof writeCostLedgerRows>[0],
+      [
+        {
+          jobId: job.id,
+          costType: "processing",
+          amount: Number(job.service_charge ?? 0),
+          qtyKg: roundWeight(inputKg),
+          basis: job.rate_basis ?? null,
+        },
+      ],
+    );
+    if (res.error) {
+      console.error("[cost-ledger] job cost write failed:", res.error);
+    }
+  } catch (costErr) {
+    console.error("[cost-ledger] job cost write failed:", costErr);
+  }
+}
+
 export async function postJob(id: string, clientToken?: string): Promise<ActionResult> {
   try {
     if (!id) return fail("id is required");
@@ -507,6 +539,15 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
         userId: gate.actor.userId,
         userEmail: gate.actor.email,
       });
+      await recordJobCost(
+        supabase,
+        { id, service_charge: Number(postedMulti.service_charge ?? job.service_charge ?? 0), rate_basis: job.rate_basis ?? null },
+        storedLines.reduce(
+          (sum: number, l: { input_qty_kg?: number | null }) =>
+            sum + roundWeight(Number(l.input_qty_kg ?? 0)),
+          0,
+        ),
+      );
       revalidateMachinery();
       return ok(resultMulti);
     }
@@ -591,6 +632,11 @@ export async function postJob(id: string, clientToken?: string): Promise<ActionR
       userId: gate.actor.userId,
       userEmail: gate.actor.email,
     });
+    await recordJobCost(
+      supabase,
+      { id, service_charge: Number(posted.service_charge ?? job.service_charge ?? 0), rate_basis: job.rate_basis ?? null },
+      inputQty,
+    );
     revalidateMachinery();
     return ok(result);
   } catch (e) {

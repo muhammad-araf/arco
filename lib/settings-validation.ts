@@ -31,6 +31,8 @@ export interface SettingsSnapshot {
   gatepass_approval_required: boolean;
   variance_tolerance_pct: number | null;
   bilty_duplicate_check: BiltyDuplicateCheck;
+  /** Wave 2: production cost-ledger writes. Default false = off. */
+  cost_ledger_enabled: boolean;
 }
 
 export interface DocNumberingRow {
@@ -49,6 +51,7 @@ export const SETTING_DEFAULTS: SettingsSnapshot = {
   gatepass_approval_required: false,
   variance_tolerance_pct: null,
   bilty_duplicate_check: "warn",
+  cost_ledger_enabled: false,
 };
 
 /** The only keys updateAppSetting() may write. */
@@ -62,6 +65,7 @@ export const SETTING_KEYS = [
   "gatepass_approval_required",
   "variance_tolerance_pct",
   "bilty_duplicate_check",
+  "cost_ledger_enabled",
 ] as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[number];
@@ -149,6 +153,7 @@ export function normaliseSnapshot(
         ? rows.cutover_date.trim()
         : null,
     gatepass_approval_required: rows.gatepass_approval_required === true,
+    cost_ledger_enabled: rows.cost_ledger_enabled === true,
     variance_tolerance_pct: tolerance,
     bilty_duplicate_check:
       biltyRaw === "off" || biltyRaw === "block" ? biltyRaw : "warn",
@@ -216,6 +221,12 @@ export function validateSettingValue(
     case "gatepass_approval_required": {
       if (typeof value !== "boolean") {
         return { error: "gatepass_approval_required must be true or false." };
+      }
+      return { value };
+    }
+    case "cost_ledger_enabled": {
+      if (typeof value !== "boolean") {
+        return { error: "cost_ledger_enabled must be true or false." };
       }
       return { value };
     }
