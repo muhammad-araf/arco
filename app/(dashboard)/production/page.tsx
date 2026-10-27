@@ -102,8 +102,8 @@ export default function ProductionPage() {
       setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
       setBatches((Array.isArray(b.data) ? b.data : []).map((row: any) => ({
         ...row,
-        machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? row.machine_id,
-        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+        machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? "Not set",
+        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? "Not set",
         output_product_name: productList.find((x) => x.id === row.output_product_id)?.name,
       })))
     } catch (err) {
@@ -310,7 +310,7 @@ export default function ProductionPage() {
       const full: any = res.data
       const inputs = (full.production_batch_inputs ?? []).map((i: any) => ({
         ...i,
-        product_name: products.find((p) => p.id === i.product_id)?.name ?? i.product_id,
+        product_name: products.find((p) => p.id === i.product_id)?.name ?? "Not set",
       }))
       const outputs = (full.production_batch_outputs ?? []).map((o: any) => ({
         ...o,
@@ -537,8 +537,8 @@ export default function ProductionPage() {
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Machine / Cleaning Plant</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="machine-cleaning-plant">Machine / Cleaning Plant</label>
+                  <select id="machine-cleaning-plant"
                     value={machineId}
                     onChange={(e) => setMachineId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -553,8 +553,8 @@ export default function ProductionPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Target Godown</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="target-godown">Target Godown</label>
+                  <select id="target-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -571,8 +571,8 @@ export default function ProductionPage() {
 
               {/* Recipe (optional): pins recipe + version to the batch */}
               <div>
-                <label className="block font-medium text-foreground mb-1">Recipe (optional)</label>
-                <select
+                <label className="block font-medium text-foreground mb-1" htmlFor="recipe-optional">Recipe (optional)</label>
+                <select id="recipe-optional"
                   value={recipeId}
                   onChange={(e) => handleRecipeSelect(e.target.value)}
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -600,8 +600,8 @@ export default function ProductionPage() {
                 {inputLines.map((line, idx) => (
                   <div key={line.key} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[10px] text-muted-foreground mb-0.5">Raw Seed Product</label>
-                      <select
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`raw-seed-product-${line.key}`}>Raw Seed Product</label>
+                      <select id={`raw-seed-product-${line.key}`}
                         value={line.productId}
                         onChange={(e) => setInputLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, productId: e.target.value } : l)))}
                         className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
@@ -618,9 +618,9 @@ export default function ProductionPage() {
                     </div>
 
                     <div>
-                      <label className="block text-[10px] text-muted-foreground mb-0.5">Input Weight (kg){line.productId ? ` — in godown: ${formatWeight(stockForProduct(line.productId))}` : ""}</label>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`production-input-weight-kg-${line.key}`}>Input Weight (kg){line.productId ? ` — in godown: ${formatWeight(stockForProduct(line.productId))}` : ""}</label>
                       <div className="flex gap-2">
-                        <input
+                        <input id={`production-input-weight-kg-${line.key}`}
                           type="number"
                           value={line.qty}
                           onChange={(e) => setInputLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, qty: Number(e.target.value) } : l)))}
@@ -646,8 +646,8 @@ export default function ProductionPage() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">Finished Output Seed</label>
-                    <select
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="finished-output-seed">Finished Output Seed</label>
+                    <select id="finished-output-seed"
                       value={outputProductId}
                       onChange={(e) => setOutputProductId(e.target.value)}
                       className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
@@ -663,8 +663,8 @@ export default function ProductionPage() {
                   </div>
 
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">Usable Output (kg)</label>
-                    <input
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="usable-output-kg">Usable Output (kg)</label>
+                    <input id="usable-output-kg"
                       type="number"
                       value={outputWeightKg}
                       onChange={(e) => setOutputWeightKg(Number(e.target.value))}
@@ -675,8 +675,8 @@ export default function ProductionPage() {
                   </div>
 
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">By-Product (Phok/Chhilka)</label>
-                    <select
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="by-product-phok-chhilka">By-Product (Phok/Chhilka)</label>
+                    <select id="by-product-phok-chhilka"
                       value={byProductId}
                       onChange={(e) => setByProductId(e.target.value)}
                       className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
@@ -692,8 +692,8 @@ export default function ProductionPage() {
                   </div>
 
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">By-Product Weight (kg)</label>
-                    <input
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="by-product-weight-kg">By-Product Weight (kg)</label>
+                    <input id="by-product-weight-kg"
                       type="number"
                       value={byProductKg}
                       onChange={(e) => setByProductKg(Number(e.target.value))}
@@ -705,8 +705,8 @@ export default function ProductionPage() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">Process Wastage / Loss (kg)</label>
-                    <input
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="process-wastage-loss-kg">Process Wastage / Loss (kg)</label>
+                    <input id="process-wastage-loss-kg"
                       type="number"
                       value={wasteKg}
                       onChange={(e) => setWasteKg(Number(e.target.value))}
@@ -730,8 +730,8 @@ export default function ProductionPage() {
                 </span>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">Bag / Bardana Type</label>
-                    <select
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="bag-bardana-type">Bag / Bardana Type</label>
+                    <select id="bag-bardana-type"
                       value={packagingTypeId}
                       onChange={(e) => setPackagingTypeId(e.target.value)}
                       className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
@@ -745,8 +745,8 @@ export default function ProductionPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">Bags Consumed</label>
-                    <input
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="bags-consumed">Bags Consumed</label>
+                    <input id="bags-consumed"
                       type="number"
                       value={bagsConsumed}
                       onChange={(e) => setBagsConsumed(Number(e.target.value))}
@@ -755,8 +755,8 @@ export default function ProductionPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">Packing Rate / Bag (PKR)</label>
-                    <input
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="packing-rate-bag-pkr">Packing Rate / Bag (PKR)</label>
+                    <input id="packing-rate-bag-pkr"
                       type="number"
                       value={packingRatePerBag}
                       onChange={(e) => setPackingRatePerBag(Number(e.target.value))}
@@ -765,8 +765,8 @@ export default function ProductionPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">Damaged Bags</label>
-                    <input
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="damaged-bags">Damaged Bags</label>
+                    <input id="damaged-bags"
                       type="number"
                       value={damagedBags}
                       onChange={(e) => setDamagedBags(Number(e.target.value))}
@@ -778,8 +778,8 @@ export default function ProductionPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Batch Run Notes</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="batch-run-notes">Batch Run Notes</label>
+                <input id="batch-run-notes"
                   type="text"
                   value={batchNotes}
                   onChange={(e) => setBatchNotes(e.target.value)}
@@ -857,7 +857,7 @@ export default function ProductionPage() {
                 <tbody className="divide-y divide-gray-200">
                   {((selectedBatchForPrint as any).production_batch_inputs ?? []).map((i: any) => (
                     <tr key={i.id ?? i.product_id}>
-                      <td className="py-2 font-medium">{i.product_name ?? i.product_id}</td>
+                      <td className="py-2 font-medium">{i.product_name ?? "Not set"}</td>
                       <td className="py-2 text-right font-mono">{i.planned_qty_kg} kg</td>
                       <td className="py-2 text-right font-mono font-bold">{i.actual_qty_kg} kg</td>
                     </tr>
@@ -944,8 +944,8 @@ export default function ProductionPage() {
             machine={selectedBatchForPrint.machine_name}
             godown={selectedBatchForPrint.godown_name}
             plannedSizeKg={selectedBatchForPrint.planned_size_kg}
-            plannedInputs={((selectedBatchForPrint as any).production_batch_inputs ?? []).map((i: any) => ({ product: i.product_name ?? products.find((p) => p.id === i.product_id)?.name ?? i.product_id, plannedQtyKg: i.planned_qty_kg, actualQtyKg: i.actual_qty_kg }))}
-            actualInputs={((selectedBatchForPrint as any).production_batch_inputs ?? []).map((i: any) => ({ product: i.product_name ?? products.find((p) => p.id === i.product_id)?.name ?? i.product_id, plannedQtyKg: i.planned_qty_kg, actualQtyKg: i.actual_qty_kg }))}
+            plannedInputs={((selectedBatchForPrint as any).production_batch_inputs ?? []).map((i: any) => ({ product: i.product_name ?? products.find((p) => p.id === i.product_id)?.name ?? "Not set", plannedQtyKg: i.planned_qty_kg, actualQtyKg: i.actual_qty_kg }))}
+            actualInputs={((selectedBatchForPrint as any).production_batch_inputs ?? []).map((i: any) => ({ product: i.product_name ?? products.find((p) => p.id === i.product_id)?.name ?? "Not set", plannedQtyKg: i.planned_qty_kg, actualQtyKg: i.actual_qty_kg }))}
             outputProduct={(selectedBatchForPrint as any).output_product_name ?? products.find((p) => p.id === (selectedBatchForPrint as any).output_product_id)?.name}
             actualOutputKg={selectedBatchForPrint.actual_output_kg}
             byProductName={(selectedBatchForPrint as any).byproduct_product_name}
@@ -967,9 +967,9 @@ export default function ProductionPage() {
             {recipes.map((r: any) => (<tr key={r.id}><td className="py-2 font-mono">{r.code}</td><td className="py-2 font-semibold">{r.name}</td><td className="py-2">{r.version}</td><td className="py-2">{r.expected_yield_pct ?? "—"}%</td></tr>))}
           </tbody></table></div>
         <form onSubmit={handleCreateRecipe} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1">Code *</label><input value={recipeCode} onChange={(e) => setRecipeCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Name *</label><input value={recipeName} onChange={(e) => setRecipeName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Output product *</label><select value={recipeOutputId} onChange={(e) => setRecipeOutputId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select output</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="code">Code *</label><input id="code" value={recipeCode} onChange={(e) => setRecipeCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="name">Name *</label><input id="name" value={recipeName} onChange={(e) => setRecipeName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="output-product">Output product *</label><select id="output-product" value={recipeOutputId} onChange={(e) => setRecipeOutputId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select output</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
           <div className="sm:col-span-2 lg:col-span-3 space-y-2">
             <span className="block font-medium text-foreground">Input items (ratios must sum to 100)</span>
             {recipeItems.map((item) => (
@@ -986,7 +986,7 @@ export default function ProductionPage() {
               <span className="text-muted-foreground">Total: {recipeItems.reduce((s, i) => s + (Number(i.ratioPct) || 0), 0)}%</span>
             </div>
           </div>
-          <div><label className="block font-medium text-foreground mb-1">Expected yield (%)</label><input type="number" value={recipeYield} onChange={(e) => setRecipeYield(Number(e.target.value))} min="0" max="100" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="expected-yield">Expected yield (%)</label><input id="expected-yield" type="number" value={recipeYield} onChange={(e) => setRecipeYield(Number(e.target.value))} min="0" max="100" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
           <div className="sm:col-span-2 lg:col-span-3 flex justify-end"><button type="submit" disabled={recipePending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{recipePending ? "Saving…" : "Save recipe / new version"}</button></div>
         </form>
       </div>

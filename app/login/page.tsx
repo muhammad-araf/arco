@@ -15,6 +15,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
   const [error, setError] = React.useState("");
   const [isPending, setIsPending] = React.useState(false);
 
@@ -75,12 +76,22 @@ export default function LoginPage() {
             />
           </div>
           <div className="space-y-1.5">
-            <label htmlFor="password" className="text-xs font-medium text-muted-foreground">
-              Password
-            </label>
+            <div className="flex items-center justify-between">
+              <label htmlFor="password" className="text-xs font-medium text-muted-foreground">
+                Password
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                className="text-xs font-medium text-emerald-600 dark:text-emerald-400 cursor-pointer"
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
             <input
               id="password"
-              type="password"
+              type={showPassword ? "text" : "password"}
               autoComplete="current-password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}

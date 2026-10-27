@@ -388,8 +388,8 @@ export default function PackingPage() {
             <form onSubmit={handleRecordPacking} className="space-y-4 text-xs">
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div>
-                <label className="block font-medium text-foreground mb-1">Product Seed to Pack</label>
-                <select
+                <label className="block font-medium text-foreground mb-1" htmlFor="product-seed-to-pack">Product Seed to Pack</label>
+                <select id="product-seed-to-pack"
                   value={productId}
                   onChange={(e) => setProductId(e.target.value)}
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -403,8 +403,8 @@ export default function PackingPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Packaging Bag Type (Bardana)</label>
-                <select
+                <label className="block font-medium text-foreground mb-1" htmlFor="packaging-bag-type-bardana">Packaging Bag Type (Bardana)</label>
+                <select id="packaging-bag-type-bardana"
                   value={packagingId}
                   onChange={(e) => setPackagingId(e.target.value)}
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -419,8 +419,8 @@ export default function PackingPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Number of Bags</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="number-of-bags">Number of Bags</label>
+                  <input id="number-of-bags"
                     type="number"
                     value={bagsPacked}
                     onChange={(e) => setBagsPacked(Number(e.target.value))}
@@ -431,8 +431,8 @@ export default function PackingPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Damaged / Torn Bags</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="damaged-torn-bags">Damaged / Torn Bags</label>
+                  <input id="damaged-torn-bags"
                     type="number"
                     value={damagedBags}
                     onChange={(e) => setDamagedBags(Number(e.target.value))}
@@ -443,8 +443,8 @@ export default function PackingPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Packing Labor Rate / Bag (PKR)</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="packing-labor-rate-bag-pkr">Packing Labor Rate / Bag (PKR)</label>
+                <input id="packing-labor-rate-bag-pkr"
                   type="number"
                   value={packingRate}
                   onChange={(e) => setPackingRate(Number(e.target.value))}
@@ -454,8 +454,8 @@ export default function PackingPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Packed Weight (kg)</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="packed-weight-kg">Packed Weight (kg)</label>
+                <input id="packed-weight-kg"
                   type="number"
                   value={packedKg}
                   onChange={(e) => setPackedKg(Number(e.target.value))}

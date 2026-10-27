@@ -293,8 +293,8 @@ export default function InventoryPage() {
               } else if (activeTab === "transfers") {
                 exportToCSV(
                   transfers.map((t: any) => ({
-                    transfer_no: t.transfer_no, date: t.date, from: godowns.find((g) => g.id === t.from_godown_id)?.name ?? t.from_godown_id,
-                    to: godowns.find((g) => g.id === t.to_godown_id)?.name ?? t.to_godown_id,
+                    transfer_no: t.transfer_no, date: t.date, from: godowns.find((g) => g.id === t.from_godown_id)?.name ?? "Not set",
+                    to: godowns.find((g) => g.id === t.to_godown_id)?.name ?? "Not set",
                     product: products.find((x) => x.id === t.product_id)?.name ?? t.product_id,
                     quantity_kg: t.quantity, status: t.status,
                   })),
@@ -616,7 +616,7 @@ export default function InventoryPage() {
                   <tr key={t.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-bold text-foreground font-mono">{t.transfer_no}</td>
                     <td className="py-3 text-muted-foreground">{formatDateTime(t.date)}</td>
-                    <td className="py-3 text-muted-foreground">{godowns.find((g) => g.id === t.from_godown_id)?.name ?? t.from_godown_id} → {godowns.find((g) => g.id === t.to_godown_id)?.name ?? t.to_godown_id}</td>
+                    <td className="py-3 text-muted-foreground">{godowns.find((g) => g.id === t.from_godown_id)?.name ?? "Not set"} → {godowns.find((g) => g.id === t.to_godown_id)?.name ?? "Not set"}</td>
                     <td className="py-3 font-semibold text-foreground">{products.find((x) => x.id === t.product_id)?.name ?? t.product_id}</td>
                     <td className="py-3 text-muted-foreground">{t.party_id ? (parties.find((x) => x.id === t.party_id)?.name ?? t.party_id) : "Company"}</td>
                     <td className="py-3 text-right font-bold text-foreground">{formatWeight(t.quantity)}</td>
@@ -682,12 +682,12 @@ export default function InventoryPage() {
         <h2 className="text-sm font-bold text-foreground mb-1">Stock Adjustment</h2>
         <p className="text-xs text-muted-foreground mb-4">Fix a physical count with a reason and an approver. Every posted adjustment can be reversed from the Adjustments register above.</p>
         <form onSubmit={handleAdjustment} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1">Godown</label><select value={adjGodown} onChange={(e) => setAdjGodown(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select godown</option>{godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">Product</label><select value={adjProduct} onChange={(e) => setAdjProduct(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select product</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">Stock owner</label><select value={adjOwner} onChange={(e) => setAdjOwner(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Company stock</option>{parties.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">Quantity after (kg)</label><div className="flex gap-2"><input type="number" value={adjAfter} onChange={(e) => setAdjAfter(e.target.value)} min="0" placeholder="Enter quantity after" className="flex-1 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /><button type="button" onClick={() => setAdjAfter(String(adjBefore))} className="px-2 py-2 rounded-lg bg-muted text-muted-foreground text-[11px] font-semibold cursor-pointer" title="Fill with the current balance">Use current</button></div></div>
-          <div><label className="block font-medium text-foreground mb-1">Reason *</label><input value={adjReason} onChange={(e) => setAdjReason(e.target.value)} placeholder="e.g. Physical recount variance" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Approver *</label><input value={adjApprover} onChange={(e) => setAdjApprover(e.target.value)} placeholder="Approver name" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="godown">Godown</label><select id="godown" value={adjGodown} onChange={(e) => setAdjGodown(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select godown</option>{godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="product-2">Product</label><select id="product-2" value={adjProduct} onChange={(e) => setAdjProduct(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select product</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="stock-owner-2">Stock owner</label><select id="stock-owner-2" value={adjOwner} onChange={(e) => setAdjOwner(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Company stock</option>{parties.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="quantity-after-kg">Quantity after (kg)</label><div className="flex gap-2"><input id="quantity-after-kg" type="number" value={adjAfter} onChange={(e) => setAdjAfter(e.target.value)} min="0" placeholder="Enter quantity after" className="flex-1 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /><button type="button" onClick={() => setAdjAfter(String(adjBefore))} className="px-2 py-2 rounded-lg bg-muted text-muted-foreground text-[11px] font-semibold cursor-pointer" title="Fill with the current balance">Use current</button></div></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="reason">Reason *</label><input id="reason" value={adjReason} onChange={(e) => setAdjReason(e.target.value)} placeholder="e.g. Physical recount variance" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="approver">Approver *</label><input id="approver" value={adjApprover} onChange={(e) => setAdjApprover(e.target.value)} placeholder="Approver name" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
           <div className="flex items-end gap-2"><span className="text-muted-foreground">Current balance: {adjGodown && adjProduct ? `${adjBefore} kg` : "—"}</span><button type="submit" disabled={adjPending} className="ml-auto px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{adjPending ? "Posting…" : "Create & Post Adjustment"}</button></div>
         </form>
       </div>
@@ -713,8 +713,8 @@ export default function InventoryPage() {
             <form onSubmit={handleExecuteTransfer} className="space-y-4 text-xs">
               <AlertBanner tone="error" message={transferError} onDismiss={() => setTransferError("")} />
               <div>
-                <label className="block font-medium text-foreground mb-1">Product</label>
-                <select
+                <label className="block font-medium text-foreground mb-1" htmlFor="product">Product</label>
+                <select id="product"
                   value={transferProductId}
                   onChange={(e) => setTransferProductId(e.target.value)}
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -729,8 +729,8 @@ export default function InventoryPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">From (Source)</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="from-source">From (Source)</label>
+                  <select id="from-source"
                     value={transferFromGodown}
                     onChange={(e) => setTransferFromGodown(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -744,8 +744,8 @@ export default function InventoryPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">To (Destination)</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="to-destination">To (Destination)</label>
+                  <select id="to-destination"
                     value={transferToGodown}
                     onChange={(e) => setTransferToGodown(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -760,8 +760,8 @@ export default function InventoryPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Stock owner</label>
-                <select
+                <label className="block font-medium text-foreground mb-1" htmlFor="stock-owner">Stock owner</label>
+                <select id="stock-owner"
                   value={transferOwner}
                   onChange={(e) => setTransferOwner(e.target.value)}
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -776,8 +776,8 @@ export default function InventoryPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Transfer Quantity (kg)</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="transfer-quantity-kg">Transfer Quantity (kg)</label>
+                <input id="transfer-quantity-kg"
                   type="number"
                   value={transferQty}
                   onChange={(e) => setTransferQty(Number(e.target.value))}
@@ -788,8 +788,8 @@ export default function InventoryPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Transfer Reason / Notes</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="transfer-reason-notes">Transfer Reason / Notes</label>
+                <input id="transfer-reason-notes"
                   type="text"
                   value={transferNotes}
                   onChange={(e) => setTransferNotes(e.target.value)}

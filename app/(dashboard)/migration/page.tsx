@@ -529,8 +529,8 @@ export default function MigrationPage() {
             <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block font-medium text-foreground mb-1">As-of date</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="as-of-date">As-of date</label>
+                <input id="as-of-date"
                   type="date"
                   value={asOfDate}
                   onChange={(e) => setAsOfDate(e.target.value)}
@@ -540,8 +540,8 @@ export default function MigrationPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Approving role (enforced by the server)</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="approving-role-enforced-by-the-server">Approving role (enforced by the server)</label>
+                <input id="approving-role-enforced-by-the-server"
                   type="text"
                   value="Owner / Admin"
                   disabled
@@ -552,8 +552,8 @@ export default function MigrationPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 rounded-md bg-muted border border-border">
               <div>
-                <label className="block font-medium text-foreground mb-1">Godown Storage Shed</label>
-                <select
+                <label className="block font-medium text-foreground mb-1" htmlFor="godown-storage-shed">Godown Storage Shed</label>
+                <select id="godown-storage-shed"
                   value={openingGodownId}
                   onChange={(e) => setOpeningGodownId(e.target.value)}
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -567,8 +567,8 @@ export default function MigrationPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Seed Grain Product</label>
-                <select
+                <label className="block font-medium text-foreground mb-1" htmlFor="seed-grain-product">Seed Grain Product</label>
+                <select id="seed-grain-product"
                   value={openingProductId}
                   onChange={(e) => setOpeningProductId(e.target.value)}
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -582,8 +582,8 @@ export default function MigrationPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Opening Stock (kg)</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="opening-stock-kg">Opening Stock (kg)</label>
+                <input id="opening-stock-kg"
                   type="number"
                   value={openingStockWeight}
                   onChange={(e) => setOpeningStockWeight(Number(e.target.value))}
@@ -595,8 +595,8 @@ export default function MigrationPage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="block font-medium text-foreground mb-1">Opening Cash (PKR) — leave 0 to skip</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="opening-cash-pkr-leave-0-to-skip">Opening Cash (PKR) — leave 0 to skip</label>
+                <input id="opening-cash-pkr-leave-0-to-skip"
                   type="number"
                   min="0"
                   value={openingCash}
@@ -606,8 +606,8 @@ export default function MigrationPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Cash account for the opening cash</label>
-                <select
+                <label className="block font-medium text-foreground mb-1" htmlFor="cash-account-for-the-opening-cash">Cash account for the opening cash</label>
+                <select id="cash-account-for-the-opening-cash"
                   value={openingCashAccountId}
                   onChange={(e) => setOpeningCashAccountId(e.target.value)}
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -622,8 +622,8 @@ export default function MigrationPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Source Documentation / Notes</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="source-documentation-notes">Source Documentation / Notes</label>
+                <input id="source-documentation-notes"
                   type="text"
                   value={openingNotes}
                   onChange={(e) => setOpeningNotes(e.target.value)}
@@ -744,8 +744,8 @@ export default function MigrationPage() {
                     const ambiguous = col !== null && col !== undefined && parsedFile.ambiguousColumns.has(col)
                     return (
                       <div key={f.key}>
-                        <label className="block font-medium text-foreground mb-1">{f.label}{f.required ? " *" : ""}</label>
-                        <select
+                        <label className="block font-medium text-foreground mb-1" htmlFor={`import-map-${f.key}`}>{f.label}{f.required ? " *" : ""}</label>
+                        <select id={`import-map-${f.key}`}
                           value={col === null || col === undefined ? "" : String(col)}
                           onChange={(e) => setMapping((prev) => ({ ...prev, [f.key]: e.target.value === "" ? null : Number(e.target.value) }))}
                           className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"

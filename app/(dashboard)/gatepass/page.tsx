@@ -105,10 +105,10 @@ export default function GatePassPage() {
       setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
       setGatePasses((Array.isArray(gp.data) ? gp.data : []).map((row: any) => ({
         ...row,
-        customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
-        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+        customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? "Not set",
+        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? "Not set",
         items: (row.gate_pass_items ?? row.items ?? []).map((it: any) => ({
-          ...it, product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+          ...it, product_name: productList.find((x) => x.id === it.product_id)?.name ?? "Not set",
         })),
       })))
     } catch (err) {
@@ -252,7 +252,7 @@ export default function GatePassPage() {
         godown_name: godowns.find((x) => x.id === serverRow.godown_id)?.name ?? serverRow.godown_id,
         items: (serverRow.gate_pass_items ?? serverRow.items ?? []).map((it: any) => ({
           ...it,
-          product_name: products.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+          product_name: products.find((x) => x.id === it.product_id)?.name ?? "Not set",
         })),
       })
       setShowPostConfirm(false)
@@ -568,8 +568,8 @@ export default function GatePassPage() {
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Customer / Consignee</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="customer-consignee">Customer / Consignee</label>
+                  <select id="customer-consignee"
                     value={customerId}
                     onChange={(e) => setCustomerId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -584,8 +584,8 @@ export default function GatePassPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Dispatch Godown</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="dispatch-godown">Dispatch Godown</label>
+                  <select id="dispatch-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -600,8 +600,8 @@ export default function GatePassPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Delivery Destination</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="delivery-destination">Delivery Destination</label>
+                  <input id="delivery-destination"
                     type="text"
                     value={destination}
                     onChange={(e) => setDestination(e.target.value)}
@@ -611,8 +611,8 @@ export default function GatePassPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Vehicle / Truck No</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="vehicle-truck-no">Vehicle / Truck No</label>
+                  <input id="vehicle-truck-no"
                     type="text"
                     value={vehicleNo}
                     onChange={(e) => setVehicleNo(e.target.value)}
@@ -623,8 +623,8 @@ export default function GatePassPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Driver Full Name</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="driver-full-name">Driver Full Name</label>
+                  <input id="driver-full-name"
                     type="text"
                     value={driverName}
                     onChange={(e) => setDriverName(e.target.value)}
@@ -635,8 +635,8 @@ export default function GatePassPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Driver Mobile Number</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="driver-mobile-number">Driver Mobile Number</label>
+                  <input id="driver-mobile-number"
                     type="text"
                     value={driverPhone}
                     onChange={(e) => setDriverPhone(e.target.value)}
@@ -672,10 +672,10 @@ export default function GatePassPage() {
                         className="grid grid-cols-1 sm:grid-cols-6 gap-2 p-2.5 rounded-lg bg-muted border border-border text-xs items-center"
                       >
                         <div className="sm:col-span-2">
-                          <label className="block text-[10px] text-muted-foreground mb-0.5">
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`gatepass-item-product-${idx}`}>
                             Product (Available: {formatWeight(available)})
                           </label>
-                          <select
+                          <select id={`gatepass-item-product-${idx}`}
                             value={item.productId}
                             onChange={(e) => handleItemChange(idx, "productId", e.target.value)}
                             className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
@@ -689,8 +689,8 @@ export default function GatePassPage() {
                         </div>
 
                         <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5">Bags Count</label>
-                          <input
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`bags-count-${idx}`}>Bags Count</label>
+                          <input id={`bags-count-${idx}`}
                             type="number"
                             value={item.bags}
                             onChange={(e) => handleItemChange(idx, "bags", Number(e.target.value))}
@@ -700,8 +700,8 @@ export default function GatePassPage() {
                         </div>
 
                         <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5">Net Wt (kg)</label>
-                          <input
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`net-wt-kg-${idx}`}>Net Wt (kg)</label>
+                          <input id={`net-wt-kg-${idx}`}
                             type="number"
                             value={item.netWeight}
                             onChange={(e) => handleItemChange(idx, "netWeight", Number(e.target.value))}
@@ -711,8 +711,8 @@ export default function GatePassPage() {
                         </div>
 
                         <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5">Stock owner</label>
-                          <select
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`stock-owner-${idx}`}>Stock owner</label>
+                          <select id={`stock-owner-${idx}`}
                             value={item.ownerId}
                             onChange={(e) => handleItemChange(idx, "ownerId", e.target.value)}
                             className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
@@ -728,8 +728,8 @@ export default function GatePassPage() {
 
                         <div className="sm:col-span-2 flex items-center gap-2">
                           <div className="flex-1">
-                            <label className="block text-[10px] text-muted-foreground mb-0.5">Packaging Remarks</label>
-                            <input
+                            <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packaging-remarks-${idx}`}>Packaging Remarks</label>
+                            <input id={`packaging-remarks-${idx}`}
                               type="text"
                               value={item.remarks}
                               onChange={(e) => handleItemChange(idx, "remarks", e.target.value)}
@@ -843,16 +843,16 @@ export default function GatePassPage() {
                   <div><div className="font-bold text-foreground">{line.productName}</div><div className="text-muted-foreground">Owner: {line.ownerName}</div></div>
                   <div className="text-muted-foreground">Still returnable: <strong className="text-foreground">{line.remainingKg} kg</strong></div>
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5">Return qty (kg)</label>
-                    <input type="number" min="0" max={line.remainingKg} value={line.qtyKg} onChange={(e) => setReturnLines((prev) => prev.map((l, i) => (i === idx ? { ...l, qtyKg: Number(e.target.value) } : l)))} className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono" />
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`return-qty-kg-${idx}`}>Return qty (kg)</label>
+                    <input id={`return-qty-kg-${idx}`} type="number" min="0" max={line.remainingKg} value={line.qtyKg} onChange={(e) => setReturnLines((prev) => prev.map((l, i) => (i === idx ? { ...l, qtyKg: Number(e.target.value) } : l)))} className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono" />
                   </div>
                   <div className="text-muted-foreground">Left after return: <strong className="text-foreground">{Math.max(0, Math.round((line.remainingKg - (Number(line.qtyKg) || 0)) * 100) / 100)} kg</strong></div>
                 </div>
               ))}
             </div>
             <div>
-              <label className="block font-medium text-foreground mb-1 text-xs">Return reason *</label>
-              <input value={returnReason} onChange={(e) => setReturnReason(e.target.value)} placeholder="Why is this stock coming back?" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground text-xs" required />
+              <label className="block font-medium text-foreground mb-1 text-xs" htmlFor="return-reason">Return reason *</label>
+              <input id="return-reason" value={returnReason} onChange={(e) => setReturnReason(e.target.value)} placeholder="Why is this stock coming back?" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground text-xs" required />
             </div>
             <div className="flex items-center justify-end gap-3">
               <button type="button" onClick={() => setReturnTarget(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>

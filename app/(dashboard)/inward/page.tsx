@@ -98,11 +98,11 @@ export default function InwardPage() {
       setOwners(partyList)
       setVouchers((Array.isArray(v.data) ? v.data : []).map((row: any) => ({
         ...row,
-        party_name: partyList.find((x) => x.id === row.party_id)?.name ?? row.party_id,
-        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+        party_name: partyList.find((x) => x.id === row.party_id)?.name ?? "Not set",
+        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? "Not set",
         items: (row.incoming_goods_items ?? row.items ?? []).map((it: any) => ({
           ...it,
-          product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+          product_name: productList.find((x) => x.id === it.product_id)?.name ?? "Not set",
         })),
       })))
     } catch (err) {
@@ -256,7 +256,7 @@ export default function InwardPage() {
         godown_name: godowns.find((x) => x.id === serverRow.godown_id)?.name ?? serverRow.godown_id,
         items: (serverRow.incoming_goods_items ?? serverRow.items ?? []).map((it: any) => ({
           ...it,
-          product_name: products.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+          product_name: products.find((x) => x.id === it.product_id)?.name ?? "Not set",
         })),
       })
       setShowPostConfirm(false)
@@ -440,8 +440,8 @@ export default function InwardPage() {
               {/* Header Details Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Supplier / Party</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="supplier-party">Supplier / Party</label>
+                  <select id="supplier-party"
                     value={partyId}
                     onChange={(e) => setPartyId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -456,8 +456,8 @@ export default function InwardPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Target Godown</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="target-godown">Target Godown</label>
+                  <select id="target-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -472,8 +472,8 @@ export default function InwardPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Stock owner</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="stock-owner">Stock owner</label>
+                  <select id="stock-owner"
                     value={ownerId}
                     onChange={(e) => setOwnerId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -488,8 +488,8 @@ export default function InwardPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Bilty Number</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="bilty-number">Bilty Number</label>
+                  <input id="bilty-number"
                     type="text"
                     value={biltyNo}
                     onChange={(e) => setBiltyNo(e.target.value)}
@@ -499,8 +499,8 @@ export default function InwardPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Truck / Vehicle No</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="truck-vehicle-no">Truck / Vehicle No</label>
+                  <input id="truck-vehicle-no"
                     type="text"
                     value={vehicleNo}
                     onChange={(e) => setVehicleNo(e.target.value)}
@@ -510,8 +510,8 @@ export default function InwardPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Driver Name</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="driver-name">Driver Name</label>
+                  <input id="driver-name"
                     type="text"
                     value={driverName}
                     onChange={(e) => setDriverName(e.target.value)}
@@ -521,8 +521,8 @@ export default function InwardPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Driver Contact</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="driver-contact">Driver Contact</label>
+                  <input id="driver-contact"
                     type="text"
                     value={driverPhone}
                     onChange={(e) => setDriverPhone(e.target.value)}
@@ -532,8 +532,8 @@ export default function InwardPage() {
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="block font-medium text-foreground mb-1">Remarks / Quality Notes</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="remarks-quality-notes">Remarks / Quality Notes</label>
+                  <input id="remarks-quality-notes"
                     type="text"
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
@@ -569,8 +569,8 @@ export default function InwardPage() {
                         className="grid grid-cols-1 sm:grid-cols-6 gap-2 p-2.5 rounded-lg bg-muted border border-border text-xs items-center"
                       >
                         <div className="sm:col-span-2">
-                          <label className="block text-[10px] text-muted-foreground mb-0.5">Product</label>
-                          <select
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`product-${idx}`}>Product</label>
+                          <select id={`product-${idx}`}
                             value={item.productId}
                             onChange={(e) => handleItemChange(idx, "productId", e.target.value)}
                             className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
@@ -584,8 +584,8 @@ export default function InwardPage() {
                         </div>
 
                         <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5">Bags Count</label>
-                          <input
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`bags-count-${idx}`}>Bags Count</label>
+                          <input id={`bags-count-${idx}`}
                             type="number"
                             value={item.bags}
                             onChange={(e) => handleItemChange(idx, "bags", Number(e.target.value))}
@@ -595,8 +595,8 @@ export default function InwardPage() {
                         </div>
 
                         <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5">Gross Wt (kg)</label>
-                          <input
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`gross-wt-kg-${idx}`}>Gross Wt (kg)</label>
+                          <input id={`gross-wt-kg-${idx}`}
                             type="number"
                             value={item.grossWeight}
                             onChange={(e) => handleItemChange(idx, "grossWeight", Number(e.target.value))}
@@ -605,8 +605,8 @@ export default function InwardPage() {
                         </div>
 
                         <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5">Tare Wt (kg)</label>
-                          <input
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`tare-wt-kg-${idx}`}>Tare Wt (kg)</label>
+                          <input id={`tare-wt-kg-${idx}`}
                             type="number"
                             value={item.tareWeight}
                             onChange={(e) => handleItemChange(idx, "tareWeight", Number(e.target.value))}
@@ -616,8 +616,8 @@ export default function InwardPage() {
 
                         <div className="flex items-center gap-2">
                           <div className="flex-1">
-                            <label className="block text-[10px] text-muted-foreground mb-0.5">Rate / kg</label>
-                            <input
+                            <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`rate-kg-${idx}`}>Rate / kg</label>
+                            <input id={`rate-kg-${idx}`}
                               type="number"
                               value={item.rate}
                               onChange={(e) => handleItemChange(idx, "rate", Number(e.target.value))}

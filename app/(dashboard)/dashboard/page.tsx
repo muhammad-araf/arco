@@ -184,12 +184,12 @@ export default function DashboardPage() {
             <div className="space-y-4">
               {godowns.map((g) => {
                 const stored = summary.filter((r) => r.godown_id === g.id).reduce((a, r) => a + num(r.balance_kg), 0)
-                const capacityKg = num(g.capacity_metric_tons || 1000) * 1000
-                const percent = Math.min(100, Math.round((stored / capacityKg) * 100))
+                const capacityKg = g.capacity_metric_tons ? num(g.capacity_metric_tons) * 1000 : 0
+                const percent = capacityKg > 0 ? Math.min(100, Math.round((stored / capacityKg) * 100)) : 0
                 return (
-                  <div key={g.id} className="space-y-1.5"><div className="flex items-center justify-between text-xs"><span className="font-semibold text-foreground">{g.name}</span><span className="text-muted-foreground font-mono">{percent}% Occupied</span></div>
+                  <div key={g.id} className="space-y-1.5"><div className="flex items-center justify-between text-xs"><span className="font-semibold text-foreground">{g.name}</span><span className="text-muted-foreground font-mono">{capacityKg > 0 ? `${percent}% Occupied` : "Capacity not set"}</span></div>
                     <div className="h-2 w-full rounded-md bg-muted overflow-hidden"><div className="h-full bg-emerald-600 rounded-md" style={{ width: `${percent}%` }} /></div>
-                    <div className="flex justify-between text-[10px] text-muted-foreground"><span>{formatWeight(stored)} stored</span><span>Cap: {g.capacity_metric_tons} MT</span></div></div>
+                    <div className="flex justify-between text-[10px] text-muted-foreground"><span>{formatWeight(stored)} stored</span><span>Cap: {g.capacity_metric_tons ? `${g.capacity_metric_tons} MT` : "Not set"}</span></div></div>
                 )
               })}
             </div>

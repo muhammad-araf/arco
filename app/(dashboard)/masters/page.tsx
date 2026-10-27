@@ -349,7 +349,7 @@ export default function MastersPage() {
                     <td className="py-3 font-bold text-foreground">{p.name}</td>
                     <td className="py-3 text-muted-foreground capitalize">{p.category.replace("_", " ")}</td>
                     <td className="py-3 font-mono text-muted-foreground uppercase">{p.default_unit}</td>
-                    <td className="py-3 text-right font-mono text-foreground">{p.weight_per_bag || 50} kg</td>
+                    <td className="py-3 text-right font-mono text-foreground">{p.weight_per_bag ? `${p.weight_per_bag} kg` : "—"}</td>
                     <td className="py-3 text-right font-mono font-bold text-foreground">{formatWeight(p.min_stock || 0)}</td>
                     <td className="py-3 text-center">
                       <span className={p.is_active ? "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase" : "px-2 py-0.5 rounded-md bg-muted text-muted-foreground text-[10px] font-bold uppercase"}>
@@ -480,7 +480,7 @@ export default function MastersPage() {
                     <td className="py-3 text-right font-mono font-black text-emerald-600 dark:text-emerald-400">
                       {m.capacity_kg_per_hour?.toLocaleString()} kg/hr
                     </td>
-                    <td className="py-3 text-foreground font-semibold">{m.operator_name || "Plant Master"}</td>
+                    <td className="py-3 text-foreground font-semibold">{m.operator_name || "Not set"}</td>
                     <td className="py-3 text-center">
                       <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase">
                         {m.is_active === false ? "Inactive" : "Ready"}
@@ -516,8 +516,8 @@ export default function MastersPage() {
             <form onSubmit={handleAddProduct} className="space-y-4 text-xs">
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div>
-                <label className="block font-medium text-foreground mb-1">Product Title</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="product-title">Product Title</label>
+                <input id="product-title"
                   type="text"
                   value={prodName}
                   onChange={(e) => setProdName(e.target.value)}
@@ -529,8 +529,8 @@ export default function MastersPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Category</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="category-2">Category</label>
+                  <select id="category-2"
                     value={prodCategory}
                     onChange={(e) => setProdCategory(e.target.value as any)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -543,8 +543,8 @@ export default function MastersPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Standard Bag (kg)</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="standard-bag-kg-2">Standard Bag (kg)</label>
+                  <input id="standard-bag-kg-2"
                     type="number"
                     value={weightPerBag}
                     onChange={(e) => setWeightPerBag(Number(e.target.value))}
@@ -556,8 +556,8 @@ export default function MastersPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Minimum Safety Stock (kg)</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="minimum-safety-stock-kg-2">Minimum Safety Stock (kg)</label>
+                <input id="minimum-safety-stock-kg-2"
                   type="number"
                   value={prodMinStock}
                   onChange={(e) => setProdMinStock(Number(e.target.value))}
@@ -600,15 +600,15 @@ export default function MastersPage() {
         <h2 className="text-sm font-bold text-foreground mb-1">Add a master record</h2>
         <p className="text-xs text-muted-foreground mb-4">Packaging types ({packaging.length}) and employees ({employees.length}) are shown as counts only. Their full lists are on the Packing and Payroll pages. Deactivation is reversible from here.</p>
         <form onSubmit={handleCreateMaster} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1">Kind *</label><select value={masterKind} onChange={(e) => setMasterKind(e.target.value as any)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="godown">Godown</option><option value="party">Party</option><option value="machine">Machine</option><option value="packaging">Packaging type</option><option value="employee">Employee</option></select></div>
-          <div><label className="block font-medium text-foreground mb-1">Code *</label><input value={masterCode} onChange={(e) => setMasterCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Name *</label><input value={masterName} onChange={(e) => setMasterName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Detail (party type / processing type / designation)</label><input value={masterExtra} onChange={(e) => setMasterExtra(e.target.value)} placeholder="Optional — defaults apply" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="kind">Kind *</label><select id="kind" value={masterKind} onChange={(e) => setMasterKind(e.target.value as any)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="godown">Godown</option><option value="party">Party</option><option value="machine">Machine</option><option value="packaging">Packaging type</option><option value="employee">Employee</option></select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="code">Code *</label><input id="code" value={masterCode} onChange={(e) => setMasterCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="name-2">Name *</label><input id="name-2" value={masterName} onChange={(e) => setMasterName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="detail-party-type-processing-type-design">Detail (party type / processing type / designation)</label><input id="detail-party-type-processing-type-design" value={masterExtra} onChange={(e) => setMasterExtra(e.target.value)} placeholder="Optional — defaults apply" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
           {masterKind === "party" && (<>
-            <div><label className="block font-medium text-foreground mb-1">Contact person</label><input value={partyContact} onChange={(e) => setPartyContact(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-            <div><label className="block font-medium text-foreground mb-1">Phone</label><input value={partyPhone} onChange={(e) => setPartyPhone(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-            <div><label className="block font-medium text-foreground mb-1">Opening balance</label><input type="number" min="0" value={partyOpening} onChange={(e) => setPartyOpening(Math.max(0, Number(e.target.value) || 0))} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-            <div><label className="block font-medium text-foreground mb-1">Balance type</label><select value={partyBalanceType} onChange={(e) => setPartyBalanceType(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="receivable">Receivable (they owe us)</option><option value="payable">Payable (we owe them)</option></select></div>
+            <div><label className="block font-medium text-foreground mb-1" htmlFor="contact-person-2">Contact person</label><input id="contact-person-2" value={partyContact} onChange={(e) => setPartyContact(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+            <div><label className="block font-medium text-foreground mb-1" htmlFor="phone-3">Phone</label><input id="phone-3" value={partyPhone} onChange={(e) => setPartyPhone(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+            <div><label className="block font-medium text-foreground mb-1" htmlFor="opening-balance-2">Opening balance</label><input id="opening-balance-2" type="number" min="0" value={partyOpening} onChange={(e) => setPartyOpening(Math.max(0, Number(e.target.value) || 0))} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+            <div><label className="block font-medium text-foreground mb-1" htmlFor="balance-type-2">Balance type</label><select id="balance-type-2" value={partyBalanceType} onChange={(e) => setPartyBalanceType(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="receivable">Receivable (they owe us)</option><option value="payable">Payable (we owe them)</option></select></div>
           </>)}
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={masterPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{masterPending ? "Creating…" : "Create master record"}</button></div>
         </form>
@@ -645,36 +645,36 @@ export default function MastersPage() {
               <button type="button" onClick={() => setEditTarget(null)} className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer">✕</button>
             </div>
             <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
-              <div><label className="block font-medium text-foreground mb-1">Name *</label><input value={editTarget.name} onChange={(e) => setEditTarget({ ...editTarget, name: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+              <div><label className="block font-medium text-foreground mb-1" htmlFor="name">Name *</label><input id="name" value={editTarget.name} onChange={(e) => setEditTarget({ ...editTarget, name: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
               {editTarget.kind === "product" && (<>
-                <div><label className="block font-medium text-foreground mb-1">Category</label><select value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="raw_seed">Raw Seed</option><option value="finished_seed">Finished Seed</option><option value="intermediate">Intermediate / Grading</option><option value="by_product">By-Product</option></select></div>
-                <div><label className="block font-medium text-foreground mb-1">Standard bag (kg)</label><input type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-                <div><label className="block font-medium text-foreground mb-1">Minimum safety stock (kg)</label><input type="number" min="0" value={editTarget.num2} onChange={(e) => setEditTarget({ ...editTarget, num2: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="category">Category</label><select id="category" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="raw_seed">Raw Seed</option><option value="finished_seed">Finished Seed</option><option value="intermediate">Intermediate / Grading</option><option value="by_product">By-Product</option></select></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="standard-bag-kg">Standard bag (kg)</label><input id="standard-bag-kg" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="minimum-safety-stock-kg">Minimum safety stock (kg)</label><input id="minimum-safety-stock-kg" type="number" min="0" value={editTarget.num2} onChange={(e) => setEditTarget({ ...editTarget, num2: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
               </>)}
               {editTarget.kind === "godown" && (<>
-                <div><label className="block font-medium text-foreground mb-1">Address</label><input value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-                <div><label className="block font-medium text-foreground mb-1">Capacity (MT)</label><input type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="address">Address</label><input id="address" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="capacity-mt">Capacity (MT)</label><input id="capacity-mt" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
               </>)}
               {editTarget.kind === "party" && (<>
-                <div><label className="block font-medium text-foreground mb-1">Type</label><select value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="customer">Customer</option><option value="supplier">Supplier</option><option value="both">Both</option><option value="source">Source</option></select></div>
-                <div><label className="block font-medium text-foreground mb-1">Contact person</label><input value={editTarget.contact} onChange={(e) => setEditTarget({ ...editTarget, contact: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-                <div><label className="block font-medium text-foreground mb-1">Phone</label><input value={editTarget.phone} onChange={(e) => setEditTarget({ ...editTarget, phone: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-                <div><label className="block font-medium text-foreground mb-1">Opening balance</label><input type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-                <div><label className="block font-medium text-foreground mb-1">Balance type</label><select value={editTarget.balanceType} onChange={(e) => setEditTarget({ ...editTarget, balanceType: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="receivable">Receivable</option><option value="payable">Payable</option></select></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="type">Type</label><select id="type" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="customer">Customer</option><option value="supplier">Supplier</option><option value="both">Both</option><option value="source">Source</option></select></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="contact-person">Contact person</label><input id="contact-person" value={editTarget.contact} onChange={(e) => setEditTarget({ ...editTarget, contact: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="phone-2">Phone</label><input id="phone-2" value={editTarget.phone} onChange={(e) => setEditTarget({ ...editTarget, phone: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="opening-balance">Opening balance</label><input id="opening-balance" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="balance-type">Balance type</label><select id="balance-type" value={editTarget.balanceType} onChange={(e) => setEditTarget({ ...editTarget, balanceType: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="receivable">Receivable</option><option value="payable">Payable</option></select></div>
               </>)}
               {editTarget.kind === "machine" && (<>
-                <div><label className="block font-medium text-foreground mb-1">Processing type</label><input value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-                <div><label className="block font-medium text-foreground mb-1">Throughput (kg/hr)</label><input type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-                <div><label className="block font-medium text-foreground mb-1">Operator</label><input value={editTarget.contact} onChange={(e) => setEditTarget({ ...editTarget, contact: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="processing-type">Processing type</label><input id="processing-type" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="throughput-kg-hr">Throughput (kg/hr)</label><input id="throughput-kg-hr" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="operator">Operator</label><input id="operator" value={editTarget.contact} onChange={(e) => setEditTarget({ ...editTarget, contact: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
               </>)}
               {editTarget.kind === "packaging" && (<>
-                <div><label className="block font-medium text-foreground mb-1">Capacity (kg)</label><input type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-                <div><label className="block font-medium text-foreground mb-1">Cost per bag</label><input type="number" min="0" value={editTarget.num2} onChange={(e) => setEditTarget({ ...editTarget, num2: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="capacity-kg">Capacity (kg)</label><input id="capacity-kg" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="cost-per-bag">Cost per bag</label><input id="cost-per-bag" type="number" min="0" value={editTarget.num2} onChange={(e) => setEditTarget({ ...editTarget, num2: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
               </>)}
               {editTarget.kind === "employee" && (<>
-                <div><label className="block font-medium text-foreground mb-1">Designation</label><input value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-                <div><label className="block font-medium text-foreground mb-1">Phone</label><input value={editTarget.phone} onChange={(e) => setEditTarget({ ...editTarget, phone: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-                <div><label className="block font-medium text-foreground mb-1">Base rate</label><input type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="designation">Designation</label><input id="designation" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="phone">Phone</label><input id="phone" value={editTarget.phone} onChange={(e) => setEditTarget({ ...editTarget, phone: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="base-rate">Base rate</label><input id="base-rate" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
               </>)}
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button type="button" onClick={() => setEditTarget(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>

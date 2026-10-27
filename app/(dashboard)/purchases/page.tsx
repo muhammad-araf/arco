@@ -80,10 +80,10 @@ export default function PurchasesPage() {
       setReturns(Array.isArray(re.data) ? re.data : [])
       setPurchases((Array.isArray(pu.data) ? pu.data : []).map((row: any) => ({
         ...row,
-        vendor_name: partyList.find((x) => x.id === row.vendor_id)?.name ?? row.vendor_id,
-        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? row.godown_id,
+        vendor_name: partyList.find((x) => x.id === row.vendor_id)?.name ?? "Not set",
+        godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? "Not set",
         items: (row.purchase_items ?? row.items ?? []).map((it: any) => ({
-          ...it, product_name: productList.find((x) => x.id === it.product_id)?.name ?? it.product_id,
+          ...it, product_name: productList.find((x) => x.id === it.product_id)?.name ?? "Not set",
         })),
       })))
     } catch (err) {
@@ -411,10 +411,10 @@ export default function PurchasesPage() {
         <h2 className="text-sm font-bold text-foreground mb-1">Pay a posted purchase</h2>
         <p className="text-xs text-muted-foreground mb-4">Pay a posted purchase later, in full or in part. The payment leaves the selected cash account and settles only that vendor&apos;s purchase.</p>
         <form onSubmit={handlePayPurchase} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1">Posted purchase *</label><select value={payPurchaseId} onChange={(e) => { setPayPurchaseId(e.target.value); const pu = purchases.find((x) => x.id === e.target.value); if (pu) setPayAmount(Number(pu.balance_amount)) }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select purchase</option>{purchases.filter((x) => x.status === "posted" && Number(x.balance_amount) > 0).map((x) => (<option key={x.id} value={x.id}>{x.purchase_no} — balance {formatCurrency(Number(x.balance_amount))}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">Payment amount *</label><input type="number" value={payAmount} onChange={(e) => setPayAmount(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Paid from *</label><select value={payAccountKind} onChange={(e) => { const k = e.target.value as "cash" | "bank" | "online"; setPayAccountKind(k); const first = cashAccounts.find((a) => a.account_kind === k); setPayCashAccountId(first ? first.id : "") }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="cash">Cash</option><option value="bank">Bank</option><option value="online">Online</option></select></div>
-          <div><label className="block font-medium text-foreground mb-1">Cash account *</label><select value={payCashAccountId} onChange={(e) => setPayCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.filter((a) => a.account_kind === payAccountKind).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}</select>{cashAccounts.filter((a) => a.account_kind === payAccountKind).length === 0 && (<p className="mt-1 text-[11px] text-muted-foreground">No {payAccountKind} account yet — create one on the Daybook page.</p>)}</div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="posted-purchase-2">Posted purchase *</label><select id="posted-purchase-2" value={payPurchaseId} onChange={(e) => { setPayPurchaseId(e.target.value); const pu = purchases.find((x) => x.id === e.target.value); if (pu) setPayAmount(Number(pu.balance_amount)) }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select purchase</option>{purchases.filter((x) => x.status === "posted" && Number(x.balance_amount) > 0).map((x) => (<option key={x.id} value={x.id}>{x.purchase_no} — balance {formatCurrency(Number(x.balance_amount))}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="payment-amount">Payment amount *</label><input id="payment-amount" type="number" value={payAmount} onChange={(e) => setPayAmount(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="paid-from">Paid from *</label><select id="paid-from" value={payAccountKind} onChange={(e) => { const k = e.target.value as "cash" | "bank" | "online"; setPayAccountKind(k); const first = cashAccounts.find((a) => a.account_kind === k); setPayCashAccountId(first ? first.id : "") }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="cash">Cash</option><option value="bank">Bank</option><option value="online">Online</option></select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="cash-account">Cash account *</label><select id="cash-account" value={payCashAccountId} onChange={(e) => setPayCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.filter((a) => a.account_kind === payAccountKind).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}</select>{cashAccounts.filter((a) => a.account_kind === payAccountKind).length === 0 && (<p className="mt-1 text-[11px] text-muted-foreground">No {payAccountKind} account yet — create one on the Daybook page.</p>)}</div>
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={payPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{payPending ? "Paying…" : "Pay purchase"}</button></div>
         </form>
       </div>
@@ -441,8 +441,8 @@ export default function PurchasesPage() {
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Supplier / Grower</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="supplier-grower">Supplier / Grower</label>
+                  <select id="supplier-grower"
                     value={vendorId}
                     onChange={(e) => setVendorId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -457,8 +457,8 @@ export default function PurchasesPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Unloading Godown</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="unloading-godown">Unloading Godown</label>
+                  <select id="unloading-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -475,8 +475,8 @@ export default function PurchasesPage() {
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Purchased Product</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="purchased-product">Purchased Product</label>
+                  <select id="purchased-product"
                     value={productId}
                     onChange={(e) => setProductId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -490,8 +490,8 @@ export default function PurchasesPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Quantity (kg)</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="quantity-kg">Quantity (kg)</label>
+                  <input id="quantity-kg"
                     type="number"
                     value={quantity}
                     onChange={(e) => setQuantity(Number(e.target.value))}
@@ -502,8 +502,8 @@ export default function PurchasesPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Unit Price / kg (PKR)</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="unit-price-kg-pkr">Unit Price / kg (PKR)</label>
+                  <input id="unit-price-kg-pkr"
                     type="number"
                     value={unitPrice}
                     onChange={(e) => setUnitPrice(Number(e.target.value))}
@@ -516,8 +516,8 @@ export default function PurchasesPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-muted border border-border">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Vendor Bill / Ref No</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="vendor-bill-ref-no">Vendor Bill / Ref No</label>
+                  <input id="vendor-bill-ref-no"
                     type="text"
                     value={invoiceRef}
                     onChange={(e) => setInvoiceRef(e.target.value)}
@@ -527,8 +527,8 @@ export default function PurchasesPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Advance / Paid (PKR)</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="advance-paid-pkr">Advance / Paid (PKR)</label>
+                  <input id="advance-paid-pkr"
                     type="number"
                     value={paidAmount}
                     onChange={(e) => setPaidAmount(Number(e.target.value))}
@@ -540,16 +540,16 @@ export default function PurchasesPage() {
               {paidAmount > 0 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-medium text-foreground mb-1">Payment account kind</label>
-                    <select value={payAccountKind} onChange={(e) => { const k = e.target.value as "cash" | "bank" | "online"; setPayAccountKind(k); const first = cashAccounts.find((a) => a.account_kind === k); setPayCashAccountId(first ? first.id : "") }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                    <label className="block font-medium text-foreground mb-1" htmlFor="payment-account-kind">Payment account kind</label>
+                    <select id="payment-account-kind" value={payAccountKind} onChange={(e) => { const k = e.target.value as "cash" | "bank" | "online"; setPayAccountKind(k); const first = cashAccounts.find((a) => a.account_kind === k); setPayCashAccountId(first ? first.id : "") }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
                       <option value="cash">Cash</option>
                       <option value="bank">Bank</option>
                       <option value="online">Online</option>
                     </select>
                   </div>
                   <div>
-                    <label className="block font-medium text-foreground mb-1">Cash account for this payment *</label>
-                    <select value={payCashAccountId} onChange={(e) => setPayCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                    <label className="block font-medium text-foreground mb-1" htmlFor="cash-account-for-this-payment">Cash account for this payment *</label>
+                    <select id="cash-account-for-this-payment" value={payCashAccountId} onChange={(e) => setPayCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
                       <option value="">Select account</option>
                       {cashAccounts.filter((a) => a.account_kind === payAccountKind).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}
                     </select>
@@ -615,10 +615,10 @@ export default function PurchasesPage() {
           </div>
         )}
         <form onSubmit={handlePurchaseReturn} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1">Posted purchase *</label><select value={retPurchaseId} onChange={(e) => setRetPurchaseId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select purchase</option>{purchases.filter((x) => x.status === "posted").map((x) => (<option key={x.id} value={x.id}>{x.purchase_no}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">Return quantity *</label><input type="number" value={retQty} onChange={(e) => setRetQty(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Unit price *</label><input type="number" value={retPrice} onChange={(e) => setRetPrice(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Reason *</label><input value={retReason} onChange={(e) => setRetReason(e.target.value)} placeholder="Why is this being returned?" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="posted-purchase">Posted purchase *</label><select id="posted-purchase" value={retPurchaseId} onChange={(e) => setRetPurchaseId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select purchase</option>{purchases.filter((x) => x.status === "posted").map((x) => (<option key={x.id} value={x.id}>{x.purchase_no}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="return-quantity">Return quantity *</label><input id="return-quantity" type="number" value={retQty} onChange={(e) => setRetQty(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="unit-price">Unit price *</label><input id="unit-price" type="number" value={retPrice} onChange={(e) => setRetPrice(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="reason">Reason *</label><input id="reason" value={retReason} onChange={(e) => setRetReason(e.target.value)} placeholder="Why is this being returned?" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={retPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{retPending ? "Recording…" : "Record purchase return"}</button></div>
         </form>
       </div>

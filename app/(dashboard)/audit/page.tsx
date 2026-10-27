@@ -84,8 +84,8 @@ export default function AuditPage() {
       <div className="expensive-card p-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
           <div>
-            <label className="block font-medium text-foreground mb-1">User (email)</label>
-            <input
+            <label className="block font-medium text-foreground mb-1" htmlFor="user-email">User (email)</label>
+            <input id="user-email"
               value={userFilter}
               onChange={(e) => setUserFilter(e.target.value)}
               placeholder="operator@example.com"
@@ -93,8 +93,8 @@ export default function AuditPage() {
             />
           </div>
           <div>
-            <label className="block font-medium text-foreground mb-1">Action</label>
-            <select
+            <label className="block font-medium text-foreground mb-1" htmlFor="action">Action</label>
+            <select id="action"
               value={actionFilter}
               onChange={(e) => setActionFilter(e.target.value)}
               className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -115,8 +115,8 @@ export default function AuditPage() {
             </select>
           </div>
           <div>
-            <label className="block font-medium text-foreground mb-1">From</label>
-            <input
+            <label className="block font-medium text-foreground mb-1" htmlFor="from">From</label>
+            <input id="from"
               type="date"
               value={from}
               onChange={(e) => setFrom(e.target.value)}
@@ -124,8 +124,8 @@ export default function AuditPage() {
             />
           </div>
           <div>
-            <label className="block font-medium text-foreground mb-1">To</label>
-            <input
+            <label className="block font-medium text-foreground mb-1" htmlFor="to">To</label>
+            <input id="to"
               type="date"
               value={to}
               onChange={(e) => setTo(e.target.value)}

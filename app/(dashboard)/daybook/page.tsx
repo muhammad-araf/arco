@@ -436,8 +436,8 @@ export default function DaybookPage() {
             <form onSubmit={handleAddExpense} className="space-y-4 text-xs">
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div>
-                <label className="block font-medium text-foreground mb-1">Expense Category</label>
-                <select
+                <label className="block font-medium text-foreground mb-1" htmlFor="expense-category">Expense Category</label>
+                <select id="expense-category"
                   value={categoryName}
                   onChange={(e) => setCategoryName(e.target.value)}
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -453,8 +453,8 @@ export default function DaybookPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Payee / Vendor Name</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="payee-vendor-name">Payee / Vendor Name</label>
+                <input id="payee-vendor-name"
                   type="text"
                   value={payee}
                   onChange={(e) => setPayee(e.target.value)}
@@ -466,8 +466,8 @@ export default function DaybookPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Amount (PKR)</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="amount-pkr">Amount (PKR)</label>
+                  <input id="amount-pkr"
                     type="number"
                     value={amount}
                     onChange={(e) => setAmount(Number(e.target.value))}
@@ -478,8 +478,8 @@ export default function DaybookPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Paid From</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="paid-from">Paid From</label>
+                  <select id="paid-from"
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value as "cash" | "bank")}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -491,16 +491,16 @@ export default function DaybookPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Settlement</label>
-                <select value={expSettlement} onChange={(e) => setExpSettlement(e.target.value as "paid" | "credit")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                <label className="block font-medium text-foreground mb-1" htmlFor="settlement">Settlement</label>
+                <select id="settlement" value={expSettlement} onChange={(e) => setExpSettlement(e.target.value as "paid" | "credit")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
                   <option value="paid">Paid now (cash out on posting)</option>
                   <option value="credit">Credit (unpaid — settle later as a vendor payment)</option>
                 </select>
               </div>
               {expSettlement === "credit" && (
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Vendor owed *</label>
-                  <select value={expVendorId} onChange={(e) => setExpVendorId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="vendor-owed">Vendor owed *</label>
+                  <select id="vendor-owed" value={expVendorId} onChange={(e) => setExpVendorId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
                     <option value="">Select vendor</option>
                     {vendors.map((v: any) => (<option key={v.id} value={v.id}>{v.name}</option>))}
                   </select>
@@ -508,8 +508,8 @@ export default function DaybookPage() {
               )}
               {expSettlement === "paid" && (
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Cash account *</label>
-                  <select value={expCashAccountId} onChange={(e) => setExpCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="cash-account">Cash account *</label>
+                  <select id="cash-account" value={expCashAccountId} onChange={(e) => setExpCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
                     <option value="">Select account</option>
                     {cashAccounts.filter((a) => a.account_kind === paymentMethod).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}
                   </select>
@@ -518,8 +518,8 @@ export default function DaybookPage() {
               )}
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Particulars / Description</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="particulars-description">Particulars / Description</label>
+                <input id="particulars-description"
                   type="text"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
@@ -550,8 +550,8 @@ export default function DaybookPage() {
         </div>
       )}
       <div className="expensive-card p-4 flex flex-wrap items-end gap-3 text-xs">
-        <div><label className="block font-medium text-foreground mb-1">From</label><input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-        <div><label className="block font-medium text-foreground mb-1">To</label><input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+        <div><label className="block font-medium text-foreground mb-1" htmlFor="from">From</label><input id="from" type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+        <div><label className="block font-medium text-foreground mb-1" htmlFor="to">To</label><input id="to" type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
         <button type="button" onClick={loadData} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer">Load daybook</button>
         <span className="text-muted-foreground">Daybook is per account and date range (getDaybook). Cash, bank and online closings above come from those three calls; the balance column is per account, not one merged chain. Transfers are included in the entries.</span>
       </div>
@@ -559,10 +559,10 @@ export default function DaybookPage() {
         <h2 className="text-sm font-bold text-foreground mb-1">Cash transfer</h2>
         <p className="text-xs text-muted-foreground mb-4">Move cash between two accounts. A transfer is never revenue or expense.</p>
         <form onSubmit={handleTransfer} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1">From account *</label><select value={trFrom} onChange={(e) => setTrFrom(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name} ({a.account_kind})</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">To account *</label><select value={trTo} onChange={(e) => setTrTo(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name} ({a.account_kind})</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">Amount *</label><input type="number" value={trAmount} onChange={(e) => setTrAmount(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Reference</label><input value={trRef} onChange={(e) => setTrRef(e.target.value)} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="from-account">From account *</label><select id="from-account" value={trFrom} onChange={(e) => setTrFrom(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name} ({a.account_kind})</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="to-account">To account *</label><select id="to-account" value={trTo} onChange={(e) => setTrTo(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name} ({a.account_kind})</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="amount">Amount *</label><input id="amount" type="number" value={trAmount} onChange={(e) => setTrAmount(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="reference">Reference</label><input id="reference" value={trRef} onChange={(e) => setTrRef(e.target.value)} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={trPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{trPending ? "Posting…" : "Post transfer"}</button></div>
         </form>
       </div>
@@ -570,10 +570,10 @@ export default function DaybookPage() {
         <h2 className="text-sm font-bold text-foreground mb-1">Cash accounts</h2>
         <p className="text-xs text-muted-foreground mb-4">Receipts, payments and paid expenses must land in one of these accounts, so per-account daybook views stay complete.</p>
         <form onSubmit={handleCreateCashAccount} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs mb-4">
-          <div><label className="block font-medium text-foreground mb-1">Code *</label><input value={acctCode} onChange={(e) => setAcctCode(e.target.value)} placeholder="e.g. CASH-01" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Name *</label><input value={acctName} onChange={(e) => setAcctName(e.target.value)} placeholder="e.g. Godown Counter Cash" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Kind *</label><select value={acctKind} onChange={(e) => setAcctKind(e.target.value as "cash" | "bank" | "online")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="cash">Cash</option><option value="bank">Bank</option><option value="online">Online</option></select></div>
-          <div><label className="block font-medium text-foreground mb-1">Opening balance</label><input type="number" value={acctOpening} onChange={(e) => setAcctOpening(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="code">Code *</label><input id="code" value={acctCode} onChange={(e) => setAcctCode(e.target.value)} placeholder="e.g. CASH-01" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="name">Name *</label><input id="name" value={acctName} onChange={(e) => setAcctName(e.target.value)} placeholder="e.g. Godown Counter Cash" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="kind">Kind *</label><select id="kind" value={acctKind} onChange={(e) => setAcctKind(e.target.value as "cash" | "bank" | "online")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="cash">Cash</option><option value="bank">Bank</option><option value="online">Online</option></select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="opening-balance">Opening balance</label><input id="opening-balance" type="number" value={acctOpening} onChange={(e) => setAcctOpening(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={acctPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{acctPending ? "Creating…" : "Create cash account"}</button></div>
         </form>
         <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Code</th><th className="pb-2">Name</th><th className="pb-2">Kind</th><th className="pb-2 text-right">Opening</th></tr></thead>

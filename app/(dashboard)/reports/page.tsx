@@ -170,13 +170,13 @@ export default function ReportsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground" htmlFor="report-date-from">
             From
-            <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-2 py-1.5 rounded-lg bg-background border border-border text-foreground font-mono" />
+            <input id="report-date-from" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="px-2 py-1.5 rounded-lg bg-background border border-border text-foreground font-mono" />
           </label>
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground" htmlFor="report-date-to">
             To
-            <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-2 py-1.5 rounded-lg bg-background border border-border text-foreground font-mono" />
+            <input id="report-date-to" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="px-2 py-1.5 rounded-lg bg-background border border-border text-foreground font-mono" />
           </label>
           <button
             type="button"
@@ -321,8 +321,8 @@ export default function ReportsPage() {
             <h3 className="text-xs font-bold text-foreground uppercase tracking-wider">Approved COGS for this period</h3>
             <p className="text-[11px] text-muted-foreground">The accountant supplies the approved COGS valuation for this period; it is passed to the P&amp;L as-is and is not derived from purchases.</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-              <div><label className="block font-medium text-foreground mb-1">COGS amount (PKR)</label><input type="number" value={cogsInput} onChange={(e) => setCogsInput(e.target.value)} min="0" placeholder="e.g. 120000" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-              <div className="sm:col-span-2"><label className="block font-medium text-foreground mb-1">Valuation basis</label><input value={cogsBasisInput} onChange={(e) => setCogsBasisInput(e.target.value)} placeholder="e.g. Weighted-average closing stock valuation, approved 2026-10-27" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+              <div><label className="block font-medium text-foreground mb-1" htmlFor="cogs-amount-pkr">COGS amount (PKR)</label><input id="cogs-amount-pkr" type="number" value={cogsInput} onChange={(e) => setCogsInput(e.target.value)} min="0" placeholder="e.g. 120000" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+              <div className="sm:col-span-2"><label className="block font-medium text-foreground mb-1" htmlFor="valuation-basis">Valuation basis</label><input id="valuation-basis" value={cogsBasisInput} onChange={(e) => setCogsBasisInput(e.target.value)} placeholder="e.g. Weighted-average closing stock valuation, approved 2026-10-27" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
             </div>
             <div className="flex justify-end gap-2">
               {appliedCogs && (<button type="button" onClick={() => { setAppliedCogs(null); setCogsInput(""); setCogsBasisInput("") }} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Clear COGS</button>)}
@@ -450,8 +450,8 @@ export default function ReportsPage() {
       {(selectedReport === "party" || selectedReport === "vendor") && (
         <div className="expensive-card p-5">
           <div className="flex flex-wrap items-center gap-3 mb-4 text-xs">
-            <label className="font-medium text-foreground">{selectedReport === "vendor" ? "Vendor" : "Party"}</label>
-            <select value={stmtPartyId} onChange={(e) => setStmtPartyId(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select a party</option>{parties.filter((x) => selectedReport === "vendor" ? (x.type === "supplier" || x.type === "both") : (x.type === "customer" || x.type === "both")).map((x) => (<option key={x.id} value={x.id}>{x.name}</option>))}</select>
+            <label className="font-medium text-foreground" htmlFor="statement-party">{selectedReport === "vendor" ? "Vendor" : "Party"}</label>
+            <select id="statement-party" value={stmtPartyId} onChange={(e) => setStmtPartyId(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select a party</option>{parties.filter((x) => selectedReport === "vendor" ? (x.type === "supplier" || x.type === "both") : (x.type === "customer" || x.type === "both")).map((x) => (<option key={x.id} value={x.id}>{x.name}</option>))}</select>
             {stmtError && <span className="text-red-600 dark:text-red-400 font-medium">{stmtError}</span>}
           </div>
           {!stmt && <EmptyState title="Select a party to view its statement" hint="Shows opening balance, charges, settlements and closing. A positive balance means the party owes you." />}

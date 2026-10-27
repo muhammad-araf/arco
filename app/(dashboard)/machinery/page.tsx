@@ -76,9 +76,9 @@ export default function MachineryJobsPage() {
       setGodowns(Array.isArray(g.data) ? g.data : [])
       setJobs((Array.isArray(j.data) ? j.data : []).map((row: any) => ({
         ...row,
-        customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
-        machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? row.machine_id,
-        input_product_name: productList.find((x) => x.id === row.input_product_id)?.name ?? row.input_product_id,
+        customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? "Not set",
+        machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? "Not set",
+        input_product_name: productList.find((x) => x.id === row.input_product_id)?.name ?? "Not set",
       })))
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Could not load machinery data.")
@@ -371,8 +371,8 @@ export default function MachineryJobsPage() {
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Customer / Grain Owner</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="customer-grain-owner">Customer / Grain Owner</label>
+                  <select id="customer-grain-owner"
                     value={customerId}
                     onChange={(e) => setCustomerId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -387,8 +387,8 @@ export default function MachineryJobsPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Machine Cleaner / Grader</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="machine-cleaner-grader">Machine Cleaner / Grader</label>
+                  <select id="machine-cleaner-grader"
                     value={machineId}
                     onChange={(e) => setMachineId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -405,14 +405,14 @@ export default function MachineryJobsPage() {
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Godown</label>
-                  <select value={godownId} onChange={(e) => setGodownId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                  <label className="block font-medium text-foreground mb-1" htmlFor="godown">Godown</label>
+                  <select id="godown" value={godownId} onChange={(e) => setGodownId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
                     {godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}
                   </select>
                 </div>
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Input Grain Type</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="input-grain-type">Input Grain Type</label>
+                  <select id="input-grain-type"
                     value={inputProductId}
                     onChange={(e) => setInputProductId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -426,8 +426,8 @@ export default function MachineryJobsPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Total Grain Weight (kg)</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="total-grain-weight-kg">Total Grain Weight (kg)</label>
+                  <input id="total-grain-weight-kg"
                     type="number"
                     value={inputWeight}
                     onChange={(e) => setInputWeight(Number(e.target.value))}
@@ -438,8 +438,8 @@ export default function MachineryJobsPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Graded Output (kg)</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="graded-output-kg">Graded Output (kg)</label>
+                  <input id="graded-output-kg"
                     type="number"
                     value={outputWeight}
                     onChange={(e) => setOutputWeight(Number(e.target.value))}
@@ -450,8 +450,8 @@ export default function MachineryJobsPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Output Product (credited on post)</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="output-product-credited-on-post">Output Product (credited on post)</label>
+                  <select id="output-product-credited-on-post"
                     value={outputProductId}
                     onChange={(e) => setOutputProductId(e.target.value)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -466,8 +466,8 @@ export default function MachineryJobsPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Waste Weight (kg)</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="waste-weight-kg">Waste Weight (kg)</label>
+                  <input id="waste-weight-kg"
                     type="number"
                     value={wasteWeight}
                     onChange={(e) => setWasteWeight(Number(e.target.value))}
@@ -477,8 +477,8 @@ export default function MachineryJobsPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Ownership</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="ownership">Ownership</label>
+                  <select id="ownership"
                     value={isCustomerOwned ? "customer" : "company"}
                     onChange={(e) => setIsCustomerOwned(e.target.value === "customer")}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -491,8 +491,8 @@ export default function MachineryJobsPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Actual Bag Count</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="actual-bag-count">Actual Bag Count</label>
+                  <input id="actual-bag-count"
                     type="number"
                     value={bagCount}
                     onChange={(e) => setBagCount(Number(e.target.value))}
@@ -504,8 +504,8 @@ export default function MachineryJobsPage() {
 
                 {rateBasis === "per_maund" && (
                   <div>
-                    <label className="block font-medium text-foreground mb-1">Kg per Maund (client-approved)</label>
-                    <input
+                    <label className="block font-medium text-foreground mb-1" htmlFor="kg-per-maund-client-approved">Kg per Maund (client-approved)</label>
+                    <input id="kg-per-maund-client-approved"
                       type="number"
                       value={maundKg}
                       onChange={(e) => setMaundKg(Number(e.target.value))}
@@ -520,8 +520,8 @@ export default function MachineryJobsPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-muted border border-border">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Rate Basis (Formula)</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="rate-basis-formula">Rate Basis (Formula)</label>
+                  <select id="rate-basis-formula"
                     value={rateBasis}
                     onChange={(e) => setRateBasis(e.target.value as RateBasis)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -535,8 +535,8 @@ export default function MachineryJobsPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Unit Service Rate (PKR)</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="unit-service-rate-pkr">Unit Service Rate (PKR)</label>
+                  <input id="unit-service-rate-pkr"
                     type="number"
                     value={rate}
                     onChange={(e) => setRate(Number(e.target.value))}

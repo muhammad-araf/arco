@@ -78,7 +78,7 @@ export default function BillingPage() {
       setInvoices(Array.isArray(inv.data) ? inv.data : [])
       setReceipts((Array.isArray(re.data) ? re.data : []).map((row: any) => ({
         ...row,
-        customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? row.customer_id,
+        customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? "Not set",
         payment_method: row.account ?? row.payment_method,
       })))
     } catch (err) {
@@ -398,8 +398,8 @@ export default function BillingPage() {
             <form onSubmit={handleRecordReceipt} className="space-y-4 text-xs">
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div>
-                <label className="block font-medium text-foreground mb-1">Customer / Payer</label>
-                <select
+                <label className="block font-medium text-foreground mb-1" htmlFor="customer-payer">Customer / Payer</label>
+                <select id="customer-payer"
                   value={customerId}
                   onChange={(e) => setCustomerId(e.target.value)}
                   className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -415,8 +415,8 @@ export default function BillingPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Amount Received (PKR)</label>
-                  <input
+                  <label className="block font-medium text-foreground mb-1" htmlFor="amount-received-pkr">Amount Received (PKR)</label>
+                  <input id="amount-received-pkr"
                     type="number"
                     value={amount}
                     onChange={(e) => setAmount(Number(e.target.value))}
@@ -427,8 +427,8 @@ export default function BillingPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1">Deposit Account</label>
-                  <select
+                  <label className="block font-medium text-foreground mb-1" htmlFor="deposit-account">Deposit Account</label>
+                  <select id="deposit-account"
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value as any)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -441,8 +441,8 @@ export default function BillingPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Cash account *</label>
-                <select value={receiptCashAccountId} onChange={(e) => setReceiptCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
+                <label className="block font-medium text-foreground mb-1" htmlFor="cash-account">Cash account *</label>
+                <select id="cash-account" value={receiptCashAccountId} onChange={(e) => setReceiptCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
                   <option value="">Select account</option>
                   {cashAccounts.filter((a) => a.account_kind === paymentMethod).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}
                 </select>
@@ -450,8 +450,8 @@ export default function BillingPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Allocate to invoice (explicit allocation)</label>
-                <select value={allocInvoiceId} onChange={(e) => { setAllocInvoiceId(e.target.value); const inv = invoices.find((i) => i.id === e.target.value); setAllocAmount(inv ? Number(inv.balance_amount ?? Number(inv.total_amount || 0) - Number(inv.paid_amount || 0)) : 0) }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                <label className="block font-medium text-foreground mb-1" htmlFor="allocate-to-invoice-explicit-allocation">Allocate to invoice (explicit allocation)</label>
+                <select id="allocate-to-invoice-explicit-allocation" value={allocInvoiceId} onChange={(e) => { setAllocInvoiceId(e.target.value); const inv = invoices.find((i) => i.id === e.target.value); setAllocAmount(inv ? Number(inv.balance_amount ?? Number(inv.total_amount || 0) - Number(inv.paid_amount || 0)) : 0) }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
                   <option value="">Unallocated (advance / on-account)</option>
                   {customerInvoices.map((i) => (<option key={i.id} value={i.id}>{i.invoice_no} — outstanding {formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</option>))}
                 </select>
@@ -460,8 +460,8 @@ export default function BillingPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Cheque / Bank Reference No</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="cheque-bank-reference-no">Cheque / Bank Reference No</label>
+                <input id="cheque-bank-reference-no"
                   type="text"
                   value={referenceNo}
                   onChange={(e) => setReferenceNo(e.target.value)}
@@ -471,8 +471,8 @@ export default function BillingPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1">Remarks / Note</label>
-                <input
+                <label className="block font-medium text-foreground mb-1" htmlFor="remarks-note">Remarks / Note</label>
+                <input id="remarks-note"
                   type="text"
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
@@ -508,13 +508,13 @@ export default function BillingPage() {
         <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Invoice</th><th className="pb-2">Customer</th><th className="pb-2 text-right">Total</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
             {invoices.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No invoices yet.</td></tr>}
-            {invoices.map((i) => (<tr key={i.id}><td className="py-2 font-mono font-bold">{i.invoice_no}</td><td className="py-2">{customers.find((c) => c.id === i.customer_id)?.name ?? i.customer_id}</td><td className="py-2 text-right">{formatCurrency(Number(i.total_amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(i.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</td><td className="py-2 text-center">{i.status}{i.status === "posted" && (<button type="button" onClick={() => setInvReverseTarget(i)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
+            {invoices.map((i) => (<tr key={i.id}><td className="py-2 font-mono font-bold">{i.invoice_no}</td><td className="py-2">{customers.find((c) => c.id === i.customer_id)?.name ?? "Not set"}</td><td className="py-2 text-right">{formatCurrency(Number(i.total_amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(i.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</td><td className="py-2 text-center">{i.status}{i.status === "posted" && (<button type="button" onClick={() => setInvReverseTarget(i)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
           </tbody></table></div>
         <form onSubmit={handleCreateInvoice} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1">Customer *</label><select value={invCustomerId} onChange={(e) => setInvCustomerId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select customer</option>{customers.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1">Description *</label><input value={invDesc} onChange={(e) => setInvDesc(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Quantity *</label><input type="number" value={invQty} onChange={(e) => setInvQty(Number(e.target.value))} min="1" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
-          <div><label className="block font-medium text-foreground mb-1">Unit price *</label><input type="number" value={invPrice} onChange={(e) => setInvPrice(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="customer">Customer *</label><select id="customer" value={invCustomerId} onChange={(e) => setInvCustomerId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select customer</option>{customers.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="description">Description *</label><input id="description" value={invDesc} onChange={(e) => setInvDesc(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="quantity">Quantity *</label><input id="quantity" type="number" value={invQty} onChange={(e) => setInvQty(Number(e.target.value))} min="1" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="unit-price">Unit price *</label><input id="unit-price" type="number" value={invPrice} onChange={(e) => setInvPrice(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={invPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{invPending ? "Posting…" : "Create & post invoice"}</button></div>
         </form>
       </div>
