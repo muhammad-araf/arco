@@ -46,6 +46,7 @@ import {
   FINANCE_READ_SENSITIVE,
 } from "./auth-helpers";
 import { logAudit } from "@/lib/audit";
+import { isUniqueViolation } from "@/lib/idempotency";
 import {
   roundMoney,
   cashRunningBalance,
@@ -157,6 +158,26 @@ async function byToken(
   return (data as Record<string, unknown> | null) ?? null;
 }
 
+/**
+ * After a guarded status flip fails: if the row is already in the
+ * target status, a concurrent writer completed the transition and
+ * this call replays successfully. The ledger rows are unique by
+ * (voucher, line), so the union of both writers' rows is exactly one
+ * copy of each line -- replaying is correct, failing is not.
+ */
+async function replayIfFlipped(
+  db: Db,
+  table: string,
+  id: string,
+  targetStatus: string,
+): Promise<Record<string, unknown> | null> {
+  const { data } = await db.from(table).select("*").eq("id", id).maybeSingle();
+  if (data && (data as Record<string, unknown>).status === targetStatus) {
+    return data as Record<string, unknown>;
+  }
+  return null;
+}
+
 async function lastRow(
   db: Db,
   table: string,
@@ -185,6 +206,8 @@ async function partyEntry(
     delta: number;
     notes?: string;
     userId?: string | null;
+    /** Index of this row within its voucher's rows of this entry type. */
+    lineNo?: number;
   },
 ): Promise<void> {
   const prev = await lastRow(db, "party_ledger", [["party_id", input.partyId]]);
@@ -215,7 +238,9 @@ async function partyEntry(
     running_balance: running,
     notes: input.notes ?? null,
     created_by: input.userId ?? null,
+    line_no: input.lineNo ?? 0,
   });
+  if (error && isUniqueViolation(error)) return;
   if (error) throw new Error(`party_ledger insert failed: ${error.message}`);
 }
 
@@ -234,6 +259,8 @@ async function cashEntry(
     description: string;
     settlementKind?: string;
     userId?: string | null;
+    /** Index of this row within its voucher's cash rows. */
+    lineNo?: number;
   },
 ): Promise<void> {
   const filters: [string, unknown][] = input.cashAccountId
@@ -257,8 +284,10 @@ async function cashEntry(
     running_balance: running,
     description: input.description,
     settlement_kind: input.settlementKind ?? null,
+    line_no: input.lineNo ?? 0,
     created_by: input.userId ?? null,
   });
+  if (error && isUniqueViolation(error)) return;
   if (error) throw new Error(`cash_ledger insert failed: ${error.message}`);
 }
 
@@ -277,6 +306,8 @@ async function stockEntry(
     outwardQty: number;
     notes?: string;
     userId?: string | null;
+    /** Index of this row within its voucher's stock rows. */
+    lineNo?: number;
   },
 ): Promise<void> {
   const prev = await lastRow(db, "stock_ledger", [
@@ -302,7 +333,9 @@ async function stockEntry(
     running_balance: running,
     notes: input.notes ?? null,
     created_by: input.userId ?? null,
+    line_no: input.lineNo ?? 0,
   });
+  if (error && isUniqueViolation(error)) return;
   if (error) throw new Error(`stock_ledger insert failed: ${error.message}`);
 }
 
@@ -321,6 +354,8 @@ async function bardanaEntry(
     unitCost?: number | null;
     notes?: string;
     userId?: string | null;
+    /** Index of this row within its voucher's bardana rows. */
+    lineNo?: number;
   },
 ): Promise<void> {
   const prev = await lastRow(db, "bardana_ledger", [
@@ -344,7 +379,9 @@ async function bardanaEntry(
     running_balance: running,
     notes: input.notes ?? null,
     created_by: input.userId ?? null,
+    line_no: input.lineNo ?? 0,
   });
+  if (error && isUniqueViolation(error)) return;
   if (error) throw new Error(`bardana_ledger insert failed: ${error.message}`);
 }
 
@@ -572,7 +609,8 @@ export async function postPurchase(
     }
     const { data: items } = await db.from("purchase_items").select("*").eq("purchase_id", id);
     if (purchase.receipt_status === "received") {
-      for (const item of items ?? []) {
+      for (let itemIdx = 0; itemIdx < (items ?? []).length; itemIdx++) {
+        const item = (items ?? [])[itemIdx];
         if (item.item_type === "seed") {
           if (!purchase.godown_id) return fail("A godown is required to receive seed stock.");
           await stockEntry(db, {
@@ -580,7 +618,7 @@ export async function postPurchase(
             voucherNo: purchase.purchase_no, godownId: purchase.godown_id,
             productId: item.product_id, partyId: purchase.vendor_id,
             inwardQty: Number(item.quantity) || 0, outwardQty: 0,
-            notes: "Purchase receipt", userId: gate.actor.userId,
+            notes: "Purchase receipt", userId: gate.actor.userId, lineNo: itemIdx,
           });
         } else {
           const bags = Number(item.bags_count) || Math.round(Number(item.quantity) || 0);
@@ -589,7 +627,7 @@ export async function postPurchase(
             voucherNo: purchase.purchase_no, packagingTypeId: item.packaging_type_id,
             godownId: purchase.godown_id, inQty: bags, outQty: 0,
             unitCost: Number(item.unit_price) || null,
-            notes: "Bardana purchase", userId: gate.actor.userId,
+            notes: "Bardana purchase", userId: gate.actor.userId, lineNo: itemIdx,
           });
         }
       }
@@ -608,6 +646,8 @@ export async function postPurchase(
       .select()
       .single();
     if (uError || !updated) {
+      const replayed = await replayIfFlipped(db, "purchases", id, "posted");
+      if (replayed) return { success: true, data: replayed };
       return fail("Purchase could not be posted (it may have been posted concurrently).");
     }
     await logAudit(db, {
@@ -649,7 +689,8 @@ export async function reversePurchase(id: string, reason: string): Promise<Actio
     }
     const { data: items } = await db.from("purchase_items").select("*").eq("purchase_id", id);
     if (purchase.receipt_status === "received") {
-      for (const item of items ?? []) {
+      for (let itemIdx = 0; itemIdx < (items ?? []).length; itemIdx++) {
+        const item = (items ?? [])[itemIdx];
         if (item.item_type === "seed" && purchase.godown_id) {
           await stockEntry(db, {
             date: new Date().toISOString(), voucherType: "purchase_reversal",
@@ -657,7 +698,7 @@ export async function reversePurchase(id: string, reason: string): Promise<Actio
             godownId: purchase.godown_id, productId: item.product_id,
             partyId: purchase.vendor_id, inwardQty: 0,
             outwardQty: Number(item.quantity) || 0,
-            notes: `Reversal: ${reason}`, userId: gate.actor.userId,
+            notes: `Reversal: ${reason}`, userId: gate.actor.userId, lineNo: itemIdx,
           });
         } else if (item.item_type === "packaging") {
           const bags = Number(item.bags_count) || Math.round(Number(item.quantity) || 0);
@@ -665,7 +706,7 @@ export async function reversePurchase(id: string, reason: string): Promise<Actio
             date: new Date().toISOString(), voucherType: "purchase_reversal",
             voucherId: purchase.id, voucherNo: `${purchase.purchase_no}-R`,
             packagingTypeId: item.packaging_type_id, godownId: purchase.godown_id,
-            inQty: 0, outQty: bags, notes: `Reversal: ${reason}`, userId: gate.actor.userId,
+            inQty: 0, outQty: bags, notes: `Reversal: ${reason}`, userId: gate.actor.userId, lineNo: itemIdx,
           });
         }
       }
@@ -683,7 +724,11 @@ export async function reversePurchase(id: string, reason: string): Promise<Actio
       .eq("status", "posted")
       .select()
       .single();
-    if (uError || !updated) return fail("Purchase could not be reversed (concurrent change?).");
+    if (uError || !updated) {
+      const replayed = await replayIfFlipped(db, "purchases", id, "reversed");
+      if (replayed) return { success: true, data: replayed };
+      return fail("Purchase could not be reversed (concurrent change?).");
+    }
     await logAudit(db, {
       action: "reverse", entityType: "purchases", entityId: id,
       voucherNo: purchase.purchase_no, before: { status: "posted" },
@@ -853,7 +898,8 @@ export async function postPurchaseReturn(id: string): Promise<ActionResult> {
     );
     if (!rechecked.ok) return fail(rechecked.error);
     if (purchase.receipt_status === "received") {
-      for (const line of lines ?? []) {
+      for (let lineIdx = 0; lineIdx < (lines ?? []).length; lineIdx++) {
+        const line = (lines ?? [])[lineIdx];
         const { data: orig } = await db.from("purchase_items").select("*").eq("id", line.purchase_item_id).maybeSingle();
         if (!orig) return fail(`Return line ${line.purchase_item_id} no longer matches a line of purchase ${purchase.purchase_no}; the return cannot be posted.`);
         if (orig.item_type === "seed" && purchase.godown_id) {
@@ -862,7 +908,7 @@ export async function postPurchaseReturn(id: string): Promise<ActionResult> {
             voucherNo: ret.return_no, godownId: purchase.godown_id,
             productId: orig.product_id, partyId: purchase.vendor_id,
             inwardQty: 0, outwardQty: Number(line.quantity) || 0,
-            notes: `Return against ${purchase.purchase_no}`, userId: gate.actor.userId,
+            notes: `Return against ${purchase.purchase_no}`, userId: gate.actor.userId, lineNo: lineIdx,
           });
         } else if (orig.item_type === "packaging") {
           await bardanaEntry(db, {
@@ -870,7 +916,7 @@ export async function postPurchaseReturn(id: string): Promise<ActionResult> {
             voucherNo: ret.return_no, packagingTypeId: orig.packaging_type_id,
             godownId: purchase.godown_id, inQty: 0,
             outQty: Math.round(Number(line.quantity) || 0),
-            notes: `Return against ${purchase.purchase_no}`, userId: gate.actor.userId,
+            notes: `Return against ${purchase.purchase_no}`, userId: gate.actor.userId, lineNo: lineIdx,
           });
         }
       }
@@ -889,7 +935,11 @@ export async function postPurchaseReturn(id: string): Promise<ActionResult> {
       .eq("status", "draft")
       .select()
       .single();
-    if (uError || !updated) return fail("Return could not be posted (concurrent change?).");
+    if (uError || !updated) {
+      const replayed = await replayIfFlipped(db, "purchase_returns", id, "posted");
+      if (replayed) return { success: true, data: replayed };
+      return fail("Return could not be posted (concurrent change?).");
+    }
     // Keep the original purchase's outstanding honest: total - paid - returns.
     const { data: postedReturns } = await db
       .from("purchase_returns")
@@ -1044,7 +1094,11 @@ export async function postInvoice(id: string, opts: { reason?: string } = {}): P
       .eq("status", "draft")
       .select()
       .single();
-    if (uError || !updated) return fail("Invoice could not be posted (concurrent change?).");
+    if (uError || !updated) {
+      const replayed = await replayIfFlipped(db, "customer_invoices", id, "posted");
+      if (replayed) return { success: true, data: replayed };
+      return fail("Invoice could not be posted (concurrent change?).");
+    }
     await logAudit(db, {
       action: "post", entityType: "customer_invoices", entityId: id,
       voucherNo: inv.invoice_no, before: { status: "draft" },
@@ -1083,7 +1137,11 @@ export async function reverseInvoice(id: string, reason: string): Promise<Action
       .eq("status", "posted")
       .select()
       .single();
-    if (uError || !updated) return fail("Invoice could not be reversed (concurrent change?).");
+    if (uError || !updated) {
+      const replayed = await replayIfFlipped(db, "customer_invoices", id, "reversed");
+      if (replayed) return { success: true, data: replayed };
+      return fail("Invoice could not be reversed (concurrent change?).");
+    }
     await logAudit(db, {
       action: "reverse", entityType: "customer_invoices", entityId: id,
       voucherNo: inv.invoice_no, before: { status: "posted" },
@@ -1243,7 +1301,11 @@ export async function postReceipt(id: string, opts: { reason?: string } = {}): P
       .eq("status", "draft")
       .select()
       .single();
-    if (uError || !updated) return fail("Receipt could not be posted (concurrent change?).");
+    if (uError || !updated) {
+      const replayed = await replayIfFlipped(db, "customer_receipts", id, "posted");
+      if (replayed) return { success: true, data: replayed };
+      return fail("Receipt could not be posted (concurrent change?).");
+    }
     for (const a of allocs ?? []) await refreshInvoicePaid(db, a.invoice_id);
     await logAudit(db, {
       action: "post", entityType: "customer_receipts", entityId: id,
@@ -1289,7 +1351,11 @@ export async function reverseReceipt(id: string, reason: string): Promise<Action
       .eq("status", "posted")
       .select()
       .single();
-    if (uError || !updated) return fail("Receipt could not be reversed (concurrent change?).");
+    if (uError || !updated) {
+      const replayed = await replayIfFlipped(db, "customer_receipts", id, "reversed");
+      if (replayed) return { success: true, data: replayed };
+      return fail("Receipt could not be reversed (concurrent change?).");
+    }
     for (const a of allocs ?? []) await refreshInvoicePaid(db, a.invoice_id);
     await logAudit(db, {
       action: "reverse", entityType: "customer_receipts", entityId: id,
@@ -1526,7 +1592,11 @@ export async function reverseVendorPayment(id: string, reason: string): Promise<
       .eq("status", "posted")
       .select()
       .single();
-    if (uError || !updated) return fail("Payment could not be reversed (concurrent change?).");
+    if (uError || !updated) {
+      const replayed = await replayIfFlipped(db, "vendor_payments", id, "reversed");
+      if (replayed) return { success: true, data: replayed };
+      return fail("Payment could not be reversed (concurrent change?).");
+    }
     for (const a of allocs ?? []) {
       if (a.target_type === "purchase") await refreshPurchasePaid(db, a.target_id);
       else if (a.target_type === "expense") await refreshExpensePaid(db, a.target_id);
@@ -1708,7 +1778,11 @@ export async function postExpense(id: string, opts: { reason?: string } = {}): P
       .eq("status", "draft")
       .select()
       .single();
-    if (uError || !updated) return fail("Expense could not be posted (concurrent change?).");
+    if (uError || !updated) {
+      const replayed = await replayIfFlipped(db, "expenses", id, "posted");
+      if (replayed) return { success: true, data: replayed };
+      return fail("Expense could not be posted (concurrent change?).");
+    }
     await logAudit(db, {
       action: "post", entityType: "expenses", entityId: id,
       voucherNo: exp.expense_no, before: { status: "draft" },
@@ -1757,7 +1831,11 @@ export async function reverseExpense(id: string, reason: string): Promise<Action
       .eq("status", "posted")
       .select()
       .single();
-    if (uError || !updated) return fail("Expense could not be reversed (concurrent change?).");
+    if (uError || !updated) {
+      const replayed = await replayIfFlipped(db, "expenses", id, "reversed");
+      if (replayed) return { success: true, data: replayed };
+      return fail("Expense could not be reversed (concurrent change?).");
+    }
     await logAudit(db, {
       action: "reverse", entityType: "expenses", entityId: id,
       voucherNo: exp.expense_no, before: { status: "posted" },
@@ -1818,13 +1896,13 @@ export async function postTransfer(input: {
     await cashEntry(db, {
       date, voucherType: "transfer", voucherId: data.id, voucherNo: transferNo,
       account: from.account_kind, cashAccountId: from.id, debit: 0, credit: amount,
-      description: `Transfer out to ${to.name}`, settlementKind: "transfer",
+      description: `Transfer out to ${to.name}`, settlementKind: "transfer", lineNo: 0,
       userId: gate.actor.userId,
     });
     await cashEntry(db, {
       date, voucherType: "transfer", voucherId: data.id, voucherNo: transferNo,
       account: to.account_kind, cashAccountId: to.id, debit: amount, credit: 0,
-      description: `Transfer in from ${from.name}`, settlementKind: "transfer",
+      description: `Transfer in from ${from.name}`, settlementKind: "transfer", lineNo: 1,
       userId: gate.actor.userId,
     });
     await logAudit(db, {

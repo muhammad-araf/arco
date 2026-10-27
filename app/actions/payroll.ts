@@ -41,6 +41,7 @@ import {
   PAYROLL_READ,
 } from "./auth-helpers";
 import { logAudit } from "@/lib/audit";
+import { isUniqueViolation } from "@/lib/idempotency";
 import {
   roundMoney,
   dailyPay,
@@ -66,6 +67,15 @@ async function requirePay(db: Db): Promise<{ actor: Actor } | { error: string }>
   const gate = await requireRole(db, PAYROLL_PAY);
   if (!gate.ok) return { error: gate.error };
   return { actor: gate.actor };
+}
+
+async function byToken(
+  db: Db,
+  token: string | undefined | null,
+): Promise<Record<string, unknown> | null> {
+  if (!token) return null;
+  const { data } = await db.from("payroll_payments").select("*").eq("client_token", token).maybeSingle();
+  return (data as Record<string, unknown> | null) ?? null;
 }
 
 async function requireRead(db: Db): Promise<{ actor: Actor } | { error: string }> {
@@ -517,6 +527,8 @@ export async function approvePayroll(id: string, opts: { note?: string } = {}): 
   if ("error" in gate) return fail(gate.error);
   const { data: period } = await db.from("payroll_periods").select("*").eq("id", id).single();
   if (!period) return fail("Payroll period not found.");
+  // Already approved is a successful replay, not a second approval.
+  if (period.status === "approved") return { success: true, data: period };
   if (period.status !== "draft") return fail(`Only a draft payroll can be approved (status: ${period.status}).`);
   const { data: updated, error: uError } = await db
     .from("payroll_periods")
@@ -525,7 +537,11 @@ export async function approvePayroll(id: string, opts: { note?: string } = {}): 
     .eq("status", "draft")
     .select()
     .single();
-  if (uError || !updated) return fail("Payroll could not be approved (concurrent change?).");
+  if (uError || !updated) {
+    const { data: now } = await db.from("payroll_periods").select("*").eq("id", id).maybeSingle();
+    if (now?.status === "approved") return { success: true, data: now };
+    return fail("Payroll could not be approved (concurrent change?).");
+  }
   await logAudit(db, {
     action: "approve", entityType: "payroll_periods", entityId: id,
     before: { status: "draft" }, after: { status: "approved", net_payable: period.net_payable },
@@ -595,6 +611,8 @@ export async function payPayroll(input: {
   account?: "cash" | "bank" | "online";
   referenceNo?: string;
   notes?: string;
+  /** Stable per-submission token: a double-click or retry replays the first payment. */
+  clientToken?: string;
 }): Promise<ActionResult> {
   const { db, error } = await getDb();
   if (!db) return fail(error);
@@ -611,6 +629,18 @@ export async function payPayroll(input: {
     if (amount > Number(period.balance_amount)) {
       return fail(`Payment (${amount}) exceeds the unpaid balance (${period.balance_amount}).`);
     }
+    // Same-submission replay: the payment already exists, so this
+    // call returns the period as it now stands instead of paying
+    // a second time. (Two different operators paying the same
+    // period concurrently is a separate, still-open race on the
+    // balance read -- see the Phase D report.)
+    if (input.clientToken) {
+      const existing = await byToken(db, input.clientToken);
+      if (existing) {
+        const { data: current } = await db.from("payroll_periods").select("*").eq("id", input.payrollId).maybeSingle();
+        return { success: true, data: current ?? period };
+      }
+    }
     const date = input.date ?? new Date().toISOString();
     const { data: payment, error: iError } = await db
       .from("payroll_payments")
@@ -619,11 +649,22 @@ export async function payPayroll(input: {
         payment_method: input.paymentMethod ?? "cash",
         cash_account_id: input.cashAccountId ?? null, account: input.account ?? null,
         reference_no: input.referenceNo ?? null, notes: input.notes ?? null,
+        client_token: input.clientToken ?? null,
         created_by: gate.actor.userId,
       })
       .select()
       .single();
-    if (iError) return fail(iError.message);
+    if (iError) {
+      // Lost the insert race to the same token: replay the winner.
+      if (isUniqueViolation(iError) && input.clientToken) {
+        const existing = await byToken(db, input.clientToken);
+        if (existing) {
+          const { data: current } = await db.from("payroll_periods").select("*").eq("id", input.payrollId).maybeSingle();
+          return { success: true, data: current ?? period };
+        }
+      }
+      return fail(iError.message);
+    }
     if (input.cashAccountId || input.account) {
       const kind = input.account ?? "cash";
       let acctId = input.cashAccountId ?? null;
@@ -679,7 +720,7 @@ export async function reversePayroll(id: string, reason: string): Promise<Action
   if (!reason?.trim()) return fail("A reason is mandatory to reverse a payroll period.");
   const { data: period } = await db.from("payroll_periods").select("*").eq("id", id).single();
   if (!period) return fail("Payroll period not found.");
-  if (period.status === "reversed") return fail("Payroll is already reversed.");
+  if (period.status === "reversed") return { success: true, data: period };
   if (Number(period.paid_amount) > 0) {
     return fail("Payroll has payments recorded; those payments must be reversed through their payment vouchers first.");
   }
@@ -689,7 +730,11 @@ export async function reversePayroll(id: string, reason: string): Promise<Action
     .eq("id", id)
     .select()
     .single();
-  if (uError) return fail(uError.message);
+  if (uError) {
+    const { data: now } = await db.from("payroll_periods").select("*").eq("id", id).maybeSingle();
+    if (now?.status === "reversed") return { success: true, data: now };
+    return fail(uError.message);
+  }
   await logAudit(db, {
     action: "reverse", entityType: "payroll_periods", entityId: id,
     before: { status: period.status }, after: { status: "reversed" },
