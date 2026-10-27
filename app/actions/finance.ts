@@ -58,6 +58,11 @@ import {
   exclusiveToBound,
   signedPartyOpening,
 } from "@/lib/calc/finance";
+import {
+  bardanaValuation,
+  computeStockValuation,
+  isPackagingConsumptionVoucherType,
+} from "@/lib/calc/finance-valuation";
 
 type Db = Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>;
 
@@ -401,19 +406,64 @@ async function requireSensitiveRead(
   return { actor: gate.actor };
 }
 
+/**
+ * Exclusive next-day bound for a plain YYYY-MM-DD `to` value, computed
+ * HERE (not imported) so this file's list bounds never depend on
+ * another module's helper: date columns are TIMESTAMPTZ, so a plain
+ * `.lte("date", "2026-10-27")` means midnight at the START of the 27th
+ * and silently drops the whole day. A full timestamp is returned
+ * unchanged and keeps its exact `.lte` bound.
+ */
+function exclusiveNextDay(to: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    const d = new Date(`${to}T00:00:00.000Z`);
+    if (!Number.isNaN(d.getTime())) {
+      return new Date(d.getTime() + 86400000).toISOString().slice(0, 10);
+    }
+  }
+  return to;
+}
+
+/** True only for a plain YYYY-MM-DD date (the case needing a next-day bound). */
+function isPlainDate(to: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(to);
+}
+
 function dateRange(q: {
   from?: string;
   to?: string;
   column?: string;
 }, builder: {
   gte: (col: string, v: string) => typeof builder;
+  lt: (col: string, v: string) => typeof builder;
   lte: (col: string, v: string) => typeof builder;
 }): typeof builder {
   const col = q.column ?? "date";
   let b = builder;
   if (q.from) b = b.gte(col, q.from);
-  if (q.to) b = b.lte(col, q.to);
+  if (q.to) {
+    // The `to` day is inclusive: a plain date becomes `< next day`.
+    b = isPlainDate(q.to) ? b.lt(col, exclusiveNextDay(q.to)) : b.lte(col, q.to);
+  }
   return b;
+}
+
+/**
+ * Paged-list window, same shape as the stock ledger register:
+ * page is 1-based, pageSize defaults to 50 and clamps to 1–200.
+ * Lists return the paged shape { rows, total, page, pageSize } only
+ * when the caller passes `page`; without it they keep returning the
+ * legacy plain array so existing callers are untouched.
+ */
+function pageWindow(filters: { page?: number; pageSize?: number }): {
+  page: number;
+  pageSize: number;
+  fromRow: number;
+  toRow: number;
+} {
+  const pageSize = Math.min(Math.max(filters.pageSize ?? 50, 1), 200);
+  const page = Math.max(filters.page ?? 1, 1);
+  return { page, pageSize, fromRow: (page - 1) * pageSize, toRow: page * pageSize - 1 };
 }
 
 // ---------------------------------------------------------------- cash accounts
@@ -495,11 +545,23 @@ export async function listPurchases(filters: {
   status?: string;
   from?: string;
   to?: string;
+  page?: number;
+  pageSize?: number;
 } = {}): Promise<ActionResult> {
   const { db, error } = await getDb();
   if (!db) return fail(error);
   const gate = await requireSignedIn(db);
   if (!gate.ok) return fail(gate.error);
+  if (filters.page !== undefined) {
+    const { page, pageSize, fromRow, toRow } = pageWindow(filters);
+    let pq = db.from("purchases").select("*, purchase_items(*)", { count: "exact" }).order("date", { ascending: false });
+    if (filters.vendorId) pq = pq.eq("vendor_id", filters.vendorId);
+    if (filters.status) pq = pq.eq("status", filters.status);
+    pq = dateRange(filters, pq as never) as typeof pq;
+    const { data, error: qError, count } = await pq.range(fromRow, toRow);
+    if (qError) return fail(qError.message);
+    return { success: true, data: { rows: data, total: count ?? (data ?? []).length, page, pageSize } };
+  }
   let q = db.from("purchases").select("*, purchase_items(*)").order("date", { ascending: false });
   if (filters.vendorId) q = q.eq("vendor_id", filters.vendorId);
   if (filters.status) q = q.eq("status", filters.status);
@@ -981,6 +1043,8 @@ export async function listInvoices(filters: {
   sourceType?: string;
   from?: string;
   to?: string;
+  page?: number;
+  pageSize?: number;
 } = {}): Promise<ActionResult> {
   const { db, error } = await getDb();
   if (!db) return fail(error);
@@ -990,6 +1054,17 @@ export async function listInvoices(filters: {
   // (billing renders headers and balances; receipt print builds its own
   // allocations), so shipping every line with every invoice was pure
   // payload on every billing load.
+  if (filters.page !== undefined) {
+    const { page, pageSize, fromRow, toRow } = pageWindow(filters);
+    let pq = db.from("customer_invoices").select("*", { count: "exact" }).order("date", { ascending: false });
+    if (filters.customerId) pq = pq.eq("customer_id", filters.customerId);
+    if (filters.status) pq = pq.eq("status", filters.status);
+    if (filters.sourceType) pq = pq.eq("source_type", filters.sourceType);
+    pq = dateRange(filters, pq as never) as typeof pq;
+    const { data, error: qError, count } = await pq.range(fromRow, toRow);
+    if (qError) return fail(qError.message);
+    return { success: true, data: { rows: data, total: count ?? (data ?? []).length, page, pageSize } };
+  }
   let q = db.from("customer_invoices").select("*").order("date", { ascending: false });
   if (filters.customerId) q = q.eq("customer_id", filters.customerId);
   if (filters.status) q = q.eq("status", filters.status);
@@ -1161,11 +1236,23 @@ export async function listReceipts(filters: {
   status?: string;
   from?: string;
   to?: string;
+  page?: number;
+  pageSize?: number;
 } = {}): Promise<ActionResult> {
   const { db, error } = await getDb();
   if (!db) return fail(error);
   const gate = await requireSignedIn(db);
   if (!gate.ok) return fail(gate.error);
+  if (filters.page !== undefined) {
+    const { page, pageSize, fromRow, toRow } = pageWindow(filters);
+    let pq = db.from("customer_receipts").select("*, invoice_allocations(*)", { count: "exact" }).order("date", { ascending: false });
+    if (filters.customerId) pq = pq.eq("customer_id", filters.customerId);
+    if (filters.status) pq = pq.eq("status", filters.status);
+    pq = dateRange(filters, pq as never) as typeof pq;
+    const { data, error: qError, count } = await pq.range(fromRow, toRow);
+    if (qError) return fail(qError.message);
+    return { success: true, data: { rows: data, total: count ?? (data ?? []).length, page, pageSize } };
+  }
   let q = db.from("customer_receipts").select("*, invoice_allocations(*)").order("date", { ascending: false });
   if (filters.customerId) q = q.eq("customer_id", filters.customerId);
   if (filters.status) q = q.eq("status", filters.status);
@@ -1188,6 +1275,10 @@ export async function createReceipt(input: {
   paymentMethod?: string;
   amount: number;
   referenceNo?: string;
+  /** Optional: what the receipt is for (shown on the receipt print). */
+  purpose?: string;
+  /** Optional: person who received the money (shown on the receipt print). */
+  receivedBy?: string;
   notes?: string;
   date?: string;
   clientToken?: string;
@@ -1225,6 +1316,8 @@ export async function createReceipt(input: {
         account: input.account, payment_method: input.paymentMethod ?? "cash",
         amount, unapplied_amount: roundMoney(amount - allocated),
         reference_no: input.referenceNo ?? null, notes: input.notes ?? null,
+        purpose: input.purpose?.trim() || null,
+        received_by: input.receivedBy?.trim() || null,
         status: "draft", client_token: input.clientToken ?? null,
         created_by: gate.actor.userId,
       })
@@ -1376,11 +1469,23 @@ export async function listVendorPayments(filters: {
   status?: string;
   from?: string;
   to?: string;
+  page?: number;
+  pageSize?: number;
 } = {}): Promise<ActionResult> {
   const { db, error } = await getDb();
   if (!db) return fail(error);
   const gate = await requireSignedIn(db);
   if (!gate.ok) return fail(gate.error);
+  if (filters.page !== undefined) {
+    const { page, pageSize, fromRow, toRow } = pageWindow(filters);
+    let pq = db.from("vendor_payments").select("*, payment_allocations(*)", { count: "exact" }).order("date", { ascending: false });
+    if (filters.vendorId) pq = pq.eq("vendor_id", filters.vendorId);
+    if (filters.status) pq = pq.eq("status", filters.status);
+    pq = dateRange(filters, pq as never) as typeof pq;
+    const { data, error: qError, count } = await pq.range(fromRow, toRow);
+    if (qError) return fail(qError.message);
+    return { success: true, data: { rows: data, total: count ?? (data ?? []).length, page, pageSize } };
+  }
   let q = db.from("vendor_payments").select("*, payment_allocations(*)").order("date", { ascending: false });
   if (filters.vendorId) q = q.eq("vendor_id", filters.vendorId);
   if (filters.status) q = q.eq("status", filters.status);
@@ -1644,17 +1749,92 @@ export async function listExpenses(filters: {
   categoryName?: string;
   from?: string;
   to?: string;
+  page?: number;
+  pageSize?: number;
 } = {}): Promise<ActionResult> {
   const { db, error } = await getDb();
   if (!db) return fail(error);
   const gate = await requireSignedIn(db);
   if (!gate.ok) return fail(gate.error);
+  if (filters.page !== undefined) {
+    const { page, pageSize, fromRow, toRow } = pageWindow(filters);
+    let pq = db.from("expenses").select("*", { count: "exact" }).order("date", { ascending: false });
+    if (filters.status) pq = pq.eq("status", filters.status);
+    if (filters.categoryName) pq = pq.eq("category_name", filters.categoryName);
+    pq = dateRange(filters, pq as never) as typeof pq;
+    const { data, error: qError, count } = await pq.range(fromRow, toRow);
+    if (qError) return fail(qError.message);
+    return { success: true, data: { rows: data, total: count ?? (data ?? []).length, page, pageSize } };
+  }
   let q = db.from("expenses").select("*").order("date", { ascending: false });
   if (filters.status) q = q.eq("status", filters.status);
   if (filters.categoryName) q = q.eq("category_name", filters.categoryName);
   q = dateRange(filters, q as never) as typeof q;
   const { data, error: qError } = await q;
   if (qError) return fail(qError.message);
+  return { success: true, data };
+}
+
+// ------------------------------------------------------- expense categories
+
+/** Expense categories from the expense_categories table (never hardcoded). */
+export async function listExpenseCategories(): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireSignedIn(db);
+  if (!gate.ok) return fail(gate.error);
+  const { data, error: qError } = await db
+    .from("expense_categories")
+    .select("*")
+    .order("name", { ascending: true });
+  if (qError) return fail(qError.message);
+  return { success: true, data };
+}
+
+export async function createExpenseCategory(input: {
+  name: string;
+  description?: string;
+}): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireWrite(db);
+  if ("error" in gate) return fail(gate.error);
+  if (!input.name?.trim()) return fail("Expense category name is required.");
+  const { data, error: iError } = await db
+    .from("expense_categories")
+    .insert({
+      name: input.name.trim(),
+      description: input.description?.trim() || null,
+      is_operating: true,
+      is_active: true,
+    })
+    .select()
+    .single();
+  if (iError) return fail(iError.message);
+  await logAudit(db, {
+    action: "create", entityType: "expense_categories", entityId: data.id,
+    after: { name: input.name.trim() },
+    userId: gate.actor.userId, userEmail: gate.actor.email,
+  });
+  return { success: true, data };
+}
+
+export async function deactivateExpenseCategory(id: string): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireWrite(db);
+  if ("error" in gate) return fail(gate.error);
+  const { data, error: uError } = await db
+    .from("expense_categories")
+    .update({ is_active: false })
+    .eq("id", id)
+    .select()
+    .single();
+  if (uError) return fail(uError.message);
+  await logAudit(db, {
+    action: "deactivate", entityType: "expense_categories", entityId: id,
+    userId: gate.actor.userId, userEmail: gate.actor.email,
+  });
   return { success: true, data };
 }
 
@@ -1672,6 +1852,8 @@ export async function createExpense(input: {
   settlement?: "paid" | "credit";
   cashAccountId?: string | null;
   paymentMethod?: "cash" | "bank";
+  /** Optional: where the expense was incurred (godown, site, …). */
+  location?: string;
   description?: string;
   date?: string;
   clientToken?: string;
@@ -1715,6 +1897,7 @@ export async function createExpense(input: {
         payee: input.payee.trim(), vendor_id: input.vendorId ?? null,
         amount, payment_method: input.paymentMethod ?? "cash",
         cash_account_id: input.cashAccountId ?? null, settlement,
+        location: input.location?.trim() || null,
         paid_amount: 0, balance_amount: amount,
         description: input.description ?? null, status: "draft",
         client_token: input.clientToken ?? null, created_by: gate.actor.userId,
@@ -2140,6 +2323,68 @@ export async function getVendorStatement(input: {
   return getPartyStatement(input);
 }
 
+/**
+ * Party adjustment entry (spec §10/§11): a manual, audited correction
+ * to one party's ledger. It writes exactly one party_ledger row with
+ * entry_type = 'adjustment' — this exact string is what the reports
+ * team's statement rendering keys on — and nothing else: no cash, no
+ * stock, no invoice/purchase row is created or changed.
+ *
+ * Direction is ledger-native: 'debit' increases the receivable balance
+ * (delta +amount: the party owes more, or a vendor payable falls by
+ * that amount); 'credit' decreases it (delta −amount). Reason is
+ * mandatory and stored on the row and in the audit log, so an
+ * adjustment is never silent. There is no adjustment header table:
+ * voucher_id and voucher_no are the generated ADJ document number.
+ */
+export async function createPartyAdjustment(input: {
+  partyId: string;
+  amount: number;
+  direction: "debit" | "credit";
+  reason: string;
+  date?: string;
+}): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireWrite(db);
+  if ("error" in gate) return fail(gate.error);
+  try {
+    if (!input.partyId) return fail("partyId is required.");
+    const amount = pos(input.amount, "amount");
+    if (amount === null) return fail("Adjustment amount must be > 0.");
+    if (input.direction !== "debit" && input.direction !== "credit") {
+      return fail("Adjustment direction must be 'debit' or 'credit'.");
+    }
+    if (!input.reason?.trim()) return fail("A reason is mandatory for a party adjustment.");
+    const { data: party } = await db.from("parties").select("id").eq("id", input.partyId).maybeSingle();
+    if (!party) return fail("Party not found.");
+    const voucherNo = await nextDocNo(db, "party_adjustment", "ADJ");
+    const date = input.date ?? new Date().toISOString();
+    const delta = input.direction === "debit" ? amount : -amount;
+    await partyEntry(db, {
+      partyId: input.partyId, date, entryType: "adjustment",
+      voucherType: "adjustment", voucherId: voucherNo, voucherNo,
+      delta, notes: `Party adjustment (${input.direction}): ${input.reason.trim()}`,
+      userId: gate.actor.userId,
+    });
+    await logAudit(db, {
+      action: "adjustment", entityType: "party_adjustments", entityId: voucherNo,
+      voucherNo, after: { party_id: input.partyId, amount, direction: input.direction },
+      reason: input.reason.trim(),
+      userId: gate.actor.userId, userEmail: gate.actor.email,
+    });
+    return {
+      success: true,
+      data: {
+        voucherNo, partyId: input.partyId, amount, direction: input.direction,
+        delta, entryType: "adjustment", reason: input.reason.trim(), date,
+      },
+    };
+  } catch (err) {
+    return fail(errMsg(err));
+  }
+}
+
 // ---------------------------------------------------------------- P&L
 
 /**
@@ -2183,8 +2428,12 @@ export async function getPL(input: {
       .gte("period_start", input.from).lt("period_start", exclusiveToBound(input.to));
     let payrollCost = 0;
     for (const p of payroll ?? []) payrollCost = roundMoney(payrollCost + (Number(p.net_payable) || 0));
-    // Packaging: consumed-bag cost from bardana consumption rows only.
-    // Bag PURCHASES are never added here (that would double-count).
+    // Packaging: consumed-bag cost from genuine consumption rows only.
+    // Explicit allow-list (packing / batch_packing): bag PURCHASES are
+    // never added here (that would double-count), and neither are
+    // purchase returns/reversals — the old "everything except
+    // purchase_return" filter wrongly counted purchase reversals as
+    // consumption. Any future out-row type is excluded by default.
     let packagingCost: number;
     if (input.packagingCostAmount !== undefined) {
       packagingCost = roundMoney(input.packagingCostAmount);
@@ -2194,7 +2443,7 @@ export async function getPL(input: {
       let cost = 0;
       let bagsOut = 0;
       for (const r of consumed ?? []) {
-        if ((Number(r.out_qty) || 0) > 0 && r.voucher_type !== "purchase_return") {
+        if ((Number(r.out_qty) || 0) > 0 && isPackagingConsumptionVoucherType(r.voucher_type)) {
           bagsOut += Number(r.out_qty) || 0;
           cost = roundMoney(cost + (Number(r.total_cost) || 0));
         }
@@ -2229,8 +2478,187 @@ export async function getPL(input: {
   }
 }
 
+// ---------------------------------------------------------------- COGS approvals & stock valuation
+
+/**
+ * COGS approvals (spec §15.2): COGS stays accountant-supplied, never
+ * computed from purchases or any invented method. The accountant
+ * records one approved COGS figure per calendar period in
+ * pl_cogs_approvals (see supabase/migration-finance-cogs-approvals.sql);
+ * the reports team reads it back with getCogsApproval and passes it to
+ * getPL as cogsAmount. Saving again for the same period REPLACES the
+ * earlier approval (one approval per period) and is audited; the old
+ * row is updated, not duplicated.
+ */
+export async function saveCogsApproval(input: {
+  month: number;
+  year: number;
+  amount: number;
+  basis?: string;
+  note?: string;
+}): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireWrite(db);
+  if ("error" in gate) return fail(gate.error);
+  try {
+    const month = Number(input.month);
+    const year = Number(input.year);
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      return fail("COGS approval month must be 1–12.");
+    }
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      return fail("COGS approval year must be a four-digit year.");
+    }
+    const amount = nonNeg(input.amount, "amount");
+    if (amount === null) return fail("COGS approval amount must be >= 0.");
+    const row = {
+      period_month: month,
+      period_year: year,
+      amount,
+      basis: input.basis?.trim() || null,
+      note: input.note?.trim() || null,
+      approved_by: gate.actor.userId,
+    };
+    const { data: existing } = await db.from("pl_cogs_approvals").select("id")
+      .eq("period_year", year).eq("period_month", month).maybeSingle();
+    let data;
+    if (existing) {
+      const { data: updated, error: uError } = await db.from("pl_cogs_approvals")
+        .update(row).eq("id", (existing as Record<string, unknown>).id).select().single();
+      if (uError) return fail(uError.message);
+      data = updated;
+    } else {
+      const { data: inserted, error: iError } = await db.from("pl_cogs_approvals")
+        .insert(row).select().single();
+      if (iError) return fail(iError.message);
+      data = inserted;
+    }
+    await logAudit(db, {
+      action: "approve", entityType: "pl_cogs_approvals", entityId: (data as Record<string, unknown>).id as string,
+      after: { period_month: month, period_year: year, amount, basis: row.basis },
+      userId: gate.actor.userId, userEmail: gate.actor.email,
+    });
+    return { success: true, data };
+  } catch (err) {
+    return fail(errMsg(err));
+  }
+}
+
+/** Read back the approved COGS for one period; data is null when none exists. */
+export async function getCogsApproval(input: {
+  month: number;
+  year: number;
+}): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireSensitiveRead(db);
+  if ("error" in gate) return fail(gate.error);
+  const { data, error: qError } = await db.from("pl_cogs_approvals").select("*")
+    .eq("period_year", Number(input.year)).eq("period_month", Number(input.month))
+    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (qError) return fail(qError.message);
+  return { success: true, data: data ?? null };
+}
+
+/**
+ * Stock valuation (reports team renders it). Method comes from the
+ * caller — in practice the accountant-confirmed value in the
+ * app_settings pl_config key — and is NEVER hard-coded here.
+ *
+ * - last_purchase_cost: each product's closing stock (stock_ledger
+ *   inward − outward) × its latest posted, received purchase price.
+ * - average_cost: closing stock × quantity-weighted average of all its
+ *   posted, received purchase prices (Σ qty×price / Σ qty).
+ * - "unconfirmed" (or anything else): { status: "method_not_set",
+ *   totalValue: null } — never a number, never a guess.
+ * Products with stock but no purchase history are listed in
+ * uncostedProductIds with value null, never valued at 0.
+ * Cost-ledger WRITES into batch/job posting are NOT done here — that
+ * is wave-2 work; this action only reads purchase history and the
+ * stock ledger.
+ */
+export async function getStockValuation(
+  method: "last_purchase_cost" | "average_cost" | "unconfirmed" | string,
+): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireSensitiveRead(db);
+  if ("error" in gate) return fail(gate.error);
+  try {
+    if (method !== "last_purchase_cost" && method !== "average_cost") {
+      const result = computeStockValuation([], [], method ?? "unconfirmed");
+      return { success: true, data: result };
+    }
+    const { data: ledger, error: lError } = await db.from("stock_ledger")
+      .select("product_id, inward_qty, outward_qty");
+    if (lError) return fail(lError.message);
+    const closingByProduct = new Map<string, number>();
+    for (const r of ledger ?? []) {
+      const pid = String((r as Record<string, unknown>).product_id);
+      const qty = (Number((r as Record<string, unknown>).inward_qty) || 0)
+        - (Number((r as Record<string, unknown>).outward_qty) || 0);
+      closingByProduct.set(pid, roundMoney((closingByProduct.get(pid) ?? 0) + qty));
+    }
+    const products = [...closingByProduct.entries()].map(([productId, closingQty]) => ({
+      productId, closingQty,
+    }));
+    // Posted, received purchases only: bill-only purchases never moved
+    // stock, so their prices must not price stock on hand.
+    const { data: postedPurchases, error: pError } = await db.from("purchases")
+      .select("id, date").eq("status", "posted").eq("receipt_status", "received");
+    if (pError) return fail(pError.message);
+    const postedIds = new Set((postedPurchases ?? []).map((p) => String((p as Record<string, unknown>).id)));
+    const dateById = new Map((postedPurchases ?? []).map((p) => [
+      String((p as Record<string, unknown>).id),
+      String((p as Record<string, unknown>).date ?? ""),
+    ]));
+    const { data: lines, error: liError } = await db.from("purchase_items")
+      .select("purchase_id, product_id, quantity, unit_price").eq("item_type", "seed");
+    if (liError) return fail(liError.message);
+    const purchases = (lines ?? [])
+      .filter((l) => postedIds.has(String((l as Record<string, unknown>).purchase_id))
+        && (l as Record<string, unknown>).product_id)
+      .map((l) => {
+        const row = l as Record<string, unknown>;
+        return {
+          productId: String(row.product_id),
+          quantity: Number(row.quantity) || 0,
+          unitPrice: Number(row.unit_price) || 0,
+          date: dateById.get(String(row.purchase_id)) ?? "",
+        };
+      });
+    const result = computeStockValuation(products, purchases, method);
+    return { success: true, data: result };
+  } catch (err) {
+    return fail(errMsg(err));
+  }
+}
+
 // ---------------------------------------------------------------- bardana & openings
 
+/**
+ * Bardana ledger + report totals. In addition to the ledger entries and
+ * the purchased/consumed/returned counts, this returns:
+ * - opening: bags evidenced by opening_balances rows (kind 'bardana',
+ *   matching the packaging/godown filter) dated before `from` when a
+ *   `from` is given, else on/before `to` (else all). Reported
+ *   SEPARATELY: it is NOT added to `closing`, which is the last
+ *   ledger running_balance — whether the ledger was seeded from the
+ *   opening evidence cannot be told from the ledger alone, and adding
+ *   both blindly would double-count. Callers must not add them either.
+ * - damaged: bags on posted packing_records in the same range and
+ *   packaging filter. Damaged bags are tracked on packing records,
+ *   not the bardana ledger (ledger consumption rows fold packed +
+ *   damaged together); reversed packing records are excluded via
+ *   status = 'posted'. packing_records carry no godown, so a godown
+ *   filter does not narrow damaged.
+ * - valuation: bardanaValuation over the returned entries — the sum of
+ *   recorded total_cost values only, with its label saying so. It is
+ *   NOT a closing-stock valuation under any costing method.
+ * The `to` day is inclusive via an exclusive next-day bound (the old
+ * plain `.lte("date", to)` dropped the whole `to` day).
+ */
 export async function getBardanaLedger(input: {
   packagingTypeId?: string;
   godownId?: string;
@@ -2245,7 +2673,11 @@ export async function getBardanaLedger(input: {
   if (input.packagingTypeId) q = q.eq("packaging_type_id", input.packagingTypeId);
   if (input.godownId) q = q.eq("godown_id", input.godownId);
   if (input.from) q = q.gte("date", input.from);
-  if (input.to) q = q.lte("date", input.to);
+  if (input.to) {
+    q = isPlainDate(input.to)
+      ? q.lt("date", exclusiveNextDay(input.to))
+      : q.lte("date", input.to);
+  }
   const { data, error: qError } = await q;
   if (qError) return fail(qError.message);
   let purchased = 0;
@@ -2257,7 +2689,45 @@ export async function getBardanaLedger(input: {
     else consumed += Number(r.out_qty) || 0;
   }
   const closing = data?.length ? Number(data[data.length - 1].running_balance) || 0 : 0;
-  return { success: true, data: { entries: data, purchased, consumed, returned, closing } };
+  const valuation = bardanaValuation((data ?? []).map((r) => ({
+    in_qty: Number(r.in_qty) || 0,
+    out_qty: Number(r.out_qty) || 0,
+    total_cost: Number(r.total_cost) || 0,
+  })));
+  // Opening evidence (see header comment): as_of is a DATE column, so
+  // plain-date comparisons are exact here — no next-day bound needed.
+  let openingQ = db.from("opening_balances").select("quantity, as_of, packaging_type_id, godown_id")
+    .eq("balance_kind", "bardana");
+  if (input.packagingTypeId) openingQ = openingQ.eq("packaging_type_id", input.packagingTypeId);
+  if (input.godownId) openingQ = openingQ.eq("godown_id", input.godownId);
+  const { data: openingRows } = await openingQ;
+  let opening = 0;
+  for (const r of openingRows ?? []) {
+    const asOf = String((r as Record<string, unknown>).as_of ?? "").slice(0, 10);
+    if (input.from && asOf >= input.from.slice(0, 10)) continue;
+    if (!input.from && input.to && asOf > input.to.slice(0, 10)) continue;
+    opening += Number((r as Record<string, unknown>).quantity) || 0;
+  }
+  // Damaged bags from posted packing records in the same range/filter.
+  // packing_records carry no godown column, so a godown filter cannot
+  // narrow damaged — it is documented here rather than faked with a
+  // filter on a column that does not exist.
+  let damagedQ = db.from("packing_records").select("damaged_bags, date, packaging_type_id")
+    .eq("status", "posted");
+  if (input.packagingTypeId) damagedQ = damagedQ.eq("packaging_type_id", input.packagingTypeId);
+  if (input.from) damagedQ = damagedQ.gte("date", input.from);
+  if (input.to) {
+    damagedQ = isPlainDate(input.to)
+      ? damagedQ.lt("date", exclusiveNextDay(input.to))
+      : damagedQ.lte("date", input.to);
+  }
+  const { data: damagedRows } = await damagedQ;
+  let damaged = 0;
+  for (const r of damagedRows ?? []) damaged += Number((r as Record<string, unknown>).damaged_bags) || 0;
+  return {
+    success: true,
+    data: { entries: data, purchased, consumed, returned, closing, opening, damaged, valuation },
+  };
 }
 
 export async function createOpeningBalance(input: {
