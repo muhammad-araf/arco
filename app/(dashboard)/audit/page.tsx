@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { EmptyState, AlertBanner, PageSkeleton } from "@/components/erp-ui"
+import { EmptyState, AlertBanner } from "@/components/erp-ui"
+import { AuditSkeleton } from "@/components/route-skeletons"
 import { listAudit } from "@/app/actions/audit"
 
 /**
@@ -71,7 +72,7 @@ export default function AuditPage() {
     }
   }
 
-  if (isLoading && !searched) return <PageSkeleton />
+  if (isLoading && !searched) return <AuditSkeleton />
 
   return (
     <div className="space-y-6">

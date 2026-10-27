@@ -25,12 +25,12 @@ import {
   ConfirmDialog,
   EmptyState,
   FilterBanner,
-  PageSkeleton,
   ReversalDialog,
   SubmitSpinner,
   getUrlFilter,
   isPositive,
 } from "@/components/erp-ui"
+import { InventorySkeleton } from "@/components/route-skeletons"
 
 export default function InventoryPage() {
   const [activeTab, setActiveTab] = React.useState<"summary" | "ledger" | "transfers" | "adjustments">("summary")
@@ -259,7 +259,7 @@ export default function InventoryPage() {
     }
   }
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <InventorySkeleton />
 
   return (
     <div className="space-y-6">

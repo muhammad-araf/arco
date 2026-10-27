@@ -29,13 +29,13 @@ import {
   ConfirmDialog,
   EmptyState,
   FilterBanner,
-  PageSkeleton,
   ReversalDialog,
   SubmitSpinner,
   getUrlFilter,
   isPositive,
   isTodayISO,
 } from "@/components/erp-ui"
+import { GatepassSkeleton } from "@/components/route-skeletons"
 
 export default function GatePassPage() {
   const [gatePasses, setGatePasses] = React.useState<GatePass[]>([])
@@ -369,7 +369,7 @@ export default function GatePassPage() {
       ? gatePasses.filter((gp) => gp.status === "posted")
       : gatePasses
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <GatepassSkeleton />
 
   return (
     <div className="space-y-6">

@@ -25,13 +25,13 @@ import {
   ConfirmDialog,
   EmptyState,
   FilterBanner,
-  PageSkeleton,
   ReversalDialog,
   SubmitSpinner,
   getUrlFilter,
   isPositive,
   isTodayISO,
 } from "@/components/erp-ui"
+import { InwardSkeleton } from "@/components/route-skeletons"
 
 export default function InwardPage() {
   const [vouchers, setVouchers] = React.useState<IncomingGoodsVoucher[]>([])
@@ -297,7 +297,7 @@ export default function InwardPage() {
       ? vouchers.filter((v) => v.status === "posted")
       : vouchers
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <InwardSkeleton />
 
   return (
     <div className="space-y-6">

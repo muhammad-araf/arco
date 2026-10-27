@@ -18,12 +18,12 @@ import {
   ConfirmDialog,
   EmptyState,
   FilterBanner,
-  PageSkeleton,
   ReversalDialog,
   SubmitSpinner,
   getUrlFilter,
   isPositive,
 } from "@/components/erp-ui"
+import { PurchasesSkeleton } from "@/components/route-skeletons"
 
 export default function PurchasesPage() {
   const [purchases, setPurchases] = React.useState<PurchaseVoucher[]>([])
@@ -297,7 +297,7 @@ export default function PurchasesPage() {
     ? purchases.filter((p) => p.status === "posted" && p.balance_amount > 0)
     : purchases
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <PurchasesSkeleton />
 
   return (
     <div className="space-y-6">

@@ -20,11 +20,11 @@ import {
   AlertBanner,
   ConfirmDialog,
   EmptyState,
-  PageSkeleton,
   ReversalDialog,
   SubmitSpinner,
   isPositive,
 } from "@/components/erp-ui"
+import { MachinerySkeleton } from "@/components/route-skeletons"
 
 export default function MachineryJobsPage() {
   const [jobs, setJobs] = React.useState<MachineryJob[]>([])
@@ -253,7 +253,7 @@ export default function MachineryJobsPage() {
     }
   }
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <MachinerySkeleton />
 
   return (
     <div className="space-y-6">

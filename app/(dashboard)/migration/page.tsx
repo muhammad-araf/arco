@@ -20,10 +20,10 @@ import { formatCurrency, formatWeight } from "@/lib/utils"
 import {
   AlertBanner,
   ConfirmDialog,
-  PageSkeleton,
   SubmitSpinner,
   isPositive,
 } from "@/components/erp-ui"
+import { MigrationSkeleton } from "@/components/route-skeletons"
 
 interface DataDictionaryItem {
   excelSheet: string
@@ -409,7 +409,7 @@ export default function MigrationPage() {
     }
   }
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <MigrationSkeleton />
 
   return (
     <div className="space-y-6">

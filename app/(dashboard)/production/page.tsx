@@ -26,13 +26,13 @@ import {
   ConfirmDialog,
   EmptyState,
   FilterBanner,
-  PageSkeleton,
   ReversalDialog,
   SubmitSpinner,
   getUrlFilter,
   isPositive,
   isTodayISO,
 } from "@/components/erp-ui"
+import { ProductionSkeleton } from "@/components/route-skeletons"
 
 export default function ProductionPage() {
   const [batches, setBatches] = React.useState<ProductionBatch[]>([])
@@ -371,7 +371,7 @@ export default function ProductionPage() {
       ? batches.filter((b) => b.status === "posted")
       : batches
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <ProductionSkeleton />
 
   return (
     <div className="space-y-6">

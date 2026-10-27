@@ -21,10 +21,10 @@ import {
   AlertBanner,
   ConfirmDialog,
   EmptyState,
-  PageSkeleton,
   SubmitSpinner,
   isPositive,
 } from "@/components/erp-ui"
+import { PackingSkeleton } from "@/components/route-skeletons"
 
 export default function PackingPage() {
   const [packaging, setPackaging] = React.useState<PackagingType[]>([])
@@ -203,7 +203,7 @@ export default function PackingPage() {
     }
   })
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <PackingSkeleton />
 
   return (
     <div className="space-y-6">

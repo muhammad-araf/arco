@@ -19,10 +19,10 @@ import {
   ConfirmDialog,
   EmptyState,
   FilterBanner,
-  PageSkeleton,
   SubmitSpinner,
   getUrlFilter,
 } from "@/components/erp-ui"
+import { PayrollSkeleton } from "@/components/route-skeletons"
 
 const ALL_STATUSES: AttendanceStatus[] = ["present", "half_day", "leave", "absent", "holiday"]
 const STATUS_LABEL: Record<AttendanceStatus, string> = {
@@ -347,7 +347,7 @@ export default function PayrollPage() {
   })
   const estimateTotals = estimateRows.reduce((a, r) => ({ base: a.base + r.base, adv: a.adv + r.openAdv, net: a.net + r.net }), { base: 0, adv: 0, net: 0 })
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <PayrollSkeleton />
 
   return (
     <div className="space-y-6">

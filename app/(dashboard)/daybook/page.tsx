@@ -24,13 +24,13 @@ import {
   ConfirmDialog,
   EmptyState,
   FilterBanner,
-  PageSkeleton,
   ReversalDialog,
   SubmitSpinner,
   getUrlFilter,
   isPositive,
   isTodayISO,
 } from "@/components/erp-ui"
+import { DaybookSkeleton } from "@/components/route-skeletons"
 
 export default function DaybookPage() {
   const [cashLedger, setCashLedger] = React.useState<CashLedgerEntry[]>([])
@@ -265,7 +265,7 @@ export default function DaybookPage() {
     { debit: 0, credit: 0 }
   )
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <DaybookSkeleton />
 
   return (
     <div className="space-y-6">

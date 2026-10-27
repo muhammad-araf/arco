@@ -19,10 +19,10 @@ import {
   AlertBanner,
   ConfirmDialog,
   EmptyState,
-  PageSkeleton,
   SubmitSpinner,
   isPositive,
 } from "@/components/erp-ui"
+import { MastersSkeleton } from "@/components/route-skeletons"
 
 export default function MastersPage() {
   const [activeTab, setActiveTab] = React.useState<"products" | "godowns" | "parties" | "machines">("products")
@@ -243,7 +243,7 @@ export default function MastersPage() {
     await loadData()
   }
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <MastersSkeleton />
 
   return (
     <div className="space-y-6">

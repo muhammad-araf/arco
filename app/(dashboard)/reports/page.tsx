@@ -22,8 +22,8 @@ import { exportReportToCsv } from "@/lib/export-utils"
 import {
   AlertBanner,
   EmptyState,
-  PageSkeleton,
-} from "@/components/erp-ui"
+  } from "@/components/erp-ui"
+import { ReportsSkeleton } from "@/components/route-skeletons"
 
 export default function ReportsPage() {
   const [selectedReport, setSelectedReport] = React.useState<"pnl" | "stock" | "ledger" | "bardana" | "party" | "vendor">("pnl")
@@ -154,7 +154,7 @@ export default function ReportsPage() {
     }
   })
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <ReportsSkeleton />
 
   return (
     <div className="space-y-6">

@@ -2,7 +2,8 @@
 
 import * as React from "react"
 import { getMyProfile, listProfiles, setUserRole, type AppRole } from "@/app/actions/auth"
-import { PageSkeleton, AlertBanner, EmptyState, ConfirmDialog } from "@/components/erp-ui"
+import { AlertBanner, EmptyState, ConfirmDialog } from "@/components/erp-ui"
+import { UsersSkeleton } from "@/components/route-skeletons"
 
 const ROLE_LABELS: Record<AppRole, string> = {
   owner_admin: "Owner / Admin",
@@ -87,7 +88,7 @@ export default function UsersPage() {
     await load()
   }
 
-  if (loading) return <PageSkeleton />
+  if (loading) return <UsersSkeleton />
   return (
     <div className="space-y-6">
       <div>

@@ -24,12 +24,12 @@ import {
   ConfirmDialog,
   EmptyState,
   FilterBanner,
-  PageSkeleton,
   ReversalDialog,
   SubmitSpinner,
   getUrlFilter,
   isPositive,
 } from "@/components/erp-ui"
+import { BillingSkeleton } from "@/components/route-skeletons"
 
 export default function BillingPage() {
   const [receipts, setReceipts] = React.useState<CustomerReceipt[]>([])
@@ -245,7 +245,7 @@ export default function BillingPage() {
     ? customers.filter((c) => custBalance(c) > 0)
     : customers
 
-  if (isLoading) return <PageSkeleton />
+  if (isLoading) return <BillingSkeleton />
 
   return (
     <div className="space-y-6">

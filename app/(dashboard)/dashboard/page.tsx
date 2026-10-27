@@ -8,7 +8,8 @@ import {
 } from "lucide-react"
 import { getDashboardData } from "@/app/actions/dashboard"
 import { formatCurrency, formatWeight, formatBags } from "@/lib/utils"
-import { PageSkeleton, AlertBanner } from "@/components/erp-ui"
+import { AlertBanner } from "@/components/erp-ui"
+import { DashboardSkeleton } from "@/components/route-skeletons"
 
 type Row = Record<string, any>
 const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0)
@@ -68,7 +69,7 @@ export default function DashboardPage() {
   }, [])
 
   React.useEffect(() => { load() }, [load])
-  if (loading) return <PageSkeleton />
+  if (loading) return <DashboardSkeleton />
 
   const postedToday = (rows: Row[]) => rows.filter((r) => r.status === "posted" && isToday(r.date))
   const todayInward = postedToday(inward)
