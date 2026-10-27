@@ -27,6 +27,108 @@ export function stockBalanceFromRows(
   return roundWeight(balance);
 }
 
+/** One (product, owner) pool quantity. partyId null = company-owned pool. */
+export interface PoolQuantity {
+  productId: string;
+  partyId: string | null;
+  qtyKg: number;
+}
+
+function poolKey(productId: string, partyId: string | null): string {
+  return `${productId}|${partyId ?? ""}`;
+}
+
+/**
+ * Aggregate quantities per (product, owner) pool. Guards MUST run on the
+ * aggregated totals, never per line: two lines for the same pool each
+ * passing a per-line check can jointly drive the pool negative (the
+ * inward-reversal bypass this was added for).
+ */
+export function aggregatePoolQuantities(
+  lines: ReadonlyArray<PoolQuantity>,
+): PoolQuantity[] {
+  const byKey = new Map<string, PoolQuantity>();
+  for (const line of lines) {
+    const key = poolKey(line.productId, line.partyId);
+    const entry = byKey.get(key) ?? { productId: line.productId, partyId: line.partyId, qtyKg: 0 };
+    entry.qtyKg = roundWeight(entry.qtyKg + line.qtyKg);
+    byKey.set(key, entry);
+  }
+  return [...byKey.values()];
+}
+
+/** Distinct owner pool ids a product was dispatched from (null = company). */
+export function ownersForProduct(
+  dispatched: ReadonlyArray<PoolQuantity>,
+  productId: string,
+): (string | null)[] {
+  const seen = new Set<string>();
+  const owners: (string | null)[] = [];
+  for (const line of dispatched) {
+    if (line.productId !== productId) continue;
+    const key = line.partyId ?? "";
+    if (!seen.has(key)) {
+      seen.add(key);
+      owners.push(line.partyId);
+    }
+  }
+  return owners;
+}
+
+/**
+ * Validate a new gate-pass return against dispatched quantities and prior
+ * returns, cumulatively per (product, owner) pool. Returns the aggregated
+ * new-return list, or an error string naming the offending pool.
+ */
+export function validateCumulativeReturns(
+  dispatched: ReadonlyArray<PoolQuantity>,
+  priorReturns: ReadonlyArray<PoolQuantity>,
+  requested: ReadonlyArray<PoolQuantity>,
+): { ok: true; aggregated: PoolQuantity[] } | { ok: false; error: string } {
+  const sent = new Map(aggregatePoolQuantities(dispatched).map((p) => [poolKey(p.productId, p.partyId), p.qtyKg]));
+  const prior = new Map(aggregatePoolQuantities(priorReturns).map((p) => [poolKey(p.productId, p.partyId), p.qtyKg]));
+  const aggregated = aggregatePoolQuantities(requested);
+  for (const ret of aggregated) {
+    if (!(ret.qtyKg > 0)) {
+      return { ok: false, error: `Return quantity for product ${ret.productId} must be greater than 0` };
+    }
+    const dispatchedQty = sent.get(poolKey(ret.productId, ret.partyId));
+    if (dispatchedQty === undefined) {
+      return { ok: false, error: `Product ${ret.productId} was not dispatched from this owner pool on this pass` };
+    }
+    const already = prior.get(poolKey(ret.productId, ret.partyId)) ?? 0;
+    if (roundWeight(already + ret.qtyKg) > dispatchedQty) {
+      return {
+        ok: false,
+        error: `Return for product ${ret.productId} exceeds what is left to return: dispatched ${dispatchedQty} kg, already returned ${already} kg, this return ${ret.qtyKg} kg`,
+      };
+    }
+  }
+  return { ok: true, aggregated };
+}
+
+/** Quantity still returnable per pool: dispatched minus prior returns. */
+export function remainingReturnable(
+  dispatched: ReadonlyArray<PoolQuantity>,
+  priorReturns: ReadonlyArray<PoolQuantity>,
+): PoolQuantity[] {
+  const sent = aggregatePoolQuantities(dispatched);
+  const prior = new Map(aggregatePoolQuantities(priorReturns).map((p) => [poolKey(p.productId, p.partyId), p.qtyKg]));
+  return sent
+    .map((p) => ({ ...p, qtyKg: roundWeight(p.qtyKg - (prior.get(poolKey(p.productId, p.partyId)) ?? 0)) }))
+    .filter((p) => p.qtyKg > 0);
+}
+
+/** Pass status after a return: fully returned only when nothing remains. */
+export function gatePassStatusAfterReturn(
+  dispatchedTotalKg: number,
+  returnedTotalKg: number,
+): "partially_returned" | "returned" {
+  return roundWeight(returnedTotalKg) >= roundWeight(dispatchedTotalKg)
+    ? "returned"
+    : "partially_returned";
+}
+
 /**
  * Daybook closing (spec §7): closing = opening + receipts - payments.
  * Receipts/payments are totals for the day (or period) being closed.

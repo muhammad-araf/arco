@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole, requireSignedIn, type Actor } from "./auth";
 import { STOCK_WRITE } from "./auth-helpers";
-import { netWeight, roundMoney, roundWeight, ledgerRunningBalance, stockBalanceFromRows } from "@/lib/calc";
+import { logAudit } from "@/lib/audit";
+import { netWeight, roundMoney, roundWeight, ledgerRunningBalance, stockBalanceFromRows, aggregatePoolQuantities } from "@/lib/calc";
 
 /**
  * Inward (incoming goods) server actions.
@@ -122,6 +123,16 @@ async function stockBalance(
   productId: string,
   partyId: string | null,
 ): Promise<number> {
+  // DB-side aggregate first (supabase/migration-stock-summary-rpc.sql):
+  // one grouped sum instead of shipping the pool's whole ledger history.
+  // Falls back to the ledger scan when the RPC was never applied.
+  const rpc = await supabase.rpc("stock_summary");
+  if (!rpc.error && Array.isArray(rpc.data)) {
+    const row = (rpc.data as { godown_id: string; product_id: string; party_id: string | null; balance_kg: number }[]).find(
+      (r) => r.godown_id === godownId && r.product_id === productId && (r.party_id ?? null) === partyId,
+    );
+    return roundWeight(Number(row?.balance_kg) || 0);
+  }
   let query = supabase
     .from("stock_ledger")
     .select("inward_qty, outward_qty")
@@ -132,6 +143,44 @@ async function stockBalance(
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   return stockBalanceFromRows((data ?? []) as { inward_qty: number; outward_qty: number }[]);
+}
+
+/**
+ * Opening stock recorded in opening_balances (kind "stock", existing
+ * write shape: godown_id / product_id / party_id / quantity). A query
+ * error degrades to 0 — the guard then falls back to the ledger-only
+ * balance, which can only make the guard stricter, never looser.
+ */
+async function openingBalance(
+  supabase: Db,
+  godownId: string,
+  productId: string,
+  partyId: string | null,
+): Promise<number> {
+  let query = supabase
+    .from("opening_balances")
+    .select("quantity")
+    .eq("balance_kind", "stock")
+    .eq("godown_id", godownId)
+    .eq("product_id", productId);
+  if (partyId) query = query.eq("party_id", partyId);
+  else query = query.is("party_id", null);
+  const { data, error } = await query;
+  if (error) return 0;
+  return roundWeight((data ?? []).reduce((s, r: { quantity: number }) => s + (Number(r.quantity) || 0), 0));
+}
+
+/** Physical availability for guards: ledger balance + opening stock. */
+async function physicalBalance(
+  supabase: Db,
+  godownId: string,
+  productId: string,
+  partyId: string | null,
+): Promise<number> {
+  return roundWeight(
+    (await stockBalance(supabase, godownId, productId, partyId)) +
+      (await openingBalance(supabase, godownId, productId, partyId)),
+  );
 }
 
 async function appendLedger(
@@ -374,6 +423,16 @@ export async function postInward(id: string, clientToken?: string): Promise<Acti
       .single();
     if (uError) return fail(uError.message);
     const result = { ...posted, items };
+    await logAudit(supabase, {
+      action: "post",
+      entityType: "incoming_goods",
+      entityId: id,
+      voucherNo: voucher.voucher_no,
+      before: { status: "draft" },
+      after: { status: "posted" },
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     await storeIdempotency(supabase, "inward:post", clientToken, "inward", id, voucher.voucher_no, result);
     revalidateInward();
     return ok(result);
@@ -416,11 +475,21 @@ export async function reverseInward(
     }[];
     // Stock guard on reversal: undoing an inward must not drive stock negative
     // (later consumption/dispatch may already have used this stock).
-    for (const item of items) {
-      const balance = await stockBalance(supabase, voucher.godown_id, item.product_id, ledgerPartyId);
-      if (balance < roundWeight(item.net_weight_kg)) {
+    // Aggregate duplicate lines per (product, owner) BEFORE guarding,
+    // mirroring postGatePass: two 60 kg lines against a 90 kg balance
+    // must fail as 120 kg, not pass twice as 60 kg.
+    const required = aggregatePoolQuantities(
+      items.map((item) => ({
+        productId: item.product_id,
+        partyId: ledgerPartyId,
+        qtyKg: roundWeight(item.net_weight_kg),
+      })),
+    );
+    for (const { productId, partyId, qtyKg } of required) {
+      const balance = await physicalBalance(supabase, voucher.godown_id, productId, partyId);
+      if (balance < qtyKg) {
         return fail(
-          `Cannot reverse ${voucher.voucher_no}: available stock for this product is ${balance} kg, but reversal needs ${item.net_weight_kg} kg (stock was already consumed/dispatched)`,
+          `Cannot reverse ${voucher.voucher_no}: available stock for this product is ${balance} kg, but reversal needs ${qtyKg} kg (stock was already consumed/dispatched)`,
         );
       }
     }
@@ -455,6 +524,17 @@ export async function reverseInward(
       .single();
     if (uError) return fail(uError.message);
     const result = { ...reversed, items };
+    await logAudit(supabase, {
+      action: "reverse",
+      entityType: "incoming_goods",
+      entityId: id,
+      voucherNo: voucher.voucher_no,
+      before: { status: "posted" },
+      after: { status: "reversed" },
+      reason: reason.trim(),
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     await storeIdempotency(supabase, "inward:reverse", clientToken, "inward", id, voucher.voucher_no, result);
     revalidateInward();
     return ok(result);

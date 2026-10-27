@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole, requireSignedIn, type Actor } from "./auth";
 import { STOCK_WRITE } from "./auth-helpers";
+import { logAudit } from "@/lib/audit";
 import { roundWeight, ledgerRunningBalance, stockBalanceFromRows } from "@/lib/calc";
 
 /**
@@ -108,6 +109,15 @@ async function stockBalance(
   productId: string,
   partyId: string | null,
 ): Promise<number> {
+  // DB-side aggregate first (supabase/migration-stock-summary-rpc.sql);
+  // falls back to the ledger scan when the RPC was never applied.
+  const rpc = await supabase.rpc("stock_summary");
+  if (!rpc.error && Array.isArray(rpc.data)) {
+    const row = (rpc.data as { godown_id: string; product_id: string; party_id: string | null; balance_kg: number }[]).find(
+      (r) => r.godown_id === godownId && r.product_id === productId && (r.party_id ?? null) === partyId,
+    );
+    return roundWeight(Number(row?.balance_kg) || 0);
+  }
   let query = supabase
     .from("stock_ledger")
     .select("inward_qty, outward_qty")
@@ -118,6 +128,72 @@ async function stockBalance(
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   return stockBalanceFromRows((data ?? []) as { inward_qty: number; outward_qty: number }[]);
+}
+
+/** Opening stock (kind "stock") for one pool; a query error degrades to 0 (stricter guard). */
+async function openingBalance(
+  supabase: Db,
+  godownId: string,
+  productId: string,
+  partyId: string | null,
+): Promise<number> {
+  let query = supabase
+    .from("opening_balances")
+    .select("quantity")
+    .eq("balance_kind", "stock")
+    .eq("godown_id", godownId)
+    .eq("product_id", productId);
+  if (partyId) query = query.eq("party_id", partyId);
+  else query = query.is("party_id", null);
+  const { data, error } = await query;
+  if (error) return 0;
+  return roundWeight((data ?? []).reduce((s, r: { quantity: number }) => s + (Number(r.quantity) || 0), 0));
+}
+
+/** Physical availability for guards: ledger balance + opening stock. */
+async function physicalBalance(
+  supabase: Db,
+  godownId: string,
+  productId: string,
+  partyId: string | null,
+): Promise<number> {
+  return roundWeight(
+    (await stockBalance(supabase, godownId, productId, partyId)) +
+      (await openingBalance(supabase, godownId, productId, partyId)),
+  );
+}
+
+/** Merge opening_balances rows of kind "stock" into a summary key map. */
+async function applyOpeningBalances(
+  supabase: Db,
+  byKey: Map<string, { godown_id: string; product_id: string; party_id: string | null; balance: number }>,
+): Promise<void> {
+  // Existing write shape (finance.ts createOpeningBalance): balance_kind,
+  // godown_id, product_id, party_id, quantity. Read shape unchanged.
+  // A query error degrades to no openings (previous behaviour) rather
+  // than failing the whole summary.
+  const { data, error } = await supabase
+    .from("opening_balances")
+    .select("godown_id, product_id, party_id, quantity")
+    .eq("balance_kind", "stock");
+  if (error) return;
+  for (const row of (data ?? []) as {
+    godown_id: string;
+    product_id: string;
+    party_id: string | null;
+    quantity: number;
+  }[]) {
+    if (!row.godown_id || !row.product_id) continue;
+    const key = `${row.godown_id}|${row.product_id}|${row.party_id ?? ""}`;
+    const entry = byKey.get(key) ?? {
+      godown_id: row.godown_id,
+      product_id: row.product_id,
+      party_id: row.party_id,
+      balance: 0,
+    };
+    entry.balance = roundWeight(entry.balance + (Number(row.quantity) || 0));
+    byKey.set(key, entry);
+  }
 }
 
 async function appendLedger(
@@ -220,6 +296,12 @@ export async function getStockSummary(): Promise<ActionResult> {
         byKey.set(key, entry);
       }
     }
+    // Migration openings reach stock here, on both paths: rows of kind
+    // "stock" add their quantity to their (godown, product, owner) pool.
+    // Note for live verification: if an opening is ALSO posted as ledger
+    // rows, it would double-count — the migration flow must write it in
+    // exactly one place (see final report).
+    await applyOpeningBalances(supabase, byKey);
     const summary = [...byKey.values()].map((e) => {
       const minStock = productInfo.get(e.product_id)?.min_stock ?? 0;
       return {
@@ -251,11 +333,49 @@ export async function getStockLedger(filters?: {
   from?: string;
   to?: string;
   limit?: number;
+  /** 1-based page; pageSize defaults to 50. */
+  page?: number;
+  pageSize?: number;
 }): Promise<ActionResult> {
   try {
     const supabase = await createClient();
     const gate = await requireSignedIn(supabase);
     if (!gate.ok) return fail(gate.error);
+    const pageSize = Math.min(Math.max(filters?.pageSize ?? 50, 1), 200);
+    const page = Math.max(filters?.page ?? 1, 1);
+    const fromRow = (page - 1) * pageSize;
+    const toRow = fromRow + pageSize - 1;
+    // The `to` bound is end-of-day, not midnight: a plain YYYY-MM-DD
+    // compares as midnight, which silently dropped the whole `to` day.
+    // Using an exclusive next-day bound includes every row dated `to`.
+    const toExclusive = filters?.to
+      ? (() => {
+          const d = new Date(`${filters.to}T00:00:00Z`);
+          if (Number.isNaN(d.getTime())) return undefined;
+          d.setUTCDate(d.getUTCDate() + 1);
+          return d.toISOString();
+        })()
+      : undefined;
+    if (filters?.page !== undefined) {
+      // Paged shape for the inventory register: { rows, total, page, pageSize }.
+      let query = supabase
+        .from("stock_ledger")
+        .select("*", { count: "exact" })
+        .order("date", { ascending: false })
+        .order("created_at", { ascending: false });
+      if (filters?.godownId) query = query.eq("godown_id", filters.godownId);
+      if (filters?.productId) query = query.eq("product_id", filters.productId);
+      if (filters?.partyId) query = query.eq("party_id", filters.partyId);
+      if (filters?.voucherNo) query = query.eq("voucher_no", filters.voucherNo);
+      if (filters?.from) query = query.gte("date", filters.from);
+      if (toExclusive) query = query.lt("date", toExclusive);
+      const { data, error, count } = await query.range(fromRow, toRow);
+      if (error) return fail(error.message);
+      return ok({ rows: data, total: count ?? (data ?? []).length, page, pageSize });
+    }
+    // Legacy array shape for existing callers (dashboard, reports,
+    // masters) that pass limit or no page: unchanged except the fixed
+    // `to` bound above.
     let query = supabase
       .from("stock_ledger")
       .select("*")
@@ -267,7 +387,51 @@ export async function getStockLedger(filters?: {
     if (filters?.partyId) query = query.eq("party_id", filters.partyId);
     if (filters?.voucherNo) query = query.eq("voucher_no", filters.voucherNo);
     if (filters?.from) query = query.gte("date", filters.from);
-    if (filters?.to) query = query.lte("date", filters.to);
+    if (toExclusive) query = query.lt("date", toExclusive);
+    const { data, error } = await query;
+    if (error) return fail(error.message);
+    return ok(data);
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+/** Transfer register (read-only list; writes stay behind STOCK_WRITE). */
+export async function listTransfers(filters?: {
+  status?: string;
+  fromGodownId?: string;
+  productId?: string;
+}): Promise<ActionResult> {
+  try {
+    const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
+    let query = supabase.from("godown_transfers").select("*").order("date", { ascending: false });
+    if (filters?.status) query = query.eq("status", filters.status);
+    if (filters?.fromGodownId) query = query.eq("from_godown_id", filters.fromGodownId);
+    if (filters?.productId) query = query.eq("product_id", filters.productId);
+    const { data, error } = await query;
+    if (error) return fail(error.message);
+    return ok(data);
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+/** Adjustment history (read-only list; writes stay behind STOCK_WRITE). */
+export async function listAdjustments(filters?: {
+  status?: string;
+  godownId?: string;
+  productId?: string;
+}): Promise<ActionResult> {
+  try {
+    const supabase = await createClient();
+    const gate = await requireSignedIn(supabase);
+    if (!gate.ok) return fail(gate.error);
+    let query = supabase.from("stock_adjustments").select("*").order("date", { ascending: false });
+    if (filters?.status) query = query.eq("status", filters.status);
+    if (filters?.godownId) query = query.eq("godown_id", filters.godownId);
+    if (filters?.productId) query = query.eq("product_id", filters.productId);
     const { data, error } = await query;
     if (error) return fail(error.message);
     return ok(data);
@@ -342,7 +506,7 @@ export async function postTransfer(id: string, clientToken?: string): Promise<Ac
     if (transfer.status !== "draft") return fail(`Only a draft can be posted (status: ${transfer.status})`);
     const qty = roundWeight(transfer.quantity);
     // Stock guard on the source godown (party-scoped when an owner is set).
-    const available = await stockBalance(supabase, transfer.from_godown_id, transfer.product_id, transfer.party_id ?? null);
+    const available = await physicalBalance(supabase, transfer.from_godown_id, transfer.product_id, transfer.party_id ?? null);
     if (available < qty) {
       return fail(
         `Insufficient stock for transfer ${transfer.transfer_no}: available ${available} kg in source godown, requested ${qty} kg`,
@@ -387,6 +551,16 @@ export async function postTransfer(id: string, clientToken?: string): Promise<Ac
       .select()
       .single();
     if (uError) return fail(uError.message);
+    await logAudit(supabase, {
+      action: "post",
+      entityType: "godown_transfers",
+      entityId: id,
+      voucherNo: transfer.transfer_no,
+      before: { status: "draft" },
+      after: { status: "posted" },
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     await storeIdempotency(supabase, "transfer:post", clientToken, "transfer", id, transfer.transfer_no, posted);
     revalidateInventory();
     return ok(posted);
@@ -414,7 +588,7 @@ export async function reverseTransfer(id: string, reason: string, clientToken?: 
       return fail(`Only a posted transfer can be reversed (status: ${transfer.status})`);
     }
     const qty = roundWeight(transfer.quantity);
-    const available = await stockBalance(supabase, transfer.to_godown_id, transfer.product_id, transfer.party_id ?? null);
+    const available = await physicalBalance(supabase, transfer.to_godown_id, transfer.product_id, transfer.party_id ?? null);
     if (available < qty) {
       return fail(
         `Cannot reverse transfer ${transfer.transfer_no}: destination godown holds only ${available} kg, reversal needs ${qty} kg`,
@@ -459,6 +633,17 @@ export async function reverseTransfer(id: string, reason: string, clientToken?: 
       .select()
       .single();
     if (uError) return fail(uError.message);
+    await logAudit(supabase, {
+      action: "reverse",
+      entityType: "godown_transfers",
+      entityId: id,
+      voucherNo: transfer.transfer_no,
+      before: { status: "posted" },
+      after: { status: "reversed" },
+      reason: reason.trim(),
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     await storeIdempotency(supabase, "transfer:reverse", clientToken, "transfer", id, transfer.transfer_no, reversed);
     revalidateInventory();
     return ok(reversed);
@@ -492,7 +677,7 @@ export async function createAdjustment(input: {
     const supabase = await createClient();
     const gate = await requireWrite(supabase);
     if ("error" in gate) return fail(gate.error);
-    const live = await stockBalance(supabase, input.godownId, input.productId, input.partyId ?? null);
+    const live = await physicalBalance(supabase, input.godownId, input.productId, input.partyId ?? null);
     if (roundWeight(input.quantityBeforeKg) !== live) {
       return fail(
         `Adjustment "before" quantity (${input.quantityBeforeKg} kg) does not match the live ledger balance (${live} kg). Refresh and re-enter the adjustment.`,
@@ -537,7 +722,7 @@ export async function postAdjustment(id: string, clientToken?: string): Promise<
     if (adj.status === "posted") return fail(`Adjustment ${adj.adjustment_no} is already posted`);
     if (adj.status !== "draft") return fail(`Only a draft can be posted (status: ${adj.status})`);
     // Re-verify "before" at posting time — stock may have moved since the draft.
-    const live = await stockBalance(supabase, adj.godown_id, adj.product_id, adj.party_id ?? null);
+    const live = await physicalBalance(supabase, adj.godown_id, adj.product_id, adj.party_id ?? null);
     if (roundWeight(adj.quantity_before) !== live) {
       return fail(
         `Cannot post adjustment ${adj.adjustment_no}: live balance is now ${live} kg, but the adjustment was recorded against ${adj.quantity_before} kg. Create a fresh adjustment.`,
@@ -574,6 +759,16 @@ export async function postAdjustment(id: string, clientToken?: string): Promise<
       .select()
       .single();
     if (uError) return fail(uError.message);
+    await logAudit(supabase, {
+      action: "post",
+      entityType: "stock_adjustments",
+      entityId: id,
+      voucherNo: adj.adjustment_no,
+      before: { status: "draft" },
+      after: { status: "posted" },
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     await storeIdempotency(supabase, "adjustment:post", clientToken, "adjustment", id, adj.adjustment_no, posted);
     revalidateInventory();
     return ok(posted);
@@ -598,7 +793,7 @@ export async function reverseAdjustment(id: string, reason: string, clientToken?
     }
     const delta = roundWeight(adj.delta_qty);
     if (delta > 0) {
-      const live = await stockBalance(supabase, adj.godown_id, adj.product_id, adj.party_id ?? null);
+      const live = await physicalBalance(supabase, adj.godown_id, adj.product_id, adj.party_id ?? null);
       if (live < delta) {
         return fail(`Cannot reverse adjustment ${adj.adjustment_no}: available stock is ${live} kg, reversal removes ${delta} kg`);
       }
@@ -627,6 +822,17 @@ export async function reverseAdjustment(id: string, reason: string, clientToken?
       .select()
       .single();
     if (uError) return fail(uError.message);
+    await logAudit(supabase, {
+      action: "reverse",
+      entityType: "stock_adjustments",
+      entityId: id,
+      voucherNo: adj.adjustment_no,
+      before: { status: "posted" },
+      after: { status: "reversed" },
+      reason: reason.trim(),
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     await storeIdempotency(supabase, "adjustment:reverse", clientToken, "adjustment", id, adj.adjustment_no, reversed);
     revalidateInventory();
     return ok(reversed);

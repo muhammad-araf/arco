@@ -4,7 +4,17 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole, requireSignedIn, type Actor } from "./auth";
 import { STOCK_WRITE } from "./auth-helpers";
-import { roundWeight, ledgerRunningBalance, stockBalanceFromRows } from "@/lib/calc";
+import { logAudit } from "@/lib/audit";
+import {
+  roundWeight,
+  ledgerRunningBalance,
+  stockBalanceFromRows,
+  aggregatePoolQuantities,
+  ownersForProduct,
+  remainingReturnable,
+  validateCumulativeReturns,
+  gatePassStatusAfterReturn,
+} from "@/lib/calc";
 
 /**
  * Gate pass (dispatch) server actions.
@@ -105,6 +115,15 @@ async function storeIdempotency(
 }
 
 async function stockBalance(supabase: Db, godownId: string, productId: string, partyId: string | null): Promise<number> {
+  // DB-side aggregate first (supabase/migration-stock-summary-rpc.sql);
+  // falls back to the ledger scan when the RPC was never applied.
+  const rpc = await supabase.rpc("stock_summary");
+  if (!rpc.error && Array.isArray(rpc.data)) {
+    const row = (rpc.data as { godown_id: string; product_id: string; party_id: string | null; balance_kg: number }[]).find(
+      (r) => r.godown_id === godownId && r.product_id === productId && (r.party_id ?? null) === partyId,
+    );
+    return roundWeight(Number(row?.balance_kg) || 0);
+  }
   let query = supabase
     .from("stock_ledger")
     .select("inward_qty, outward_qty")
@@ -115,6 +134,29 @@ async function stockBalance(supabase: Db, godownId: string, productId: string, p
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   return stockBalanceFromRows((data ?? []) as { inward_qty: number; outward_qty: number }[]);
+}
+
+/** Opening stock (kind "stock") for one pool; a query error degrades to 0 (stricter guard). */
+async function openingBalance(supabase: Db, godownId: string, productId: string, partyId: string | null): Promise<number> {
+  let query = supabase
+    .from("opening_balances")
+    .select("quantity")
+    .eq("balance_kind", "stock")
+    .eq("godown_id", godownId)
+    .eq("product_id", productId);
+  if (partyId) query = query.eq("party_id", partyId);
+  else query = query.is("party_id", null);
+  const { data, error } = await query;
+  if (error) return 0;
+  return roundWeight((data ?? []).reduce((s, r: { quantity: number }) => s + (Number(r.quantity) || 0), 0));
+}
+
+/** Physical availability for guards: ledger balance + opening stock. */
+async function physicalBalance(supabase: Db, godownId: string, productId: string, partyId: string | null): Promise<number> {
+  return roundWeight(
+    (await stockBalance(supabase, godownId, productId, partyId)) +
+      (await openingBalance(supabase, godownId, productId, partyId)),
+  );
 }
 
 async function appendLedger(
@@ -311,18 +353,18 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
     // party_id null = company-owned stock; a set party_id draws ONLY
     // that owner's stock, never company stock.
     const itemsWithParty = items as { product_id: string; net_weight_kg: number; party_id: string | null }[];
-    const required = new Map<string, { productId: string; partyId: string | null; qty: number }>();
-    for (const item of itemsWithParty) {
-      const key = `${item.product_id}|${item.party_id ?? ""}`;
-      const entry = required.get(key) ?? { productId: item.product_id, partyId: item.party_id ?? null, qty: 0 };
-      entry.qty = roundWeight(entry.qty + item.net_weight_kg);
-      required.set(key, entry);
-    }
-    for (const { productId, partyId, qty } of required.values()) {
-      const available = await stockBalance(supabase, pass.godown_id, productId, partyId);
-      if (available < qty) {
+    const required = aggregatePoolQuantities(
+      itemsWithParty.map((item) => ({
+        productId: item.product_id,
+        partyId: item.party_id ?? null,
+        qtyKg: roundWeight(item.net_weight_kg),
+      })),
+    );
+    for (const { productId, partyId, qtyKg } of required) {
+      const available = await physicalBalance(supabase, pass.godown_id, productId, partyId);
+      if (available < qtyKg) {
         return fail(
-          `Insufficient stock for gate pass ${pass.pass_no}: product ${productId} has ${available} kg available in this godown${partyId ? " for this owner" : ""}, pass needs ${qty} kg`,
+          `Insufficient stock for gate pass ${pass.pass_no}: product ${productId} has ${available} kg available in this godown${partyId ? " for this owner" : ""}, pass needs ${qtyKg} kg`,
         );
       }
     }
@@ -352,6 +394,16 @@ export async function postGatePass(id: string, clientToken?: string): Promise<Ac
       .single();
     if (uError) return fail(uError.message);
     const result = { ...posted, items };
+    await logAudit(supabase, {
+      action: "post",
+      entityType: "gate_passes",
+      entityId: id,
+      voucherNo: pass.pass_no,
+      before: { status: "draft" },
+      after: { status: "posted" },
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     await storeIdempotency(supabase, "gatepass:post", clientToken, "gatepass", id, pass.pass_no, result);
     revalidateGatepass();
     return ok(result);
@@ -376,16 +428,35 @@ export async function reverseGatePass(id: string, reason: string, clientToken?: 
       .eq("id", id)
       .single();
     if (error) return fail(error.message);
-    if (pass.status !== "posted") {
-      return fail(`Only a posted gate pass can be reversed (status: ${pass.status})`);
+    if (pass.status === "returned") {
+      return fail(`Gate pass ${pass.pass_no} is already fully returned — its stock is already back, so a reversal would double-credit it`);
+    }
+    if (pass.status !== "posted" && pass.status !== "partially_returned") {
+      return fail(`Only a posted or partially returned gate pass can be reversed (status: ${pass.status})`);
     }
     const items = (pass.gate_pass_items ?? []) as {
       product_id: string;
       net_weight_kg: number;
       party_id: string | null;
     }[];
+    // A partially returned pass already has part of its stock back via
+    // return ledger rows: reversing credits ONLY the unreturned
+    // remainder, never the full dispatched quantity again.
+    const { data: priorReturns } = await supabase
+      .from("gate_pass_returns")
+      .select("product_id, party_id, qty_kg")
+      .eq("gate_pass_id", id);
+    const dispatchedPools = items.map((item) => ({
+      productId: item.product_id,
+      partyId: item.party_id ?? null,
+      qtyKg: roundWeight(item.net_weight_kg),
+    }));
+    const priorPools = ((priorReturns ?? []) as { product_id: string; party_id: string | null; qty_kg: number }[]).map(
+      (r) => ({ productId: r.product_id, partyId: r.party_id ?? null, qtyKg: roundWeight(r.qty_kg) }),
+    );
+    const toRestore = pass.status === "partially_returned" ? remainingReturnable(dispatchedPools, priorPools) : dispatchedPools;
     const by = gate.actor.userId;
-    for (const item of items) {
+    for (const item of toRestore) {
       await appendLedger(
         supabase,
         {
@@ -393,9 +464,9 @@ export async function reverseGatePass(id: string, reason: string, clientToken?: 
           voucher_id: pass.id,
           voucher_no: pass.pass_no,
           godown_id: pass.godown_id,
-          product_id: item.product_id,
-          party_id: item.party_id ?? null,
-          inward_qty: roundWeight(item.net_weight_kg),
+          product_id: item.productId,
+          party_id: item.partyId,
+          inward_qty: roundWeight(item.qtyKg),
           outward_qty: 0,
           notes: `Reversal of ${pass.pass_no}: ${reason.trim()}`,
         },
@@ -406,11 +477,22 @@ export async function reverseGatePass(id: string, reason: string, clientToken?: 
       .from("gate_passes")
       .update({ status: "reversed", reversal_reason: reason.trim(), reversed_at: new Date().toISOString() })
       .eq("id", id)
-      .eq("status", "posted")
+      .in("status", ["posted", "partially_returned"])
       .select()
       .single();
     if (uError) return fail(uError.message);
     const result = { ...reversed, items };
+    await logAudit(supabase, {
+      action: "reverse",
+      entityType: "gate_passes",
+      entityId: id,
+      voucherNo: pass.pass_no,
+      before: { status: pass.status },
+      after: { status: "reversed" },
+      reason: reason.trim(),
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     await storeIdempotency(supabase, "gatepass:reverse", clientToken, "gatepass", id, pass.pass_no, result);
     revalidateGatepass();
     return ok(result);
@@ -423,14 +505,15 @@ export async function reverseGatePass(id: string, reason: string, clientToken?: 
 export async function returnGatePass(
   id: string,
   input: {
-    reason?: string;
-    /** If omitted, the whole pass is returned. Quantities are kg. */
+    reason: string;
+    /** If omitted, the whole remaining (not yet returned) quantity is returned. Quantities are kg. */
     items?: { productId: string; qtyKg: number; partyId?: string }[];
   },
   clientToken?: string,
 ): Promise<ActionResult> {
   try {
     if (!id) return fail("id is required");
+    if (!input?.reason?.trim()) return fail("A return reason is mandatory");
     const supabase = await createClient();
     const gate = await requireWrite(supabase);
     if ("error" in gate) return fail(gate.error);
@@ -442,79 +525,132 @@ export async function returnGatePass(
       .eq("id", id)
       .single();
     if (error) return fail(error.message);
-    if (pass.status !== "posted") {
-      return fail(`Only a posted gate pass can be returned (status: ${pass.status})`);
+    // A partially returned pass stays returnable until nothing remains:
+    // it is never stranded by an early flip to "returned".
+    if (pass.status !== "posted" && pass.status !== "partially_returned") {
+      return fail(`Only a posted or partially returned gate pass can be returned (status: ${pass.status})`);
     }
     const dispatched = (pass.gate_pass_items ?? []) as {
       product_id: string;
       net_weight_kg: number;
       party_id: string | null;
     }[];
+    const dispatchedPools = dispatched.map((d) => ({
+      productId: d.product_id,
+      partyId: d.party_id ?? null,
+      qtyKg: roundWeight(d.net_weight_kg),
+    }));
+    const { data: priorRows, error: priorError } = await supabase
+      .from("gate_pass_returns")
+      .select("product_id, party_id, qty_kg")
+      .eq("gate_pass_id", id);
+    if (priorError) return fail(priorError.message);
+    const priorPools = ((priorRows ?? []) as { product_id: string; party_id: string | null; qty_kg: number }[]).map(
+      (r) => ({ productId: r.product_id, partyId: r.party_id ?? null, qtyKg: roundWeight(r.qty_kg) }),
+    );
     let returns: { productId: string; qtyKg: number; partyId: string | null }[];
     if (input?.items?.length) {
-      returns = input.items.map((r) => ({
-        productId: r.productId,
-        qtyKg: r.qtyKg,
-        partyId:
-          r.partyId ?? dispatched.find((d) => d.product_id === r.productId)?.party_id ?? null,
-      }));
-      for (const ret of returns) {
-        const sent = dispatched
-          .filter((d) => d.product_id === ret.productId)
-          .reduce((s, d) => s + Number(d.net_weight_kg), 0);
-        if (ret.qtyKg <= 0 || ret.qtyKg > sent) {
-          return fail(
-            `Return quantity for product ${ret.productId} must be > 0 and no more than dispatched (${sent} kg)`,
+      // Owner attribution is explicit, never guessed: when a product was
+      // dispatched from more than one owner pool, the entry MUST name
+      // its owner. With a single pool the owner is unambiguous, so an
+      // omitted partyId resolves to that one pool.
+      const resolved = input.items.map((r) => {
+        const owners = ownersForProduct(dispatchedPools, r.productId);
+        if (owners.length > 1 && r.partyId === undefined) {
+          throw new Error(
+            `Return for product ${r.productId} must specify its owner: this pass dispatched it from more than one owner pool`,
           );
         }
-      }
+        return {
+          productId: r.productId,
+          qtyKg: roundWeight(r.qtyKg),
+          partyId: r.partyId !== undefined ? r.partyId : (owners[0] ?? null),
+        };
+      });
+      const checked = validateCumulativeReturns(dispatchedPools, priorPools, resolved);
+      if (!checked.ok) return fail(checked.error);
+      returns = checked.aggregated;
     } else {
-      returns = dispatched.map((d) => ({
-        productId: d.product_id,
-        qtyKg: roundWeight(d.net_weight_kg),
-        partyId: d.party_id ?? null,
-      }));
+      returns = remainingReturnable(dispatchedPools, priorPools);
+      if (!returns.length) return fail(`Gate pass ${pass.pass_no} has nothing left to return`);
     }
-    const by = gate.actor.userId;
-    for (const ret of returns) {
-      await appendLedger(
-        supabase,
-        {
-          voucher_type: "gatepass",
-          voucher_id: pass.id,
-          voucher_no: pass.pass_no,
-          godown_id: pass.godown_id,
+    const dispatchedTotal = roundWeight(dispatchedPools.reduce((s, d) => s + d.qtyKg, 0));
+    const priorTotal = roundWeight(priorPools.reduce((s, d) => s + d.qtyKg, 0));
+    const newTotal = roundWeight(priorTotal + returns.reduce((s, r) => s + r.qtyKg, 0));
+    const newStatus = gatePassStatusAfterReturn(dispatchedTotal, newTotal);
+    // Return records FIRST, with their insert error checked: a failed
+    // insert aborts the return before any ledger row or status flip, so
+    // the pass can never flip to returned with no audit record.
+    const { data: inserted, error: insertError } = await supabase
+      .from("gate_pass_returns")
+      .insert(
+        returns.map((ret) => ({
+          gate_pass_id: pass.id,
           product_id: ret.productId,
           party_id: ret.partyId,
-          inward_qty: roundWeight(ret.qtyKg),
-          outward_qty: 0,
-          notes: `Return of ${pass.pass_no}${input?.reason ? `: ${input.reason.trim()}` : ""}`,
-        },
-        by,
-      );
+          qty_kg: roundWeight(ret.qtyKg),
+          reason: input.reason.trim(),
+        })),
+      )
+      .select("id");
+    if (insertError) return fail(insertError.message);
+    const by = gate.actor.userId;
+    try {
+      for (const ret of returns) {
+        await appendLedger(
+          supabase,
+          {
+            voucher_type: "gatepass",
+            voucher_id: pass.id,
+            voucher_no: pass.pass_no,
+            godown_id: pass.godown_id,
+            product_id: ret.productId,
+            party_id: ret.partyId,
+            inward_qty: roundWeight(ret.qtyKg),
+            outward_qty: 0,
+            notes: `Return of ${pass.pass_no}: ${input.reason.trim()}`,
+          },
+          by,
+        );
+      }
+    } catch (e) {
+      // Ledger failed after the return records were written: remove just
+      // those records so the return leaves no partial trace, then fail.
+      if (inserted?.length) {
+        await supabase
+          .from("gate_pass_returns")
+          .delete()
+          .in(
+            "id",
+            (inserted as { id: string }[]).map((r) => r.id),
+          );
+      }
+      throw e;
     }
-    await supabase.from("gate_pass_returns").insert(
-      returns.map((ret) => ({
-        gate_pass_id: pass.id,
-        product_id: ret.productId,
-        party_id: ret.partyId,
-        qty_kg: roundWeight(ret.qtyKg),
-        reason: input?.reason?.trim() ?? null,
-      })),
-    );
     const { data: returned, error: uError } = await supabase
       .from("gate_passes")
       .update({
-        status: "returned",
-        return_reason: input?.reason?.trim() ?? null,
+        status: newStatus,
+        return_reason: input.reason.trim(),
         returned_at: new Date().toISOString(),
       })
       .eq("id", id)
-      .eq("status", "posted")
+      .in("status", ["posted", "partially_returned"])
       .select()
       .single();
     if (uError) return fail(uError.message);
     const result = { ...returned, returns };
+    await logAudit(supabase, {
+      action: "return",
+      entityType: "gate_passes",
+      entityId: id,
+      voucherNo: pass.pass_no,
+      before: { status: pass.status },
+      after: { status: newStatus },
+      reason: input.reason.trim(),
+      userId: gate.actor.userId,
+      userEmail: gate.actor.email,
+    });
     await storeIdempotency(supabase, "gatepass:return", clientToken, "gatepass", id, pass.pass_no, result);
     revalidateGatepass();
     return ok(result);
