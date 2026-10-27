@@ -4,6 +4,13 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { requireRole, requireSignedIn, type Actor } from "./auth";
 import { PRODUCTION_WRITE } from "./auth-helpers";
+import { logAudit } from "@/lib/audit";
+import {
+  checkProductsActive,
+  parseVarianceTolerance,
+  sumFinishedOutputs,
+  varianceExceedsTolerance,
+} from "./production-helpers";
 import { isUniqueViolation } from "@/lib/idempotency";
 import {
   roundWeight,
@@ -76,6 +83,31 @@ async function requireWrite(
   if (!gate.ok) return { error: gate.error };
   return { actor: gate.actor };
 }
+
+/**
+ * Variance tolerance from the settings team's `variance_tolerance_pct`
+ * app_settings key. Absent / unparseable = null = gate disabled (never
+ * a hard-coded %). The settings team owns the setting itself; this
+ * only reads it.
+ */
+async function getVarianceTolerancePct(supabase: Db): Promise<number | null> {
+  try {
+    const { data, error } = await supabase
+      .from("app_settings")
+      .select("value")
+      .eq("key", "variance_tolerance_pct")
+      .maybeSingle();
+    if (error || !data) return null;
+    return parseVarianceTolerance((data as { value?: unknown }).value);
+  } catch {
+    return null;
+  }
+}
+
+// Processing-type dropdowns: the machinery + packing pages import
+// listProcessingTypes from app/actions/processing-types.ts (settings
+// team, import only). An empty/failed result there means the forms
+// fall back to free-text input — see that action's contract comment.
 
 async function nextDocNumber(supabase: Db, series: string, prefix: string): Promise<string> {
   const rpc = await supabase.rpc("next_doc_number", { p_series: series, p_prefix: prefix });
@@ -288,6 +320,9 @@ export async function createRecipe(input: {
   expectedYieldPct?: number;
   packagingTypeId?: string;
   notes?: string;
+  /** Nullable effective-from date (YYYY-MM-DD). No approval workflow:
+   *  status stays active/retired as today. */
+  effectiveFrom?: string | null;
   items: { productId: string; ratioPct: number; unit?: string }[];
 }): Promise<ActionResult> {
   try {
@@ -299,6 +334,12 @@ export async function createRecipe(input: {
     const supabase = await createClient();
     const gate = await requireWrite(supabase);
     if ("error" in gate) return fail(gate.error);
+    // Server-side is_active check (UI filtering is never trusted).
+    const activeError = await checkProductsActive(supabase, [
+      input.outputProductId,
+      ...input.items.map((i) => i.productId),
+    ]);
+    if (activeError) return fail(activeError);
     // Single-active-version guard (server side; the partial unique
     // index in migration-production-fixes.sql is the backstop).
     const { data: existingActive } = await supabase
@@ -321,6 +362,7 @@ export async function createRecipe(input: {
         output_product_id: input.outputProductId,
         expected_yield_pct: input.expectedYieldPct ?? null,
         packaging_type_id: input.packagingTypeId ?? null,
+        effective_from: input.effectiveFrom ?? null,
         status: "active",
         notes: input.notes ?? null,
       })
@@ -367,6 +409,7 @@ export async function createRecipeVersion(input: {
   expectedYieldPct?: number;
   packagingTypeId?: string;
   notes?: string;
+  effectiveFrom?: string | null;
   items: { productId: string; ratioPct: number; unit?: string }[];
 }): Promise<ActionResult> {
   try {
@@ -378,6 +421,11 @@ export async function createRecipeVersion(input: {
     const supabase = await createClient();
     const gate = await requireWrite(supabase);
     if ("error" in gate) return fail(gate.error);
+    const activeError = await checkProductsActive(supabase, [
+      input.outputProductId,
+      ...input.items.map((i) => i.productId),
+    ]);
+    if (activeError) return fail(activeError);
     const { data: current, error: cError } = await supabase
       .from("recipes")
       .select("*")
@@ -413,6 +461,7 @@ export async function createRecipeVersion(input: {
         output_product_id: input.outputProductId,
         expected_yield_pct: input.expectedYieldPct ?? current.expected_yield_pct ?? null,
         packaging_type_id: input.packagingTypeId ?? current.packaging_type_id ?? null,
+        effective_from: input.effectiveFrom ?? current.effective_from ?? null,
         status: "active",
         notes: input.notes ?? current.notes ?? null,
       })
@@ -506,6 +555,15 @@ export async function createBatchDraft(input: {
   notes?: string;
   isCustomerOwned?: boolean;
   ownerPartyId?: string;
+  /** Customer the batch is run for (shown on the batch sheet). */
+  customerId?: string | null;
+  /** Customer order reference (shown on the batch sheet). */
+  orderRef?: string | null;
+  /** Operator who ran the batch (shown on the batch sheet). */
+  operatorName?: string | null;
+  /** Variance reason, recorded now when known; posting also accepts
+   *  one via postBatch, so a draft is never stuck without a reason. */
+  varianceReason?: string | null;
   inputs: { productId: string; actualQtyKg: number; plannedQtyKg?: number; partyId?: string }[];
   outputProductId: string;
   actualOutputKg: number;
@@ -541,6 +599,13 @@ export async function createBatchDraft(input: {
     const supabase = await createClient();
     const gate = await requireWrite(supabase);
     if ("error" in gate) return fail(gate.error);
+    // Server-side is_active check on every selected product.
+    const activeError = await checkProductsActive(supabase, [
+      input.outputProductId,
+      input.byproductProductId,
+      ...input.inputs.map((i) => i.productId),
+    ]);
+    if (activeError) return fail(activeError);
     let recipeVersion: number | null = null;
     let recipeItems: { product_id: string; required_ratio_pct: number }[] = [];
     if (input.recipeId) {
@@ -578,6 +643,10 @@ export async function createBatchDraft(input: {
         damaged_bags: input.damagedBags ?? 0,
         is_customer_owned: input.isCustomerOwned ?? false,
         owner_party_id: input.ownerPartyId ?? null,
+        customer_id: input.customerId ?? null,
+        order_ref: input.orderRef?.trim() || null,
+        operator_name: input.operatorName?.trim() || null,
+        variance_reason: input.varianceReason?.trim() || null,
         status: "draft",
         notes: input.notes ?? null,
       })
@@ -628,7 +697,7 @@ export async function createBatchDraft(input: {
   }
 }
 
-export async function postBatch(id: string, clientToken?: string): Promise<ActionResult> {
+export async function postBatch(id: string, clientToken?: string, varianceReason?: string): Promise<ActionResult> {
   try {
     if (!id) return fail("id is required");
     const supabase = await createClient();
@@ -645,6 +714,34 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
     // Already posted is a successful replay, not a second posting.
     if (batch.status === "posted") return ok(batch);
     if (batch.status !== "draft") return fail(`Only a draft can be posted (status: ${batch.status})`);
+    // Variance-tolerance gate, BEFORE any stock moves: when the
+    // configured tolerance exists and an input variance exceeds it,
+    // a variance reason must be on the batch (stored, or supplied
+    // with this post call) before posting. Null tolerance = disabled.
+    const gateInputs = (batch.production_batch_inputs ?? []) as {
+      planned_qty_kg: number;
+      actual_qty_kg: number;
+    }[];
+    const gateVariances = gateInputs.map((item) => ({
+      ...variance(item.actual_qty_kg, item.planned_qty_kg),
+    }));
+    const tolerance = await getVarianceTolerancePct(supabase);
+    if (varianceExceedsTolerance(gateVariances, tolerance)) {
+      const supplied = varianceReason?.trim() || "";
+      if (!supplied && !(batch.variance_reason ?? "").trim()) {
+        return fail(
+          `Batch ${batch.batch_no} cannot be posted: an input variance exceeds the configured tolerance of ${tolerance}% — record a variance reason for this batch and post again.`,
+        );
+      }
+      if (supplied) {
+        await supabase
+          .from("production_batches")
+          .update({ variance_reason: supplied })
+          .eq("id", id)
+          .eq("status", "draft");
+        batch.variance_reason = supplied;
+      }
+    }
     const inputs = (batch.production_batch_inputs ?? []) as {
       product_id: string;
       planned_qty_kg: number;
@@ -769,7 +866,7 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
         notes: `Batch packing ${batch.batch_no}: ${bags} packed + ${damaged} damaged`,
         userId: by,
       });
-      const { error: recError } = await supabase.from("packing_records").insert({
+      const { data: packRecord, error: recError } = await supabase.from("packing_records").insert({
         packing_no: batch.batch_no,
         date: batch.date,
         job_or_batch_id: batch.id,
@@ -784,12 +881,38 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
         packing_charge: packingCharge(bags, batch.packing_rate_per_bag ?? 0),
         damaged_bags: damaged,
         status: "posted",
-      });
+      })
+        .select()
+        .single();
       if (recError) return fail(recError.message);
+      // Batch packing writes exactly ONE packing line (compatibility:
+      // the standalone form may write many). Best-effort so a live
+      // database that has not applied the lines migration yet does
+      // not fail a batch post — the header row above is the record.
+      try {
+        if (packRecord?.id) {
+          await supabase.from("packing_lines").insert({
+            packing_record_id: packRecord.id,
+            line_no: 0,
+            packaging_type_id: packaging.id,
+            bags,
+            packed_kg: roundWeight(batch.actual_output_kg),
+            charge: packingCharge(bags, batch.packing_rate_per_bag ?? 0),
+          });
+        }
+      } catch (lineErr) {
+        console.error("[packing] batch packing_lines insert failed:", lineErr);
+      }
     }
     const totalInput = roundWeight(inputs.reduce((s, i) => s + i.actual_qty_kg, 0));
-    const finished = outputs.find((o) => o.output_type === "finished");
-    const computedYield = yieldPct(finished?.qty_kg ?? batch.actual_output_kg, totalInput);
+    // Yield = SUM of ALL finished outputs / total input (by-product
+    // never counts). Taking only the first finished row understated
+    // multi-output batches. A batch with no finished rows at all
+    // (legacy data) still falls back to its header output weight.
+    const finishedKg = outputs.some((o) => o.output_type === "finished")
+      ? sumFinishedOutputs(outputs)
+      : Number(batch.actual_output_kg ?? 0);
+    const computedYield = yieldPct(finishedKg, totalInput);
     const variances = inputs.map((item) => ({
       product_id: item.product_id,
       planned_qty_kg: roundWeight(item.planned_qty_kg),
@@ -826,8 +949,42 @@ export async function postBatch(id: string, clientToken?: string): Promise<Actio
     }
     const result = { ...posted, inputs, outputs, variances, yield_pct: computedYield };
     await storeIdempotency(supabase, "batch:post", clientToken, "batch", id, batch.batch_no, result);
+    await logAudit(supabase, {
+      action: "post",
+      entityType: "production_batch",
+      entityId: id,
+      voucherNo: batch.batch_no,
+      before: { status: "draft" },
+      after: { status: "posted", yield_pct: computedYield, actual_input_kg: totalInput },
+      userId: by,
+      userEmail: gate.actor.email,
+    });
     revalidateProduction();
     return ok(result);
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+/** Record (or replace) a variance reason on a DRAFT batch, so a batch
+ *  blocked by the tolerance gate can be posted without recreating it. */
+export async function setBatchVarianceReason(id: string, reason: string): Promise<ActionResult> {
+  try {
+    if (!id) return fail("id is required");
+    if (!reason?.trim()) return fail("A variance reason is required");
+    const supabase = await createClient();
+    const gate = await requireWrite(supabase);
+    if ("error" in gate) return fail(gate.error);
+    const { data, error } = await supabase
+      .from("production_batches")
+      .update({ variance_reason: reason.trim() })
+      .eq("id", id)
+      .eq("status", "draft")
+      .select()
+      .single();
+    if (error || !data) return fail("Only a draft batch can take a variance reason");
+    revalidateProduction();
+    return ok(data);
   } catch (e) {
     return fail(errMessage(e));
   }
@@ -968,6 +1125,17 @@ export async function reverseBatch(id: string, reason: string, clientToken?: str
     }
     const result = { ...reversed, inputs, outputs };
     await storeIdempotency(supabase, "batch:reverse", clientToken, "batch", id, batch.batch_no, result);
+    await logAudit(supabase, {
+      action: "reverse",
+      entityType: "production_batch",
+      entityId: id,
+      voucherNo: batch.batch_no,
+      before: { status: "posted" },
+      after: { status: "reversed" },
+      reason: reason.trim(),
+      userId: by,
+      userEmail: gate.actor.email,
+    });
     revalidateProduction();
     return ok(result);
   } catch (e) {
@@ -1046,6 +1214,36 @@ export async function listPackingRecords(): Promise<ActionResult> {
       const { data: extra } = await supabase.from("products").select("id, name").in("id", batchProductIds);
       for (const p of (extra ?? []) as Record<string, unknown>[]) productById.set(p.id as string, p);
     }
+    // Multi-line packing + treatment inputs, best-effort: a live
+    // database that has not applied the lines migration yet still
+    // lists its header rows.
+    let linesByRecord = new Map<string, unknown[]>();
+    let treatmentsByRecord = new Map<string, unknown[]>();
+    try {
+      const recordIds = rows.map((r) => r.id as string).filter(Boolean);
+      if (recordIds.length) {
+        const [lines, treatments] = await Promise.all([
+          supabase.from("packing_lines").select("*").in("packing_record_id", recordIds).order("line_no"),
+          supabase.from("packing_treatment_inputs").select("*").in("packing_record_id", recordIds),
+        ]);
+        for (const l of (lines.data ?? []) as Record<string, unknown>[]) {
+          const key = l.packing_record_id as string;
+          linesByRecord.set(key, [...(linesByRecord.get(key) ?? []), l]);
+        }
+        for (const t of (treatments.data ?? []) as Record<string, unknown>[]) {
+          const key = t.packing_record_id as string;
+          treatmentsByRecord.set(key, [...(treatmentsByRecord.get(key) ?? []), t]);
+        }
+      }
+    } catch {
+      // Header rows remain the truth; lines/treatments are enrichment.
+    }
+    const partyIds = [...new Set(rows.map((r) => r.party_id).filter(Boolean))] as string[];
+    let partyById = new Map<string, unknown>();
+    if (partyIds.length) {
+      const { data: parties } = await supabase.from("parties").select("id, name").in("id", partyIds);
+      partyById = new Map(((parties ?? []) as Record<string, unknown>[]).map((p) => [p.id as string, p]));
+    }
     const enriched = rows.map((r) => {
       const batch = batchById.get(r.job_or_batch_id as string);
       const productId = (r.output_product_id as string) ?? (batch?.output_product_id as string);
@@ -1057,6 +1255,9 @@ export async function listPackingRecords(): Promise<ActionResult> {
         output_product_name: productById.get(productId)?.name ?? productId ?? null,
         packaging_name: pkg?.name ?? r.packaging_type_id,
         batch_no: batch?.batch_no ?? null,
+        party_name: r.party_id ? (partyById.get(r.party_id as string) as { name?: string } | undefined)?.name ?? r.party_id : null,
+        packing_lines: linesByRecord.get(r.id as string) ?? [],
+        treatment_inputs: treatmentsByRecord.get(r.id as string) ?? [],
       };
     });
     return ok(enriched);
@@ -1082,49 +1283,105 @@ export async function createPackingRecord(input: {
   packedKg: number;
   godownId?: string;
   date?: string;
+  /** Multi-line packing: each line packs one bag type. When omitted,
+   *  the legacy single line (packagingTypeId / bagsPacked / packedKg)
+   *  is used, so old callers keep working exactly as before. */
+  lines?: { packagingTypeId: string; bags: number; packedKg: number }[];
+  /** Customer/owner party the packing was done for (NULL = company). */
+  partyId?: string | null;
+  processingType?: string | null;
+  sourceProductId?: string | null;
+  netWeightKg?: number | null;
+  processingAmount?: number;
+  /** Manual packing-fee override: when the operator enters one, the
+   *  header charge equals it instead of computed bags x rate, and it
+   *  is stored in manual_packing_fee so the override is visible. */
+  manualPackingFee?: number | null;
+  notes?: string | null;
+  /** Treatment inputs: RECORD-ONLY. They are stored and never deduct
+   *  stock — no ledger row, no stock write of any kind is made here. */
+  treatmentInputs?: { materialName: string; qty: number; unit?: string; note?: string }[];
 }): Promise<ActionResult> {
   try {
     if (!input?.packagingTypeId) return fail("packagingTypeId is required");
-    if (!(input.bagsPacked > 0)) return fail("Bags packed must be greater than zero");
     if ((input.damagedBags ?? 0) < 0) return fail("Damaged bags cannot be negative");
     if ((input.packingRatePerBag ?? 0) < 0) return fail("Packing rate cannot be negative");
-    if (!(input.packedKg >= 0)) return fail("Packed weight cannot be negative");
+    if ((input.processingAmount ?? 0) < 0) return fail("Processing amount cannot be negative");
+    if (input.manualPackingFee !== undefined && input.manualPackingFee !== null && input.manualPackingFee < 0) {
+      return fail("Manual packing fee cannot be negative");
+    }
+    const lines = input.lines?.length
+      ? input.lines
+      : [{ packagingTypeId: input.packagingTypeId, bags: input.bagsPacked, packedKg: input.packedKg }];
+    for (const line of lines) {
+      if (!line.packagingTypeId) return fail("Every packing line needs a packaging type");
+      if (!(line.bags >= 0)) return fail("Bags per packing line cannot be negative");
+      if (!(line.packedKg >= 0)) return fail("Packed weight per packing line cannot be negative");
+    }
+    const totalLineBags = lines.reduce((s, l) => s + l.bags, 0);
+    if (!(totalLineBags > 0)) return fail("Bags packed must be greater than zero");
+    const totalPackedKg = roundWeight(lines.reduce((s, l) => s + l.packedKg, 0));
+    if (!(totalPackedKg >= 0)) return fail("Packed weight cannot be negative");
     const supabase = await createClient();
     const gate = await requireWrite(supabase);
     if ("error" in gate) return fail(gate.error);
-    const { data: pkg, error: pError } = await supabase
-      .from("packaging_types")
-      .select("id, capacity_kg, current_stock")
-      .eq("id", input.packagingTypeId)
-      .single();
-    if (pError) return fail(pError.message);
+    const activeError = await checkProductsActive(supabase, [input.outputProductId, input.sourceProductId]);
+    if (activeError) return fail(activeError);
+    // Bardana guard, aggregated per packaging type: duplicate lines
+    // for one bag type must not each pass against the same balance.
+    // Damaged bags are of the header bag type (the legacy single type,
+    // or the first line's type for multi-line runs).
     const damaged = input.damagedBags ?? 0;
-    const totalBags = input.bagsPacked + damaged;
-    if (Number(pkg.current_stock) < totalBags) {
-      return fail(
-        `Insufficient packaging stock: ${pkg.current_stock} bags available, ${totalBags} needed (${input.bagsPacked} packed + ${damaged} damaged)`,
-      );
+    const damagedTypeId = input.packagingTypeId;
+    const bagsByType = new Map<string, number>();
+    for (const line of lines) {
+      bagsByType.set(line.packagingTypeId, (bagsByType.get(line.packagingTypeId) ?? 0) + line.bags);
+    }
+    bagsByType.set(damagedTypeId, (bagsByType.get(damagedTypeId) ?? 0) + damaged);
+    const pkgById = new Map<string, { id: string; capacity_kg: number; current_stock: number }>();
+    for (const [typeId, needed] of bagsByType) {
+      const { data: pkg, error: pError } = await supabase
+        .from("packaging_types")
+        .select("id, capacity_kg, current_stock")
+        .eq("id", typeId)
+        .single();
+      if (pError) return fail(pError.message);
+      pkgById.set(typeId, pkg);
+      if (Number(pkg.current_stock) < needed) {
+        return fail(
+          `Insufficient packaging stock: ${pkg.current_stock} bags of this type available, ${needed} needed`,
+        );
+      }
     }
     const by = gate.actor.userId;
     const packingNo = await nextDocNumber(supabase, "packing", "PCK");
     const date = input.date ?? new Date().toISOString();
-    const { error: pkgError } = await supabase
-      .from("packaging_types")
-      .update({ current_stock: Number(pkg.current_stock) - totalBags })
-      .eq("id", input.packagingTypeId);
-    if (pkgError) return fail(pkgError.message);
-    await bardanaEntry(supabase, {
-      date,
-      voucherType: "packing",
-      voucherId: packingNo,
-      voucherNo: packingNo,
-      packagingTypeId: input.packagingTypeId,
-      godownId: input.godownId ?? null,
-      inQty: 0,
-      outQty: totalBags,
-      notes: `Packing ${packingNo}: ${input.bagsPacked} packed + ${damaged} damaged`,
-      userId: by,
-    });
+    const rate = input.packingRatePerBag ?? 0;
+    const computedCharge = lines.reduce((s, l) => s + packingCharge(l.bags, rate), 0);
+    const manualFee = input.manualPackingFee ?? null;
+    const headerCharge = manualFee !== null ? manualFee : computedCharge;
+    const headerPkg = pkgById.get(input.packagingTypeId);
+    for (const [typeId, needed] of bagsByType) {
+      const pkg = pkgById.get(typeId);
+      if (!pkg) continue;
+      const { error: pkgError } = await supabase
+        .from("packaging_types")
+        .update({ current_stock: Number(pkg.current_stock) - needed })
+        .eq("id", typeId);
+      if (pkgError) return fail(pkgError.message);
+      await bardanaEntry(supabase, {
+        date,
+        voucherType: "packing",
+        voucherId: packingNo,
+        voucherNo: packingNo,
+        packagingTypeId: typeId,
+        godownId: input.godownId ?? null,
+        inQty: 0,
+        outQty: needed,
+        notes: `Packing ${packingNo}: ${needed} bags`,
+        userId: by,
+      });
+    }
     const { data: record, error } = await supabase
       .from("packing_records")
       .insert({
@@ -1133,17 +1390,67 @@ export async function createPackingRecord(input: {
         job_or_batch_id: null,
         output_product_id: input.outputProductId ?? null,
         packaging_type_id: input.packagingTypeId,
-        bags_count: input.bagsPacked,
-        capacity_kg: pkg.capacity_kg,
-        total_packed_kg: roundWeight(input.packedKg),
-        packing_rate: input.packingRatePerBag ?? 0,
-        packing_charge: packingCharge(input.bagsPacked, input.packingRatePerBag ?? 0),
+        bags_count: totalLineBags,
+        capacity_kg: headerPkg?.capacity_kg ?? 50,
+        total_packed_kg: totalPackedKg,
+        packing_rate: rate,
+        packing_charge: headerCharge,
         damaged_bags: damaged,
         status: "posted",
+        party_id: input.partyId ?? null,
+        processing_type: input.processingType?.trim() || null,
+        source_product_id: input.sourceProductId ?? input.outputProductId ?? null,
+        net_weight_kg: input.netWeightKg ?? totalPackedKg,
+        processing_amount: input.processingAmount ?? 0,
+        notes: input.notes?.trim() || null,
+        manual_packing_fee: manualFee,
       })
       .select()
       .single();
     if (error) return fail(error.message);
+    // Packing lines (best-effort pre-migration: the header row above
+    // is the record, lines are its breakdown).
+    try {
+      await supabase.from("packing_lines").insert(
+        lines.map((line, i) => ({
+          packing_record_id: record.id,
+          line_no: i,
+          packaging_type_id: line.packagingTypeId,
+          bags: line.bags,
+          packed_kg: roundWeight(line.packedKg),
+          charge: packingCharge(line.bags, rate),
+        })),
+      );
+    } catch (lineErr) {
+      console.error("[packing] packing_lines insert failed:", lineErr);
+    }
+    // Treatment inputs: RECORD-ONLY. No stock deduction, no ledger
+    // row — spec gates inventory impact on client confirmation.
+    const treatments = (input.treatmentInputs ?? []).filter((t) => t.materialName?.trim());
+    if (treatments.length) {
+      try {
+        await supabase.from("packing_treatment_inputs").insert(
+          treatments.map((t) => ({
+            packing_record_id: record.id,
+            material_name: t.materialName.trim(),
+            qty: t.qty,
+            unit: t.unit?.trim() || "kg",
+            note: t.note?.trim() || null,
+          })),
+        );
+      } catch (treatErr) {
+        console.error("[packing] treatment inputs insert failed:", treatErr);
+      }
+    }
+    await logAudit(supabase, {
+      action: "create",
+      entityType: "packing_record",
+      entityId: record.id,
+      voucherNo: packingNo,
+      after: { status: "posted", bags: totalLineBags, packed_kg: totalPackedKg, charge: headerCharge },
+      userId: by,
+      userEmail: gate.actor.email,
+    });
     revalidateProduction();
     return ok(record);
   } catch (e) {
