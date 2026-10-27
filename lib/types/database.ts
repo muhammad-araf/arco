@@ -54,6 +54,8 @@ export interface Party {
   current_balance?: number
   is_active: boolean
   notes?: string
+  tax_id?: string | null
+  registration_no?: string | null
   created_at: string
 }
 
@@ -89,6 +91,7 @@ export interface Employee {
   phone?: string
   pay_type: PayType
   base_rate: number // daily rate or monthly salary
+  payment_preference?: string | null
   is_active: boolean
   joining_date?: string
   created_at: string
@@ -208,6 +211,13 @@ export interface ProductionBatch {
   notes?: string
   created_at: string
   posted_at?: string
+  /** Batch customer / order / operator (shown on the batch sheet). */
+  customer_id?: string | null
+  customer_name?: string
+  order_ref?: string | null
+  operator_name?: string | null
+  /** Required at posting when an input variance exceeds tolerance. */
+  variance_reason?: string | null
 }
 
 // ================= MACHINERY / PROCESSING JOBS =================
@@ -239,6 +249,30 @@ export interface MachineryJob {
   payment_status: "unbilled" | "invoiced" | "paid"
   notes?: string
   created_at: string
+  /** Operator who ran the job. */
+  operator_name?: string | null
+  /** Single-line job's by-product (stocked on post). */
+  byproduct_product_id?: string | null
+  byproduct_product_name?: string
+  byproduct_weight_kg?: number | null
+  /** Multi-line detail; empty/absent = legacy single-line job. */
+  machinery_job_lines?: MachineryJobLine[]
+}
+
+// ================= MACHINERY JOB LINES =================
+export interface MachineryJobLine {
+  id?: string
+  job_id?: string
+  line_no: number
+  input_product_id: string
+  input_product_name?: string
+  input_qty_kg: number
+  output_product_id?: string | null
+  output_product_name?: string
+  output_qty_kg: number
+  byproduct_product_id?: string | null
+  byproduct_product_name?: string
+  byproduct_qty_kg: number
 }
 
 // ================= PACKING & BARDANA =================
@@ -261,6 +295,40 @@ export interface PackingRecord {
   status: VoucherStatus
   notes?: string
   created_at: string
+  /** Customer/owner party the packing was done for (NULL = company). */
+  party_id?: string | null
+  party_name?: string | null
+  processing_type?: string | null
+  source_product_id?: string | null
+  net_weight_kg?: number | null
+  processing_amount?: number | null
+  /** Set only when the operator entered a manual fee override. */
+  manual_packing_fee?: number | null
+  /** Multi-line breakdown; batch packing writes exactly one line. */
+  packing_lines?: PackingLine[]
+  /** Record-only treatment inputs — never affect stock. */
+  treatment_inputs?: PackingTreatmentInput[]
+}
+
+// ================= PACKING LINES & TREATMENT INPUTS =================
+export interface PackingLine {
+  id?: string
+  packing_record_id?: string
+  line_no: number
+  packaging_type_id: string
+  packaging_name?: string
+  bags: number
+  packed_kg: number
+  charge: number
+}
+
+export interface PackingTreatmentInput {
+  id?: string
+  packing_record_id?: string
+  material_name: string
+  qty: number
+  unit: string
+  note?: string | null
 }
 
 // ================= GATE PASS & OUTGOING =================

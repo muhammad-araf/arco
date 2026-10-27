@@ -51,6 +51,9 @@ export default function MastersPage() {
   const [partyPhone, setPartyPhone] = React.useState("")
   const [partyOpening, setPartyOpening] = React.useState<number>(0)
   const [partyBalanceType, setPartyBalanceType] = React.useState("receivable")
+  const [partyTaxId, setPartyTaxId] = React.useState("")
+  const [partyRegNo, setPartyRegNo] = React.useState("")
+  const [empPayPref, setEmpPayPref] = React.useState("")
   const [masterPending, setMasterPending] = React.useState(false)
   const [deactTarget, setDeactTarget] = React.useState<{ kind: string; id: string; name: string } | null>(null)
   const [deactPending, setDeactPending] = React.useState(false)
@@ -140,16 +143,16 @@ export default function MastersPage() {
     try {
       let res: any
       if (masterKind === "godown") res = await createGodown({ code: masterCode.trim(), name: masterName.trim() })
-      else if (masterKind === "party") res = await createParty({ code: masterCode.trim(), name: masterName.trim(), type: masterExtra || "customer", contact_person: partyContact.trim() || undefined, phone: partyPhone.trim() || undefined, opening_balance: partyOpening, balance_type: partyBalanceType })
+      else if (masterKind === "party") res = await createParty({ code: masterCode.trim(), name: masterName.trim(), type: masterExtra || "customer", contact_person: partyContact.trim() || undefined, phone: partyPhone.trim() || undefined, opening_balance: partyOpening, balance_type: partyBalanceType, tax_id: partyTaxId.trim() || undefined, registration_no: partyRegNo.trim() || undefined })
       else if (masterKind === "machine") res = await createMachine({ code: masterCode.trim(), name: masterName.trim(), processing_type: masterExtra || "Grading" })
       else if (masterKind === "packaging") res = await createPackagingType({ code: masterCode.trim(), name: masterName.trim() })
-      else res = await createEmployee({ code: masterCode.trim(), full_name: masterName.trim(), designation: masterExtra || "Staff" })
+      else res = await createEmployee({ code: masterCode.trim(), full_name: masterName.trim(), designation: masterExtra || "Staff", payment_preference: empPayPref || undefined })
       if (!res.success) {
         setFormError(res.error ?? "Could not create the master record.")
         return
       }
       setFormNotice(`${masterKind} "${masterName.trim()}" created.`)
-      setMasterCode(""); setMasterName(""); setMasterExtra(""); setPartyContact(""); setPartyPhone(""); setPartyOpening(0)
+      setMasterCode(""); setMasterName(""); setMasterExtra(""); setPartyContact(""); setPartyPhone(""); setPartyOpening(0); setPartyTaxId(""); setPartyRegNo(""); setEmpPayPref("")
       await loadData()
     } finally { setMasterPending(false) }
   }
@@ -201,15 +204,15 @@ export default function MastersPage() {
   }
 
 
-  const [editTarget, setEditTarget] = React.useState<{ kind: string; id: string; name: string; extra: string; num1: number; num2: number; contact: string; phone: string; balanceType: string } | null>(null)
+  const [editTarget, setEditTarget] = React.useState<{ kind: string; id: string; name: string; extra: string; num1: number; num2: number; contact: string; phone: string; balanceType: string; taxId?: string; regNo?: string; payPref?: string } | null>(null)
   const [editPending, setEditPending] = React.useState(false)
   const openEdit = (kind: string, row: any) => {
     if (kind === "product") setEditTarget({ kind, id: row.id, name: row.name, extra: row.category, num1: Number(row.weight_per_bag || 0), num2: Number(row.min_stock || 0), contact: "", phone: "", balanceType: "receivable" })
     else if (kind === "godown") setEditTarget({ kind, id: row.id, name: row.name, extra: row.address || "", num1: Number(row.capacity_metric_tons || 0), num2: 0, contact: "", phone: "", balanceType: "receivable" })
-    else if (kind === "party") setEditTarget({ kind, id: row.id, name: row.name, extra: row.type, num1: Number(row.opening_balance || 0), num2: 0, contact: row.contact_person || "", phone: row.phone || "", balanceType: row.balance_type || "receivable" })
+    else if (kind === "party") setEditTarget({ kind, id: row.id, name: row.name, extra: row.type, num1: Number(row.opening_balance || 0), num2: 0, contact: row.contact_person || "", phone: row.phone || "", balanceType: row.balance_type || "receivable", taxId: row.tax_id || "", regNo: row.registration_no || "" })
     else if (kind === "machine") setEditTarget({ kind, id: row.id, name: row.name, extra: row.processing_type, num1: Number(row.capacity_kg_per_hour || 0), num2: 0, contact: row.operator_name || "", phone: "", balanceType: "receivable" })
     else if (kind === "packaging") setEditTarget({ kind, id: row.id, name: row.name, extra: "", num1: Number(row.capacity_kg || 0), num2: Number(row.cost_per_bag || 0), contact: "", phone: "", balanceType: "receivable" })
-    else setEditTarget({ kind, id: row.id, name: row.full_name, extra: row.designation, num1: Number(row.base_rate || 0), num2: 0, contact: "", phone: row.phone || "", balanceType: "receivable" })
+    else setEditTarget({ kind, id: row.id, name: row.full_name, extra: row.designation, num1: Number(row.base_rate || 0), num2: 0, contact: "", phone: row.phone || "", balanceType: "receivable", payPref: row.payment_preference || "" })
   }
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -221,10 +224,10 @@ export default function MastersPage() {
       let res: any
       if (editTarget.kind === "product") res = await updateProduct(editTarget.id, { name: editTarget.name.trim(), category: editTarget.extra, weight_per_bag: editTarget.num1, min_stock: editTarget.num2 })
       else if (editTarget.kind === "godown") res = await updateGodown(editTarget.id, { name: editTarget.name.trim(), address: editTarget.extra, capacity_metric_tons: editTarget.num1 })
-      else if (editTarget.kind === "party") res = await updateParty(editTarget.id, { name: editTarget.name.trim(), type: editTarget.extra, contact_person: editTarget.contact, phone: editTarget.phone, opening_balance: editTarget.num1, balance_type: editTarget.balanceType })
+      else if (editTarget.kind === "party") res = await updateParty(editTarget.id, { name: editTarget.name.trim(), type: editTarget.extra, contact_person: editTarget.contact, phone: editTarget.phone, opening_balance: editTarget.num1, balance_type: editTarget.balanceType, tax_id: editTarget.taxId?.trim() || null, registration_no: editTarget.regNo?.trim() || null })
       else if (editTarget.kind === "machine") res = await updateMachine(editTarget.id, { name: editTarget.name.trim(), processing_type: editTarget.extra, capacity_kg_per_hour: editTarget.num1, operator_name: editTarget.contact })
       else if (editTarget.kind === "packaging") res = await updatePackagingType(editTarget.id, { name: editTarget.name.trim(), capacity_kg: editTarget.num1, cost_per_bag: editTarget.num2 })
-      else res = await updateEmployee(editTarget.id, { full_name: editTarget.name.trim(), designation: editTarget.extra, phone: editTarget.phone, base_rate: editTarget.num1 })
+      else res = await updateEmployee(editTarget.id, { full_name: editTarget.name.trim(), designation: editTarget.extra, phone: editTarget.phone, base_rate: editTarget.num1, payment_preference: editTarget.payPref || null })
       if (!res.success) { setFormError(res.error ?? "Could not update."); return }
       setFormNotice(`"${editTarget.name.trim()}" updated.`)
       setEditTarget(null)
@@ -432,6 +435,7 @@ export default function MastersPage() {
                     <td className="py-3 font-bold text-foreground">
                       <div>{pty.name}</div>
                       {pty.contact_person && <div className="text-[10px] text-muted-foreground">Attn: {pty.contact_person}</div>}
+                      {(pty.tax_id || pty.registration_no) && <div className="text-[10px] text-muted-foreground font-mono">{[pty.tax_id, pty.registration_no].filter(Boolean).join(" · ")}</div>}
                     </td>
                     <td className="py-3 text-muted-foreground capitalize">
                       <span className="px-1.5 py-0.5 rounded bg-muted text-[10px] font-bold uppercase">
@@ -609,6 +613,11 @@ export default function MastersPage() {
             <div><label className="block font-medium text-foreground mb-1" htmlFor="phone-3">Phone</label><input id="phone-3" value={partyPhone} onChange={(e) => setPartyPhone(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
             <div><label className="block font-medium text-foreground mb-1" htmlFor="opening-balance-2">Opening balance</label><input id="opening-balance-2" type="number" min="0" value={partyOpening} onChange={(e) => setPartyOpening(Math.max(0, Number(e.target.value) || 0))} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
             <div><label className="block font-medium text-foreground mb-1" htmlFor="balance-type-2">Balance type</label><select id="balance-type-2" value={partyBalanceType} onChange={(e) => setPartyBalanceType(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="receivable">Receivable (they owe us)</option><option value="payable">Payable (we owe them)</option></select></div>
+            <div><label className="block font-medium text-foreground mb-1" htmlFor="tax-id-2">Tax ID (NTN)</label><input id="tax-id-2" value={partyTaxId} onChange={(e) => setPartyTaxId(e.target.value)} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+            <div><label className="block font-medium text-foreground mb-1" htmlFor="registration-no-2">Registration no. (STRN)</label><input id="registration-no-2" value={partyRegNo} onChange={(e) => setPartyRegNo(e.target.value)} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+          </>)}
+          {masterKind === "employee" && (<>
+            <div><label className="block font-medium text-foreground mb-1" htmlFor="payment-preference-2">Payment preference</label><select id="payment-preference-2" value={empPayPref} onChange={(e) => setEmpPayPref(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Not recorded</option><option value="cash">Cash</option><option value="bank">Bank transfer</option><option value="cheque">Cheque</option></select></div>
           </>)}
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={masterPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{masterPending ? "Creating…" : "Create master record"}</button></div>
         </form>
@@ -630,7 +639,7 @@ export default function MastersPage() {
             <h3 className="font-bold mb-2">Employees ({employees.length})</h3>
             {employees.map((em: any) => (
               <div key={em.id} className="flex items-center justify-between py-2 border-b border-border">
-                <span className="font-semibold">{em.full_name} <span className="text-muted-foreground">({em.designation})</span> {em.is_active === false ? "— Inactive" : ""}</span>
+                <span className="font-semibold">{em.full_name} <span className="text-muted-foreground">({em.designation})</span>{em.payment_preference ? <span className="text-muted-foreground"> — paid by {em.payment_preference}</span> : ""} {em.is_active === false ? "— Inactive" : ""}</span>
                 <span><button type="button" onClick={() => openEdit("employee", em)} className="px-2 py-0.5 rounded-md hover:bg-muted font-semibold cursor-pointer">Edit</button>{em.is_active !== false ? (<button type="button" onClick={() => setDeactTarget({ kind: "employee", id: em.id, name: em.full_name })} className="ml-1 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 font-semibold cursor-pointer">Deactivate</button>) : (<button type="button" onClick={() => handleReactivateOther("employee", em)} className="ml-1 px-2 py-0.5 rounded-md hover:bg-muted font-semibold cursor-pointer">Reactivate</button>)}</span>
               </div>
             ))}
@@ -661,6 +670,8 @@ export default function MastersPage() {
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="phone-2">Phone</label><input id="phone-2" value={editTarget.phone} onChange={(e) => setEditTarget({ ...editTarget, phone: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="opening-balance">Opening balance</label><input id="opening-balance" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="balance-type">Balance type</label><select id="balance-type" value={editTarget.balanceType} onChange={(e) => setEditTarget({ ...editTarget, balanceType: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="receivable">Receivable</option><option value="payable">Payable</option></select></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="tax-id">Tax ID (NTN)</label><input id="tax-id" value={editTarget.taxId ?? ""} onChange={(e) => setEditTarget({ ...editTarget, taxId: e.target.value })} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="registration-no">Registration no. (STRN)</label><input id="registration-no" value={editTarget.regNo ?? ""} onChange={(e) => setEditTarget({ ...editTarget, regNo: e.target.value })} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
               </>)}
               {editTarget.kind === "machine" && (<>
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="processing-type">Processing type</label><input id="processing-type" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
@@ -675,6 +686,7 @@ export default function MastersPage() {
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="designation">Designation</label><input id="designation" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="phone">Phone</label><input id="phone" value={editTarget.phone} onChange={(e) => setEditTarget({ ...editTarget, phone: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="base-rate">Base rate</label><input id="base-rate" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="payment-preference">Payment preference</label><select id="payment-preference" value={editTarget.payPref ?? ""} onChange={(e) => setEditTarget({ ...editTarget, payPref: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Not recorded</option><option value="cash">Cash</option><option value="bank">Bank transfer</option><option value="cheque">Cheque</option></select></div>
               </>)}
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button type="button" onClick={() => setEditTarget(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>

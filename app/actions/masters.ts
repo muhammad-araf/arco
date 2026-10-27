@@ -260,6 +260,8 @@ export async function createParty(input: {
   opening_balance?: number;
   balance_type?: string;
   notes?: string;
+  tax_id?: string;
+  registration_no?: string;
 }): Promise<ActionResult> {
   if (!input?.code?.trim() || !input?.name?.trim()) {
     return fail("Party code and name are required");
@@ -274,6 +276,8 @@ export async function createParty(input: {
     opening_balance: input.opening_balance ?? 0,
     balance_type: input.balance_type ?? "receivable",
     notes: input.notes ?? null,
+    tax_id: input.tax_id?.trim() || null,
+    registration_no: input.registration_no?.trim() || null,
   });
 }
 export async function deactivateParty(id: string): Promise<ActionResult> {
@@ -359,6 +363,7 @@ export async function createEmployee(input: {
   pay_type?: string;
   base_rate?: number;
   joining_date?: string;
+  payment_preference?: string;
 }): Promise<ActionResult> {
   if (!input?.code?.trim() || !input?.full_name?.trim() || !input?.designation?.trim()) {
     return fail("Employee code, full name and designation are required");
@@ -371,6 +376,7 @@ export async function createEmployee(input: {
     pay_type: input.pay_type ?? "monthly",
     base_rate: input.base_rate ?? 0,
     joining_date: input.joining_date ?? null,
+    payment_preference: input.payment_preference?.trim() || null,
   });
 }
 export async function deactivateEmployee(id: string): Promise<ActionResult> {
@@ -412,6 +418,7 @@ export async function reactivateProduct(id: string): Promise<ActionResult> {
 export async function updateParty(id: string, input: {
   name?: string; type?: string; contact_person?: string; phone?: string;
   address?: string; opening_balance?: number; balance_type?: string; notes?: string;
+  tax_id?: string | null; registration_no?: string | null;
 }): Promise<ActionResult> {
   if (input.name !== undefined && !input.name.trim()) return fail("Party name is required");
   if (input.opening_balance !== undefined && nonNegNumber(input.opening_balance, "opening_balance") === null) return fail("Opening balance must be >= 0.");
@@ -420,6 +427,7 @@ export async function updateParty(id: string, input: {
     name: input.name?.trim(), type: input.type, contact_person: input.contact_person,
     phone: input.phone, address: input.address,
     opening_balance: input.opening_balance, balance_type: input.balance_type, notes: input.notes,
+    tax_id: input.tax_id, registration_no: input.registration_no,
   });
 }
 export async function reactivateParty(id: string): Promise<ActionResult> {
@@ -462,6 +470,7 @@ export async function reactivatePackagingType(id: string): Promise<ActionResult>
 export async function updateEmployee(id: string, input: {
   full_name?: string; designation?: string; phone?: string;
   pay_type?: string; base_rate?: number; joining_date?: string;
+  payment_preference?: string | null;
 }): Promise<ActionResult> {
   if (input.full_name !== undefined && !input.full_name.trim()) return fail("Employee name is required");
   if (input.designation !== undefined && !input.designation.trim()) return fail("Designation is required");
@@ -470,6 +479,7 @@ export async function updateEmployee(id: string, input: {
     full_name: input.full_name?.trim(), designation: input.designation?.trim(),
     phone: input.phone, pay_type: input.pay_type,
     base_rate: input.base_rate, joining_date: input.joining_date,
+    payment_preference: input.payment_preference,
   });
 }
 export async function reactivateEmployee(id: string): Promise<ActionResult> {
