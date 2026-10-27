@@ -18,7 +18,8 @@ import { PrintButton } from "@/components/print/print-button"
 import { getStockSummary, getStockLedger } from "@/app/actions/inventory"
 import { listPackagingTypes, listParties, listProducts } from "@/app/actions/masters"
 import { formatCurrency, formatWeight, formatBags } from "@/lib/utils"
-import { exportReportToCsv } from "@/lib/export-utils"
+import { exportReportToCsv, exportToExcel, exportToPdf } from "@/lib/export-utils"
+import { logExport } from "@/app/actions/audit-log"
 import {
   AlertBanner,
   EmptyState,
@@ -154,7 +155,29 @@ export default function ReportsPage() {
     }
   })
 
+  // Shared by the CSV / Excel / PDF buttons below: one definition of the
+  // current tab's rows, columns, title, range and totals (spec §16), so
+  // all three formats of the same report always agree.
+  const getCurrentReportExport = () => {
+    const range = `${effFrom} to ${effTo}`
+    if (selectedReport === "stock") return { rows: stockSummary.map((p) => ({ code: p.code, name: p.name, category: p.category, stock_kg: p.totalStock, bags: p.bagsCount, min_stock: p.min_stock || 0 })), filename: "stock_summary_report", columns: [{ key: "code", label: "Code" }, { key: "name", label: "Product" }, { key: "category", label: "Category" }, { key: "stock_kg", label: "Stock (kg)" }, { key: "bags", label: "Bags" }, { key: "min_stock", label: "Min stock" }], options: { title: "Stock Summary", dateRange: range, totals: { stock_kg: stockTotals.kg, bags: stockTotals.bags } }, report: "stock_summary" }
+    if (selectedReport === "bardana") return { rows: bardanaRows.map((p) => ({ bag_type: p.name, capacity_kg: p.capacity_kg, consumed: p.consumed, purchased: p.purchased, closing: p.current_stock, unit_cost: p.cost_per_bag })), filename: "bardana_ledger_report", columns: [{ key: "bag_type", label: "Bag type" }, { key: "capacity_kg", label: "Capacity (kg)" }, { key: "consumed", label: "Consumed" }, { key: "purchased", label: "Purchased" }, { key: "closing", label: "Closing" }, { key: "unit_cost", label: "Unit cost" }], options: { title: "Bardana Ledger", dateRange: range, totals: { consumed: Number(bardanaTotals?.consumed || 0), purchased: Number(bardanaTotals?.purchased || 0) } }, report: "bardana_ledger" }
+    if (selectedReport === "ledger") return { rows: ledgerRows.map((e: any) => ({ date: e.date, voucher_no: e.voucher_no, type: e.voucher_type, godown_id: e.godown_id, product_id: e.product_id, inward_kg: e.inward_qty, outward_kg: e.outward_qty, balance_kg: e.running_balance })), filename: "stock_ledger_report", columns: [{ key: "date", label: "Date" }, { key: "voucher_no", label: "Voucher" }, { key: "type", label: "Type" }, { key: "inward_kg", label: "Inward (kg)" }, { key: "outward_kg", label: "Outward (kg)" }, { key: "balance_kg", label: "Balance (kg)" }], options: { title: "Stock Ledger", dateRange: range }, report: "stock_ledger" }
+    if (selectedReport === "party" || selectedReport === "vendor") return { rows: (stmt?.entries ?? []).map((e: any) => ({ date: e.date, voucher_no: e.voucher_no, debit: e.debit, credit: e.credit, balance: e.running_balance })), filename: `${selectedReport}_statement`, columns: [{ key: "date", label: "Date" }, { key: "voucher_no", label: "Voucher" }, { key: "debit", label: "Debit" }, { key: "credit", label: "Credit" }, { key: "balance", label: "Balance" }], options: { title: `${selectedReport === "vendor" ? "Vendor" : "Party"} Statement`, dateRange: range, totals: { debit: Number(stmt?.charges || 0), credit: Number(stmt?.settlements || 0) } }, report: `${selectedReport}_statement` }
+    return { rows: [{ period: periodLabel, service_revenue: machineryRevenue, product_sales: seedSalesRevenue, other_revenue: otherRevenue, operating_expenses: operationalExpenses, packaging_cost: bardanaCost, payroll_cost: laborPayroll, cogs: cogsAmount, net_profit: netProfit }], filename: "pnl_report", columns: [{ key: "period", label: "Period" }, { key: "service_revenue", label: "Service revenue" }, { key: "product_sales", label: "Product sales" }, { key: "other_revenue", label: "Other revenue" }, { key: "operating_expenses", label: "Operating expenses" }, { key: "packaging_cost", label: "Packaging cost" }, { key: "payroll_cost", label: "Payroll cost" }, { key: "cogs", label: "COGS" }, { key: "net_profit", label: "Net profit" }], options: { title: "Profit & Loss", dateRange: range }, report: "profit_and_loss" }
+  }
+  const handleReportExport = async (format: "csv" | "xlsx" | "pdf") => {
+    const e = getCurrentReportExport()
+    const ok = format === "csv"
+      ? exportReportToCsv(e.rows, e.filename, e.columns as any, e.options as any)
+      : format === "xlsx"
+        ? await exportToExcel(e.rows, e.filename, e.columns as any, e.options as any)
+        : await exportToPdf(e.rows, e.filename, e.columns as any, e.options as any)
+    if (ok) void logExport({ report: e.report, format, filters: { dateRange: `${effFrom} to ${effTo}` } })
+  }
+
   if (isLoading) return <ReportsSkeleton />
+
 
   return (
     <div className="space-y-6">
@@ -180,17 +203,24 @@ export default function ReportsPage() {
           </label>
           <button
             type="button"
-            onClick={() => {
-              const range = `${effFrom} to ${effTo}`
-              if (selectedReport === "stock") exportReportToCsv(stockSummary.map((p) => ({ code: p.code, name: p.name, category: p.category, stock_kg: p.totalStock, bags: p.bagsCount, min_stock: p.min_stock || 0 })), "stock_summary_report", [{ key: "code", label: "Code" }, { key: "name", label: "Product" }, { key: "category", label: "Category" }, { key: "stock_kg", label: "Stock (kg)" }, { key: "bags", label: "Bags" }, { key: "min_stock", label: "Min stock" }], { title: "Stock Summary", dateRange: range, totals: { stock_kg: stockTotals.kg, bags: stockTotals.bags } })
-              else if (selectedReport === "bardana") exportReportToCsv(bardanaRows.map((p) => ({ bag_type: p.name, capacity_kg: p.capacity_kg, consumed: p.consumed, purchased: p.purchased, closing: p.current_stock, unit_cost: p.cost_per_bag })), "bardana_ledger_report", [{ key: "bag_type", label: "Bag type" }, { key: "capacity_kg", label: "Capacity (kg)" }, { key: "consumed", label: "Consumed" }, { key: "purchased", label: "Purchased" }, { key: "closing", label: "Closing" }, { key: "unit_cost", label: "Unit cost" }], { title: "Bardana Ledger", dateRange: range, totals: { consumed: Number(bardanaTotals?.consumed || 0), purchased: Number(bardanaTotals?.purchased || 0) } })
-              else if (selectedReport === "ledger") exportReportToCsv(ledgerRows.map((e: any) => ({ date: e.date, voucher_no: e.voucher_no, type: e.voucher_type, godown_id: e.godown_id, product_id: e.product_id, inward_kg: e.inward_qty, outward_kg: e.outward_qty, balance_kg: e.running_balance })), "stock_ledger_report", [{ key: "date", label: "Date" }, { key: "voucher_no", label: "Voucher" }, { key: "type", label: "Type" }, { key: "inward_kg", label: "Inward (kg)" }, { key: "outward_kg", label: "Outward (kg)" }, { key: "balance_kg", label: "Balance (kg)" }], { title: "Stock Ledger", dateRange: range })
-              else if (selectedReport === "party" || selectedReport === "vendor") exportReportToCsv<Record<string, any>>((stmt?.entries ?? []).map((e: any) => ({ date: e.date, voucher_no: e.voucher_no, debit: e.debit, credit: e.credit, balance: e.running_balance })), `${selectedReport}_statement`, [{ key: "date", label: "Date" }, { key: "voucher_no", label: "Voucher" }, { key: "debit", label: "Debit" }, { key: "credit", label: "Credit" }, { key: "balance", label: "Balance" }], { title: `${selectedReport === "vendor" ? "Vendor" : "Party"} Statement`, dateRange: range, totals: { debit: Number(stmt?.charges || 0), credit: Number(stmt?.settlements || 0) } })
-              else exportReportToCsv([{ period: periodLabel, service_revenue: machineryRevenue, product_sales: seedSalesRevenue, other_revenue: otherRevenue, operating_expenses: operationalExpenses, packaging_cost: bardanaCost, payroll_cost: laborPayroll, cogs: cogsAmount, net_profit: netProfit }], "pnl_report", [{ key: "period", label: "Period" }, { key: "service_revenue", label: "Service revenue" }, { key: "product_sales", label: "Product sales" }, { key: "other_revenue", label: "Other revenue" }, { key: "operating_expenses", label: "Operating expenses" }, { key: "packaging_cost", label: "Packaging cost" }, { key: "payroll_cost", label: "Payroll cost" }, { key: "cogs", label: "COGS" }, { key: "net_profit", label: "Net profit" }], { title: "Profit & Loss", dateRange: range })
-            }}
+            onClick={() => void handleReportExport("csv")}
             className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
           >
             Export CSV
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleReportExport("xlsx")}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+          >
+            Export Excel
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleReportExport("pdf")}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-2xs transition-colors cursor-pointer"
+          >
+            Export PDF
           </button>
         <button
           type="button"
