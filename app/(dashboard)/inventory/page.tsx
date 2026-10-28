@@ -17,7 +17,7 @@ import {
   Plus,
   Download,
 } from "lucide-react"
-import { getStockSummary, getStockLedger, getStockAgeing, createTransfer, postTransfer, reverseTransfer, createAdjustment, postAdjustment, reverseAdjustment, listTransfers, listAdjustments } from "@/app/actions/inventory"
+import { getStockSummary, getStockLedger, getStockAgeing, reverseTransfer, createAdjustment, postAdjustment, reverseAdjustment, listTransfers, listAdjustments } from "@/app/actions/inventory"
 import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
 import { StockLedgerEntry, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDateTime } from "@/lib/utils"
@@ -25,15 +25,15 @@ import { exportReportToCsv, exportToExcel, exportToPdf } from "@/lib/export-util
 import { logExport } from "@/app/actions/audit-log"
 import {
   AlertBanner,
-  ConfirmDialog,
   EmptyState,
   FilterBanner,
   ReversalDialog,
-  SubmitSpinner,
   getUrlFilter,
-  isPositive,
 } from "@/components/erp-ui"
 import { InventorySkeleton } from "@/components/route-skeletons"
+import { InventoryTransferDialog } from "@/components/inventory-transfer-dialog"
+import { InventoryAdjustmentDialog } from "@/components/inventory-adjustment-dialog"
+import { GodownSelect } from "@/components/erp-form"
 
 export default function InventoryPage() {
   const [activeTab, setActiveTab] = React.useState<"summary" | "ledger" | "transfers" | "adjustments" | "count" | "ageing">("summary")
@@ -55,13 +55,6 @@ export default function InventoryPage() {
   const [collapsedGodowns, setCollapsedGodowns] = React.useState<string[]>([])
   const [ledgerPage, setLedgerPage] = React.useState(1)
   const [ledgerTotal, setLedgerTotal] = React.useState(0)
-  const [adjGodown, setAdjGodown] = React.useState("")
-  const [adjProduct, setAdjProduct] = React.useState("")
-  const [adjOwner, setAdjOwner] = React.useState("")
-  const [adjAfter, setAdjAfter] = React.useState("")
-  const [adjReason, setAdjReason] = React.useState("")
-  const [adjApprover, setAdjApprover] = React.useState("")
-  const [adjPending, setAdjPending] = React.useState(false)
   const [revTransfer, setRevTransfer] = React.useState<any | null>(null)
   const [revAdjustment, setRevAdjustment] = React.useState<any | null>(null)
   const [revPending, setRevPending] = React.useState(false)
@@ -74,21 +67,14 @@ export default function InventoryPage() {
   const [selectedGodown, setSelectedGodown] = React.useState("all")
   const [selectedCategory, setSelectedCategory] = React.useState("all")
 
-  // Transfer Modal
+  // Dialogs own their own form state (POS pattern); the page only
+  // tracks which one is open.
   const [isTransferModalOpen, setIsTransferModalOpen] = React.useState(false)
-  const [transferFromGodown, setTransferFromGodown] = React.useState("")
-  const [transferToGodown, setTransferToGodown] = React.useState("")
-  const [transferProductId, setTransferProductId] = React.useState("")
-  const [transferQty, setTransferQty] = React.useState<number>(0)
-  const [transferOwner, setTransferOwner] = React.useState("")
-  const [transferNotes, setTransferNotes] = React.useState("")
+  const [isAdjustmentOpen, setIsAdjustmentOpen] = React.useState(false)
   const [isLoading, setIsLoading] = React.useState(true)
   const [transferError, setTransferError] = React.useState("")
   const [transferNotice, setTransferNotice] = React.useState("")
-  const [isPending, setIsPending] = React.useState(false)
-  const [showTransferConfirm, setShowTransferConfirm] = React.useState(false)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
-  const transferGuard = React.useRef(false)
 
   const applyLedgerPage = React.useCallback((le: any, godownList: Godown[], productList: Product[]) => {
     const rows = Array.isArray(le.data?.rows) ? le.data.rows : []
@@ -213,16 +199,6 @@ export default function InventoryPage() {
     }
   }
 
-  React.useEffect(() => {
-    if (godowns.length >= 2) {
-      if (!transferFromGodown) setTransferFromGodown(godowns[0].id)
-      if (!transferToGodown) setTransferToGodown(godowns[1].id)
-    }
-    if (products.length > 0 && !transferProductId) {
-      setTransferProductId(products[0].id)
-    }
-  }, [godowns, products, transferFromGodown, transferToGodown, transferProductId])
-
   const filteredSummary = rawSummary.filter((r) => {
     const prod = products.find((x) => x.id === r.product_id)
     const matchesSearch = (r.product_name ?? "").toLowerCase().includes(searchQuery.toLowerCase()) || (prod?.code ?? "").toLowerCase().includes(searchQuery.toLowerCase())
@@ -240,84 +216,6 @@ export default function InventoryPage() {
       (entry.notes || "").toLowerCase().includes(searchQuery.toLowerCase())
     return matchesSearch
   })
-
-  const handleExecuteTransfer = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isPending) return
-    // Spec §5.3: a transfer needs distinct locations, a positive quantity,
-    // enough source stock, and a reason — each failure says what to fix.
-    if (!transferFromGodown || !transferToGodown || !transferProductId) return setTransferError("Select a product and both godowns for the transfer.")
-    if (transferFromGodown === transferToGodown) return setTransferError("Source and destination must be different.")
-    if (!isPositive(transferQty)) return setTransferError("Transfer quantity must be greater than zero.")
-    if (!transferNotes.trim()) return setTransferError("A reason is required. Write why this stock is moving.")
-    const ownerRow = rawSummary.find((r) => r.product_id === transferProductId && r.godown_id === transferFromGodown && (r.party_id ?? null) === (transferOwner || null))
-    const availableStock = Number(ownerRow?.balance_kg) || 0
-    if (transferQty > availableStock) return setTransferError(`Insufficient stock in the source godown: ${availableStock} kg available, but ${transferQty} kg requested. Reduce the quantity.`)
-    setTransferError("")
-    setShowTransferConfirm(true)
-  }
-
-  const handleConfirmTransfer = async () => {
-    if (transferGuard.current) return
-    transferGuard.current = true
-    setIsPending(true)
-    try {
-      const created = await createTransfer({
-        fromGodownId: transferFromGodown, toGodownId: transferToGodown, productId: transferProductId,
-        quantityKg: transferQty, reason: transferNotes.trim(), notes: transferNotes.trim(),
-        partyId: transferOwner || undefined,
-      })
-      if (!created.success || !(created.data as any)?.id) {
-        setTransferError(created.error ?? "Could not create the transfer draft.")
-        return
-      }
-      const posted = await postTransfer((created.data as any).id, postToken("transfer:post", (created.data as any).id))
-      if (!posted.success) {
-        setTransferError(posted.error ?? "Could not post the transfer.")
-        return
-      }
-      const fromGodownObj = godowns.find((g) => g.id === transferFromGodown)
-      const toGodownObj = godowns.find((g) => g.id === transferToGodown)
-      setTransferNotice(`Transfer posted — ${transferQty} kg moved from ${fromGodownObj?.name} to ${toGodownObj?.name}. Enterprise total unchanged.`)
-      setShowTransferConfirm(false)
-      setIsTransferModalOpen(false)
-      await loadData()
-    } finally {
-      setIsPending(false)
-      transferGuard.current = false
-    }
-  }
-
-  const adjBeforeRow = rawSummary.find((r) => r.product_id === adjProduct && r.godown_id === adjGodown && (r.party_id ?? null) === (adjOwner || null))
-  const adjBefore = Number(adjBeforeRow?.balance_kg) || 0
-  const handleAdjustment = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (adjPending) return
-    if (!adjGodown || !adjProduct) return setTransferError("Select a godown and product for the adjustment.")
-    if (adjAfter === "" || Number.isNaN(Number(adjAfter))) return setTransferError("Enter the quantity after (kg) — it is left blank on purpose so a careless submit cannot zero stock.")
-    if (!adjReason.trim()) return setTransferError("An adjustment reason is required.")
-    if (!adjApprover.trim()) return setTransferError("An approver is required for a stock adjustment.")
-    setAdjPending(true)
-    try {
-      const created = await createAdjustment({
-        godownId: adjGodown, productId: adjProduct, quantityBeforeKg: adjBefore, quantityAfterKg: Number(adjAfter),
-        reason: adjReason.trim(), approver: adjApprover.trim(), partyId: adjOwner || undefined,
-      })
-      if (!created.success || !(created.data as any)?.id) {
-        setTransferError(created.error ?? "Could not create the adjustment.")
-        return
-      }
-      const posted = await postAdjustment((created.data as any).id, postToken("adjustment:post", (created.data as any).id))
-      if (!posted.success) {
-        setTransferError(posted.error ?? "Could not post the adjustment.")
-        return
-      }
-      setTransferNotice(`Stock adjustment posted: ${adjBefore} kg → ${Number(adjAfter)} kg, approved by ${adjApprover.trim()}.`)
-      await loadData()
-    } finally {
-      setAdjPending(false)
-    }
-  }
 
   const handleTransferReversal = async (reasonCode: string, reason: string) => {
     if (!revTransfer || revPending) return
@@ -379,6 +277,7 @@ export default function InventoryPage() {
   return (
     <div className="space-y-6">
       <FilterBanner filter={drillFilter} onClear={() => setDrillFilter(null)} />
+      <AlertBanner tone="error" message={transferError} onDismiss={() => setTransferError("")} />
       <AlertBanner tone="success" message={transferNotice} onDismiss={() => setTransferNotice("")} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -425,6 +324,13 @@ export default function InventoryPage() {
           >
             <ArrowRightLeft className="h-4 w-4" />
             <span>Transfer</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsAdjustmentOpen(true)}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+          >
+            <span>Correct stock</span>
           </button>
         </div>
       </div>
@@ -542,7 +448,7 @@ export default function InventoryPage() {
                 <option value="all">All Godowns</option>
                 {godowns.map((g) => (
                   <option key={g.id} value={g.id}>
-                    {g.name}
+                    {g.name} ({g.code})
                   </option>
                 ))}
               </select>
@@ -832,15 +738,14 @@ export default function InventoryPage() {
           <p className="text-xs text-muted-foreground mb-4">Count one godown at a time. System quantities come from the live stock summary; counted quantities default to system stock, so only changed rows create adjustments. Variances post as adjustments with the reason and approver below — this count is the discrepancy source the dashboard stock-alerts card can later use, and no count is invented.</p>
           <form onSubmit={handleCountSubmit} className="space-y-4 text-xs">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div><label className="block font-medium text-foreground mb-1" htmlFor="count-godown">Godown</label><select id="count-godown" value={countGodown} onChange={(e) => {
-                const gid = e.target.value
+              <GodownSelect id="count-godown" label="Godown" value={countGodown} onChange={(gid) => {
                 setCountGodown(gid)
                 const next: Record<string, string> = {}
                 for (const r of rawSummary.filter((x) => x.godown_id === gid)) {
                   next[`${r.godown_id}|${r.product_id}|${r.party_id ?? ""}`] = String(r.balance_kg ?? 0)
                 }
                 setCounted(next)
-              }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select godown</option>{godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
+              }} godowns={godowns} />
               <div><label className="block font-medium text-foreground mb-1" htmlFor="count-reason">Reason *</label><input id="count-reason" value={countReason} onChange={(e) => setCountReason(e.target.value)} placeholder="e.g. Monthly physical count" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
               <div><label className="block font-medium text-foreground mb-1" htmlFor="count-approver">Approver *</label><input id="count-approver" value={countApprover} onChange={(e) => setCountApprover(e.target.value)} placeholder="Approver name" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
             </div>
@@ -924,156 +829,23 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {/* Stock Adjustment (reason + approver, create → post → reversible) */}
-      <div className="expensive-card p-5">
-        <h2 className="text-sm font-bold text-foreground mb-1">Stock Adjustment</h2>
-        <p className="text-xs text-muted-foreground mb-4">Fix a physical count with a reason and an approver. Every posted adjustment can be reversed from the Adjustments register above.</p>
-        <form onSubmit={handleAdjustment} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="godown">Godown</label><select id="godown" value={adjGodown} onChange={(e) => setAdjGodown(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select godown</option>{godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="product-2">Product</label><select id="product-2" value={adjProduct} onChange={(e) => setAdjProduct(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select product</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="stock-owner-2">Stock owner</label><select id="stock-owner-2" value={adjOwner} onChange={(e) => setAdjOwner(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Company stock</option>{parties.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="quantity-after-kg">Quantity after (kg)</label><div className="flex gap-2"><input id="quantity-after-kg" type="number" value={adjAfter} onChange={(e) => setAdjAfter(e.target.value)} min="0" placeholder="Enter quantity after" className="flex-1 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /><button type="button" onClick={() => setAdjAfter(String(adjBefore))} className="px-2 py-2 rounded-lg bg-muted text-muted-foreground text-[11px] font-semibold cursor-pointer" title="Fill with the current balance">Use current</button></div></div>
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="reason">Reason *</label><input id="reason" value={adjReason} onChange={(e) => setAdjReason(e.target.value)} placeholder="e.g. Physical recount variance" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="approver">Approver *</label><input id="approver" value={adjApprover} onChange={(e) => setAdjApprover(e.target.value)} placeholder="Approver name" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div className="flex items-end gap-2"><span className="text-muted-foreground">Current balance: {adjGodown && adjProduct ? `${adjBefore} kg` : "—"}</span><button type="submit" disabled={adjPending} className="ml-auto px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{adjPending ? "Posting…" : "Create & Post Adjustment"}</button></div>
-        </form>
-      </div>
-
-      {/* Inter-Godown Transfer Modal */}
-      {isTransferModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-                <ArrowRightLeft className="h-4 w-4 text-emerald-500" />
-                Inter-Godown Grain Transfer
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsTransferModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleExecuteTransfer} className="space-y-4 text-xs">
-              <AlertBanner tone="error" message={transferError} onDismiss={() => setTransferError("")} />
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="product">Product</label>
-                <select id="product"
-                  value={transferProductId}
-                  onChange={(e) => setTransferProductId(e.target.value)}
-                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                >
-                  {products.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="from-source">From (Source)</label>
-                  <select id="from-source"
-                    value={transferFromGodown}
-                    onChange={(e) => setTransferFromGodown(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  >
-                    {godowns.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="to-destination">To (Destination)</label>
-                  <select id="to-destination"
-                    value={transferToGodown}
-                    onChange={(e) => setTransferToGodown(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  >
-                    {godowns.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="stock-owner">Stock owner</label>
-                <select id="stock-owner"
-                  value={transferOwner}
-                  onChange={(e) => setTransferOwner(e.target.value)}
-                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                >
-                  <option value="">Company stock</option>
-                  {parties.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="transfer-quantity-kg">Transfer Quantity (kg)</label>
-                <input id="transfer-quantity-kg"
-                  type="number"
-                  value={transferQty}
-                  onChange={(e) => setTransferQty(Number(e.target.value))}
-                  min="1"
-                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="transfer-reason-notes">Transfer Reason / Notes</label>
-                <input id="transfer-reason-notes"
-                  type="text"
-                  value={transferNotes}
-                  onChange={(e) => setTransferNotes(e.target.value)}
-                  placeholder="e.g. Moving lot to Plant A"
-                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsTransferModalOpen(false)}
-                  className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isPending}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
-                  <span>{isPending ? "Executing…" : "Execute Transfer"}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-      <ConfirmDialog
-        open={showTransferConfirm}
-        title="Execute this transfer?"
-        description={`Move ${transferQty} kg of ${products.find((p) => p.id === transferProductId)?.name || "the selected product"} from ${godowns.find((g) => g.id === transferFromGodown)?.name || "source"} to ${godowns.find((g) => g.id === transferToGodown)?.name || "destination"}. Total stock does not change.`}
-        confirmLabel="Execute Transfer"
-        pending={isPending}
-        onConfirm={handleConfirmTransfer}
-        onCancel={() => setShowTransferConfirm(false)}
+      <InventoryTransferDialog
+        open={isTransferModalOpen}
+        onClose={() => setIsTransferModalOpen(false)}
+        godowns={godowns}
+        products={products}
+        parties={parties}
+        summary={rawSummary}
+        onPosted={(notice) => { setTransferNotice(notice); void loadData() }}
+      />
+      <InventoryAdjustmentDialog
+        open={isAdjustmentOpen}
+        onClose={() => setIsAdjustmentOpen(false)}
+        godowns={godowns}
+        products={products}
+        parties={parties}
+        summary={rawSummary}
+        onPosted={(notice) => { setTransferNotice(notice); void loadData() }}
       />
       <ReversalDialog
         open={!!revTransfer}
