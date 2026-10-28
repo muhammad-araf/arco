@@ -12,7 +12,9 @@ import {
   Package,
 } from "lucide-react"
 import { listPurchases, createPurchase, postPurchase, reversePurchase, listPurchaseReturns, createPurchaseReturn, postPurchaseReturn, allocatePayment, listCashAccounts } from "@/app/actions/finance"
-import { listParties, listGodowns, listProducts } from "@/app/actions/masters"
+import { listParties, listGodowns, listProducts, createParty, createGodown, createProduct } from "@/app/actions/masters"
+import { PurchasePrint } from "@/components/print/purchase-print"
+import { InlineAdd, PARTY_FIELDS, GODOWN_FIELDS, PRODUCT_FIELDS } from "@/components/print/inline-add"
 import { PurchaseVoucher, Party, Godown, Product } from "@/lib/types/database"
 import { formatCurrency, formatWeight, formatDate } from "@/lib/utils"
 import {
@@ -26,6 +28,7 @@ import {
   isPositive,
 } from "@/components/erp-ui"
 import { PurchasesSkeleton } from "@/components/route-skeletons"
+import { PrintButton } from "@/components/print/print-button"
 
 export default function PurchasesPage() {
   const [purchases, setPurchases] = React.useState<PurchaseVoucher[]>([])
@@ -71,6 +74,7 @@ export default function PurchasesPage() {
   const [paidAmount, setPaidAmount] = React.useState<number>(500000)
   const [notes, setNotes] = React.useState("")
   const [page, setPage] = React.useState(1)
+  const [printPurchase, setPrintPurchase] = React.useState<PurchaseVoucher | null>(null)
   const [totalPurchases, setTotalPurchases] = React.useState(0)
   const pageSize = 50
 
@@ -398,6 +402,7 @@ export default function PurchasesPage() {
                     </span>
                   </td>
                   <td className="py-3 text-center">
+                    <button type="button" onClick={() => setPrintPurchase(p)} className="px-2 py-1 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print</button>
                     {p.status === "posted" && Number(p.balance_amount) > 0 && (
                       <button
                         type="button"
@@ -469,10 +474,10 @@ export default function PurchasesPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="supplier-grower">Supplier / Grower</label>
-                  <select id="supplier-grower"
+                  <div className="flex flex-wrap items-start gap-2"><select id="supplier-grower"
                     value={vendorId}
                     onChange={(e) => setVendorId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   >
                     {vendors.map((v) => (
@@ -480,15 +485,15 @@ export default function PurchasesPage() {
                         {v.name}
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "supplier" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) setVendors((r.data as any[]).filter((x) => x.type === "supplier" || x.type === "both")); setVendorId(id); }} /></div>
                 </div>
 
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="unloading-godown">Unloading Godown</label>
-                  <select id="unloading-godown"
+                  <div className="flex flex-wrap items-start gap-2"><select id="unloading-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   >
                     {godowns.map((g) => (
@@ -496,7 +501,7 @@ export default function PurchasesPage() {
                         {g.name}
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) setGodowns(r.data as any[]); setGodownId(id); }} /></div>
                 </div>
               </div>
 
@@ -506,10 +511,10 @@ export default function PurchasesPage() {
                   <div key={line.key} className="grid grid-cols-3 gap-3 items-end">
                     <div>
                       <label className="block font-medium text-foreground mb-1" htmlFor={`purchased-product-${line.key}`}>Purchased Product *</label>
-                      <select id={`purchased-product-${line.key}`}
+                      <div className="flex flex-wrap items-start gap-2"><select id={`purchased-product-${line.key}`}
                         value={line.productId}
                         onChange={(e) => setLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, productId: e.target.value } : l)))}
-                        className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                        className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                       >
                         <option value="">Select product</option>
                         {products.map((p) => (
@@ -517,7 +522,7 @@ export default function PurchasesPage() {
                             {p.name}
                           </option>
                         ))}
-                      </select>
+                      </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) setProducts(r.data as any[]); setLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, productId: id } : l))); }} /></div>
                     </div>
                     <div>
                       <label className="block font-medium text-foreground mb-1" htmlFor={`quantity-kg-${line.key}`}>Quantity (kg) *</label>
@@ -659,6 +664,32 @@ export default function PurchasesPage() {
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={retPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{retPending ? "Recording…" : "Record purchase return"}</button></div>
         </form>
       </div>
+      {printPurchase && (
+        <div className="expensive-card p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">Purchase print document for {printPurchase.purchase_no}.</p>
+            <div className="flex gap-2">
+              <PrintButton label="Print purchase" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
+              <button type="button" onClick={() => setPrintPurchase(null)} className="px-4 py-2 rounded-lg bg-card border border-border text-xs font-semibold cursor-pointer">Close</button>
+            </div>
+          </div>
+          <div className="hidden print:block mt-2">
+            <PurchasePrint
+              purchaseNo={printPurchase.purchase_no}
+              date={printPurchase.date?.slice(0, 10)}
+              vendorName={printPurchase.vendor_name}
+              godown={printPurchase.godown_name}
+              invoiceRef={printPurchase.invoice_ref}
+              status={printPurchase.status}
+              lines={(printPurchase.items ?? []).map((it: any) => ({ product: it.product_name ?? products.find((x) => x.id === it.product_id)?.name, quantity: it.quantity, unitPrice: it.unit_price ?? it.unitPrice, amount: it.line_total ?? it.amount }))}
+              total={printPurchase.total_amount}
+              paid={printPurchase.paid_amount}
+              balance={printPurchase.balance_amount}
+              notes={printPurchase.notes}
+            />
+          </div>
+        </div>
+      )}
       <ReversalDialog
         open={!!reversalTarget}
         voucherLabel={reversalTarget?.purchase_no ?? ""}
