@@ -24,6 +24,8 @@ import {
   getUrlFilter,
 } from "@/components/erp-ui"
 import { PayrollSkeleton } from "@/components/route-skeletons"
+import { PayrollPrint } from "@/components/print/payroll-print"
+import { PrintButton } from "@/components/print/print-button"
 
 const ALL_STATUSES: AttendanceStatus[] = ["present", "half_day", "leave", "absent", "holiday"]
 const STATUS_LABEL: Record<AttendanceStatus, string> = {
@@ -104,6 +106,7 @@ export default function EmployeesPage() {
   const [cashAccounts, setCashAccounts] = React.useState<any[]>([])
   // Pay dialog
   const [payTarget, setPayTarget] = React.useState<any | null>(null)
+  const [printPayroll, setPrintPayroll] = React.useState<any | null>(null)
   const [payAmount, setPayAmount] = React.useState<number>(0)
   const [payAccountId, setPayAccountId] = React.useState("")
   const [payMethod, setPayMethod] = React.useState("cash")
@@ -854,10 +857,27 @@ export default function EmployeesPage() {
         <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Gross</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
             {visibleFinalized.length === 0 && <tr><td colSpan={7} className="py-4 text-muted-foreground">No payroll periods yet — run the first draft above.</td></tr>}
-            {visibleFinalized.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? "Not set"}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}{p.status === "draft" && (<button type="button" onClick={() => handleApprove(p.id)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button>)}{(p.status === "approved" || p.status === "partially_paid") && Number(p.balance_amount || 0) > 0 && (<button type="button" onClick={() => openPay(p)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Pay</button>)}</td></tr>))}
+            {visibleFinalized.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? "Not set"}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}<button type="button" onClick={() => setPrintPayroll(p)} className="ml-2 px-2 py-0.5 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print</button>{p.status === "draft" && (<button type="button" onClick={() => handleApprove(p.id)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button>)}{(p.status === "approved" || p.status === "partially_paid") && Number(p.balance_amount || 0) > 0 && (<button type="button" onClick={() => openPay(p)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Pay</button>)}</td></tr>))}
           </tbody></table></div>
       </div>)}
 
+      {tab === "payroll" && printPayroll && (<div className="expensive-card p-4">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs text-muted-foreground">Payroll print document for {employees.find((e) => e.id === printPayroll.employee_id)?.full_name ?? "this employee"} — {printPayroll.month}/{printPayroll.year}.</p>
+          <div className="flex gap-2">
+            <PrintButton label="Print payroll" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
+            <button type="button" onClick={() => setPrintPayroll(null)} className="px-4 py-2 rounded-lg bg-card border border-border text-xs font-semibold cursor-pointer">Close</button>
+          </div>
+        </div>
+        <div className="hidden print:block mt-2">
+          <PayrollPrint
+            periodLabel={`${printPayroll.month}/${printPayroll.year}`}
+            employeeName={employees.find((e) => e.id === printPayroll.employee_id)?.full_name}
+            rows={[{ employee: employees.find((e) => e.id === printPayroll.employee_id)?.full_name, base: printPayroll.gross_pay, net: printPayroll.net_payable }]}
+            totalNet={printPayroll.net_payable}
+          />
+        </div>
+      </div>)}
       {/* Adjust / reverse */}
       {tab === "payroll" && (<div className="expensive-card p-5 grid grid-cols-1 lg:grid-cols-2 gap-6">
         <form onSubmit={handleAdjust} className="space-y-3 text-xs">
