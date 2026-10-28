@@ -25,6 +25,8 @@ import {
   FileCheck2,
   UploadCloud,
   Settings,
+  BookOpen,
+  Handshake,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { type AppRole } from "@/app/actions/auth"
@@ -64,7 +66,7 @@ const navSections: NavSection[] = [
   {
     heading: "Production",
     items: [
-      { title: "Batches", href: "/production", icon: ScrollText },
+      { title: "Production", href: "/production", icon: ScrollText },
       { title: "Machinery", href: "/machinery", icon: Cog },
       { title: "Packing", href: "/packing", icon: PackageCheck },
     ],
@@ -74,17 +76,19 @@ const navSections: NavSection[] = [
     items: [
       { title: "Purchases", href: "/purchases", icon: ShoppingCart },
       { title: "Billing", href: "/billing", icon: Receipt },
+      { title: "Parties", href: "/parties", icon: Handshake },
       { title: "Daybook", href: "/daybook", icon: Wallet },
+      { title: "Ledgers", href: "/ledgers", icon: BookOpen },
     ],
   },
   {
     heading: "Manage",
     items: [
-      { title: "Payroll", href: "/payroll", icon: Users2 },
+      { title: "Employees", href: "/employees", icon: Users2 },
       { title: "Reports", href: "/reports", icon: BarChart3 },
       { title: "Import", href: "/migration", icon: UploadCloud },
       { title: "Masters", href: "/masters", icon: Database },
-      { title: "Users", href: "/users", icon: UserCog },
+      { title: "People", href: "/people", icon: UserCog },
       { title: "Audit", href: "/audit", icon: ShieldCheck },
       { title: "Settings", href: "/settings", icon: Settings },
     ],
