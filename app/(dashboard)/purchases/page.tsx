@@ -54,6 +54,7 @@ export default function PurchasesPage() {
   const [retReason, setRetReason] = React.useState("")
   const [retPending, setRetPending] = React.useState(false)
   const [retPostPending, setRetPostPending] = React.useState<string | null>(null)
+  const [draftPostPending, setDraftPostPending] = React.useState<string | null>(null)
   const [cashAccounts, setCashAccounts] = React.useState<any[]>([])
   const [payCashAccountId, setPayCashAccountId] = React.useState("")
   const [payAccountKind, setPayAccountKind] = React.useState<"cash" | "bank" | "online">("cash")
@@ -228,6 +229,51 @@ export default function PurchasesPage() {
     }
   }
 
+  // Save-as-draft: createPurchase already writes status "draft", but
+  // the dialog only offered Post. A draft records no payment (paid
+  // starts at 0 on the server); pay it from the Pay section after
+  // posting. Draft validation follows the server's draft rules: a
+  // vendor and a product on every line. Quantities/prices may be zero
+  // in a draft — the post step is what enforces positive values.
+  const handleSaveDraft = async () => {
+    if (isPending) return
+    if (!vendorId) return setFormError("Select the supplier / vendor before saving a draft.")
+    if (lines.length === 0) return setFormError("Add at least one purchase line before saving a draft.")
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].productId) return setFormError(`Line ${i + 1}: select the product being purchased before saving a draft.`)
+    }
+    setFormError("")
+    setIsPending(true)
+    try {
+      const created = await createPurchase({
+        vendorId, invoiceRef: invoiceRef || undefined, godownId: godownId || undefined,
+        notes: notes || undefined, clientToken: submissionToken(purchaseTokenRef, "purchase"),
+        items: lines.map((l) => ({ itemType: "seed" as const, productId: l.productId, quantity: l.quantity, unit: "kg", unitPrice: l.unitPrice })),
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not save the purchase draft.")
+        return
+      }
+      setFormNotice(`${(created.data as any).purchase_no ?? "Purchase"} saved as a draft — no payable or payment has been recorded yet. Post it from the draft list below.`)
+      resetSubmissionToken(purchaseTokenRef)
+      setIsModalOpen(false)
+      await loadData()
+    } finally {
+      setIsPending(false)
+    }
+  }
+
+  const handlePostDraftPurchase = async (purchaseId: string) => {
+    if (draftPostPending) return
+    setDraftPostPending(purchaseId)
+    try {
+      const res = await postPurchase(purchaseId)
+      if (!res.success) { setFormError(res.error ?? "Could not post the purchase."); return }
+      setFormNotice(`Purchase ${(res.data as any)?.purchase_no ?? ""} posted — vendor payable recorded.`)
+      await loadData()
+    } finally { setDraftPostPending(null) }
+  }
+
   const handlePurchaseReturn = async (e: React.FormEvent) => {
     e.preventDefault()
     if (retPending) return
@@ -397,12 +443,12 @@ export default function PurchasesPage() {
                     {formatCurrency(p.balance_amount)}
                   </td>
                   <td className="py-3 text-center">
-                    <span className={p.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase"}>
-                      {p.status === "reversed" ? "Reversed" : "Posted"}
+                    <span className={p.status === "reversed" ? "px-2 py-0.5 rounded-md bg-red-500/15 text-red-600 dark:text-red-400 text-[10px] font-bold uppercase" : p.status === "draft" ? "px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] font-bold uppercase" : "px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold uppercase"}>
+                      {p.status === "reversed" ? "Reversed" : p.status === "draft" ? "Draft" : "Posted"}
                     </span>
                   </td>
                   <td className="py-3 text-center">
-                    <button type="button" onClick={() => setPrintPurchase(p)} className="px-2 py-1 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print</button>
+                    <button type="button" disabled={p.status !== "posted"} onClick={() => setPrintPurchase(p)} title={p.status === "posted" ? "Print purchase invoice" : "Printing is available only for posted purchases"} className="px-2 py-1 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer disabled:opacity-50">Print</button>
                     {p.status === "posted" && Number(p.balance_amount) > 0 && (
                       <button
                         type="button"
@@ -439,6 +485,21 @@ export default function PurchasesPage() {
         </div>
       </div>
 
+      {purchases.filter((x) => x.status === "draft").length > 0 && (
+        <div className="expensive-card p-5">
+          <h2 className="text-sm font-bold text-foreground mb-1">Draft purchases awaiting posting</h2>
+          <p className="text-xs text-muted-foreground mb-4">Drafts record nothing yet — no payable, no payment. Posting records the vendor payable; pay it from the Pay section below.</p>
+          <div className="space-y-2">
+            {purchases.filter((x) => x.status === "draft").map((x) => (
+              <div key={x.id} className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs">
+                <span className="font-mono font-bold">{x.purchase_no}</span>
+                <span className="text-muted-foreground">{x.vendor_name} — {formatCurrency(Number(x.total_amount || 0))} — draft only, nothing has moved yet</span>
+                <button type="button" disabled={draftPostPending === x.id} onClick={() => void handlePostDraftPurchase(x.id)} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{draftPostPending === x.id ? "Posting…" : "Post purchase"}</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Pay a posted purchase</h2>
         <p className="text-xs text-muted-foreground mb-4">Pay a posted purchase later, in full or in part. The payment leaves the selected cash account and settles only that vendor&apos;s purchase.</p>
@@ -454,7 +515,7 @@ export default function PurchasesPage() {
       {/* Creation Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-lg p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+          <div className="expensive-card w-full max-w-3xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <ShoppingCart className="h-4 w-4 text-emerald-500" />
@@ -473,7 +534,7 @@ export default function PurchasesPage() {
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="supplier-grower">Supplier / Grower</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="supplier-grower">Supplier / Grower *</label>
                   <div className="flex flex-wrap items-start gap-2"><select id="supplier-grower"
                     value={vendorId}
                     onChange={(e) => setVendorId(e.target.value)}
@@ -489,7 +550,7 @@ export default function PurchasesPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="unloading-godown">Unloading Godown</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="unloading-godown">Unloading Godown *</label>
                   <div className="flex flex-wrap items-start gap-2"><select id="unloading-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
@@ -508,7 +569,7 @@ export default function PurchasesPage() {
               <div className="space-y-3">
                 <p className="text-[11px] text-muted-foreground">Purchase lines — add as many products as this invoice covers. The total is the sum of all lines.</p>
                 {lines.map((line, idx) => (
-                  <div key={line.key} className="grid grid-cols-3 gap-3 items-end">
+                  <div key={line.key} className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
                     <div>
                       <label className="block font-medium text-foreground mb-1" htmlFor={`purchased-product-${line.key}`}>Purchased Product *</label>
                       <div className="flex flex-wrap items-start gap-2"><select id={`purchased-product-${line.key}`}
@@ -552,6 +613,12 @@ export default function PurchasesPage() {
                       )}
                     </div>
                   </div>
+                ))}
+                {lines.map((line) => (
+                  <p key={`amount-${line.key}`} className="text-[11px] text-muted-foreground">
+                    {products.find((x) => x.id === line.productId)?.name ?? "Line"}: <strong className="text-foreground">{formatCurrency((Number(line.quantity) || 0) * (Number(line.unitPrice) || 0))}</strong>
+                    {" "}({Number(line.quantity) || 0} kg × {formatCurrency(Number(line.unitPrice) || 0)} / kg)
+                  </p>
                 ))}
                 <button type="button" onClick={() => setLines((prev) => [...prev, { key: Date.now(), productId: products[0]?.id ?? "", quantity: 0, unitPrice: 0 }])} className="px-3 py-1.5 rounded-lg bg-card border border-border text-xs font-bold cursor-pointer">+ Add line</button>
               </div>
@@ -620,6 +687,14 @@ export default function PurchasesPage() {
                   Cancel
                 </button>
                 <button
+                  type="button"
+                  onClick={() => void handleSaveDraft()}
+                  disabled={isPending}
+                  className="px-4 py-2 rounded-lg bg-card border border-border text-foreground text-xs font-bold cursor-pointer disabled:opacity-60"
+                >
+                  Save as draft
+                </button>
+                <button
                   type="submit"
                   disabled={isPending}
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
@@ -661,6 +736,7 @@ export default function PurchasesPage() {
           <div><label className="block font-medium text-foreground mb-1" htmlFor="return-quantity">Return quantity *</label><input id="return-quantity" type="number" value={retQty} onChange={(e) => setRetQty(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="unit-price">Unit price *</label><input id="unit-price" type="number" value={retPrice} onChange={(e) => setRetPrice(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="reason">Reason *</label><input id="reason" value={retReason} onChange={(e) => setRetReason(e.target.value)} placeholder="Why is this being returned?" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <p className="sm:col-span-2 lg:col-span-4 text-[11px] text-muted-foreground">Return amount: <strong className="text-foreground">{formatCurrency((Number(retQty) || 0) * (Number(retPrice) || 0))}</strong> ({Number(retQty) || 0} kg × {formatCurrency(Number(retPrice) || 0)} / kg)</p>
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={retPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{retPending ? "Recording…" : "Record purchase return"}</button></div>
         </form>
       </div>
@@ -676,7 +752,7 @@ export default function PurchasesPage() {
           <div className="hidden print:block mt-2">
             <PurchasePrint
               purchaseNo={printPurchase.purchase_no}
-              date={printPurchase.date?.slice(0, 10)}
+              date={formatDate(printPurchase.date)}
               vendorName={printPurchase.vendor_name}
               godown={printPurchase.godown_name}
               invoiceRef={printPurchase.invoice_ref}
