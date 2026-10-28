@@ -14,7 +14,8 @@ import {
   Boxes,
 } from "lucide-react"
 import { listJobs, getJob, createJobDraft, postJob, reverseJob, deleteJobDraft } from "@/app/actions/machinery"
-import { listMachines, listParties, listProducts, listGodowns } from "@/app/actions/masters"
+import { listMachines, listParties, listProducts, listGodowns, createParty, createGodown, createProduct, createMachine } from "@/app/actions/masters"
+import { InlineAdd, PARTY_FIELDS, GODOWN_FIELDS, PRODUCT_FIELDS, MACHINE_FIELDS } from "@/components/print/inline-add"
 import { listProcessingTypes } from "@/app/actions/processing-types"
 import { MachineryJobPrint } from "@/components/print/machinery-job-print"
 import { PrintButton } from "@/components/print/print-button"
@@ -439,10 +440,10 @@ export default function MachineryJobsPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="customer-grain-owner">Customer / Grain Owner</label>
-                  <select id="customer-grain-owner"
+                  <div className="flex flex-wrap items-start gap-2"><select id="customer-grain-owner"
                     value={customerId}
                     onChange={(e) => setCustomerId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   >
                     {customers.map((c) => (
@@ -450,15 +451,15 @@ export default function MachineryJobsPage() {
                         {c.name}
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setCustomers(list.filter((x) => x.type === "customer" || x.type === "both")); } setCustomerId(id); }} /></div>
                 </div>
 
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="machine-cleaner-grader">Machine Cleaner / Grader</label>
-                  <select id="machine-cleaner-grader"
+                  <div className="flex flex-wrap items-start gap-2"><select id="machine-cleaner-grader"
                     value={machineId}
                     onChange={(e) => setMachineId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   >
                     {machines.map((m) => (
@@ -466,16 +467,16 @@ export default function MachineryJobsPage() {
                         {m.name}
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Machine" fields={MACHINE_FIELDS} createAction={async (v) => createMachine({ code: v.code, name: v.name, processing_type: v.processing_type })} onCreated={async (id) => { const r = await listMachines(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setMachines(list); } setMachineId(id); }} /></div>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="godown">Godown</label>
-                  <select id="godown" value={godownId} onChange={(e) => setGodownId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                  <div className="flex flex-wrap items-start gap-2"><select id="godown" value={godownId} onChange={(e) => setGodownId(e.target.value)} className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
                     {godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}
-                  </select>
+                  </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setGodowns(list); } setGodownId(id); }} /></div>
                 </div>
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="processing-type">Processing Type</label>
@@ -541,14 +542,14 @@ export default function MachineryJobsPage() {
                   <div key={line.key} className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-2 rounded-md bg-background border border-border">
                     <div>
                       <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-input-product-${line.key}`}>Input Product</label>
-                      <select id={`job-input-product-${line.key}`}
+                      <div className="flex flex-wrap items-start gap-2"><select id={`job-input-product-${line.key}`}
                         value={line.inputProductId}
                         onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, inputProductId: e.target.value } : l)))}
-                        className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
                       >
                         <option value="">Select product</option>
                         {products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
-                      </select>
+                      </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setJobLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, inputProductId: id } : l))); }} /></div>
                     </div>
                     <div>
                       <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-input-qty-${line.key}`}>Input (kg)</label>
@@ -558,14 +559,14 @@ export default function MachineryJobsPage() {
                     </div>
                     <div>
                       <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-output-product-${line.key}`}>Output Product</label>
-                      <select id={`job-output-product-${line.key}`}
+                      <div className="flex flex-wrap items-start gap-2"><select id={`job-output-product-${line.key}`}
                         value={line.outputProductId}
                         onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, outputProductId: e.target.value } : l)))}
-                        className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
                       >
                         <option value="">No output product</option>
                         {products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
-                      </select>
+                      </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setJobLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, outputProductId: id } : l))); }} /></div>
                     </div>
                     <div>
                       <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-output-qty-${line.key}`}>Output (kg)</label>
@@ -575,14 +576,14 @@ export default function MachineryJobsPage() {
                     </div>
                     <div>
                       <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-byproduct-product-${line.key}`}>By-Product (stocked)</label>
-                      <select id={`job-byproduct-product-${line.key}`}
+                      <div className="flex flex-wrap items-start gap-2"><select id={`job-byproduct-product-${line.key}`}
                         value={line.byproductProductId}
                         onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, byproductProductId: e.target.value } : l)))}
-                        className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
                       >
                         <option value="">No by-product</option>
                         {products.filter((p) => p.category === "by_product").map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
-                      </select>
+                      </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setJobLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, byproductProductId: id } : l))); }} /></div>
                     </div>
                     <div>
                       <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-byproduct-qty-${line.key}`}>By-Product (kg)</label>

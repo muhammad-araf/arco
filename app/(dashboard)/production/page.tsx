@@ -19,7 +19,8 @@ import {
 } from "lucide-react"
 import { listBatches, getBatch, createBatchDraft, postBatch, reverseBatch, deleteBatchDraft, listRecipes, createRecipe, createRecipeVersion, setBatchVarianceReason } from "@/app/actions/production"
 import { getStockSummary } from "@/app/actions/inventory"
-import { listGodowns, listProducts, listMachines, listPackagingTypes, listParties } from "@/app/actions/masters"
+import { listGodowns, listProducts, listMachines, listPackagingTypes, listParties, createParty, createGodown, createProduct, createMachine } from "@/app/actions/masters"
+import { InlineAdd, PARTY_FIELDS, GODOWN_FIELDS, PRODUCT_FIELDS, MACHINE_FIELDS } from "@/components/print/inline-add"
 import { BatchSheetPrint } from "@/components/print/batch-sheet-print"
 import { PrintButton } from "@/components/print/print-button"
 import { ProductionBatch, Godown, Product, Machine, Recipe } from "@/lib/types/database"
@@ -604,10 +605,10 @@ export default function ProductionPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="machine-cleaning-plant">Machine / Cleaning Plant</label>
-                  <select id="machine-cleaning-plant"
+                  <div className="flex flex-wrap items-start gap-2"><select id="machine-cleaning-plant"
                     value={machineId}
                     onChange={(e) => setMachineId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   >
                     {machines.map((m) => (
@@ -615,15 +616,15 @@ export default function ProductionPage() {
                         {m.name} ({m.processing_type})
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Machine" fields={MACHINE_FIELDS} createAction={async (v) => createMachine({ code: v.code, name: v.name, processing_type: v.processing_type })} onCreated={async (id) => { const r = await listMachines(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setMachines(list); } setMachineId(id); }} /></div>
                 </div>
 
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="target-godown">Target Godown</label>
-                  <select id="target-godown"
+                  <div className="flex flex-wrap items-start gap-2"><select id="target-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   >
                     {godowns.map((g) => (
@@ -631,7 +632,7 @@ export default function ProductionPage() {
                         {g.name}
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setGodowns(list); } setGodownId(id); }} /></div>
                 </div>
               </div>
 
@@ -639,16 +640,16 @@ export default function ProductionPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="batch-customer">Customer</label>
-                  <select id="batch-customer"
+                  <div className="flex flex-wrap items-start gap-2"><select id="batch-customer"
                     value={batchCustomerId}
                     onChange={(e) => setBatchCustomerId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                   >
                     <option value="">No customer — company batch</option>
                     {parties.map((p: any) => (
                       <option key={p.id} value={p.id}>{p.name}</option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setParties(list); } setBatchCustomerId(id); }} /></div>
                 </div>
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="batch-order-ref">Order Ref</label>
@@ -684,16 +685,16 @@ export default function ProductionPage() {
                 {isCustomerOwned && (
                   <div className="sm:col-span-2">
                     <label className="block font-medium text-foreground mb-1" htmlFor="batch-owner-party">Owner Party (stock pool)</label>
-                    <select id="batch-owner-party"
+                    <div className="flex flex-wrap items-start gap-2"><select id="batch-owner-party"
                       value={batchOwnerPartyId}
                       onChange={(e) => setBatchOwnerPartyId(e.target.value)}
-                      className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                      className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     >
                       <option value="">Use the customer above as owner</option>
                       {parties.map((p: any) => (
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
-                    </select>
+                    </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setParties(list); } setBatchOwnerPartyId(id); }} /></div>
                   </div>
                 )}
               </div>
@@ -730,10 +731,10 @@ export default function ProductionPage() {
                   <div key={line.key} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`raw-seed-product-${line.key}`}>Raw Seed Product</label>
-                      <select id={`raw-seed-product-${line.key}`}
+                      <div className="flex flex-wrap items-start gap-2"><select id={`raw-seed-product-${line.key}`}
                         value={line.productId}
                         onChange={(e) => setInputLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, productId: e.target.value } : l)))}
-                        className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
                       >
                         <option value="">Select product</option>
                         {products
@@ -743,7 +744,7 @@ export default function ProductionPage() {
                               {p.name}
                             </option>
                           ))}
-                      </select>
+                      </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setInputLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, productId: id } : l))); }} /></div>
                     </div>
 
                     <div>
@@ -776,10 +777,10 @@ export default function ProductionPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="finished-output-seed">Finished Output Seed</label>
-                    <select id="finished-output-seed"
+                    <div className="flex flex-wrap items-start gap-2"><select id="finished-output-seed"
                       value={outputProductId}
                       onChange={(e) => setOutputProductId(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                      className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
                     >
                       {products
                         .filter((p) => p.category === "finished_seed" || p.category === "intermediate")
@@ -788,7 +789,7 @@ export default function ProductionPage() {
                             {p.name}
                           </option>
                         ))}
-                    </select>
+                    </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setOutputProductId(id); }} /></div>
                   </div>
 
                   <div>
@@ -805,10 +806,10 @@ export default function ProductionPage() {
 
                   <div>
                     <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="by-product-phok-chhilka">By-Product (Phok/Chhilka)</label>
-                    <select id="by-product-phok-chhilka"
+                    <div className="flex flex-wrap items-start gap-2"><select id="by-product-phok-chhilka"
                       value={byProductId}
                       onChange={(e) => setByProductId(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
+                      className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
                     >
                       {products
                         .filter((p) => p.category === "by_product")
@@ -817,7 +818,7 @@ export default function ProductionPage() {
                             {p.name}
                           </option>
                         ))}
-                    </select>
+                    </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setByProductId(id); }} /></div>
                   </div>
 
                   <div>
