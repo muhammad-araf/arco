@@ -138,30 +138,37 @@ export default function MachineryJobsPage() {
     serviceCharge = 0
   }
 
+  // Spec §7: required fields, positive weights, non-negative waste and
+  // rate — output + by-product + waste may not exceed input. Shared
+  // by Post and Save as draft; each failure names its field, shown
+  // under the field and in the banner.
+  const validateJobForm = (): { field: string; message: string } | null => {
+    if (!customerId) return { field: "customer", message: "Select the customer / grain owner for this job." }
+    if (!machineId) return { field: "machine", message: "Select the machine that will run this job." }
+    if (!godownId) return { field: "godown", message: "Select the godown where this job runs." }
+    if (!processingType.trim()) return { field: "processing-type", message: "Select or enter the processing type." }
+    if (!jobLines.length) return { field: "job-lines", message: "Add at least one job line." }
+    const badLine = jobLines.find((l) => !l.inputProductId)
+    if (badLine) return { field: `job-input-product-${badLine.key}`, message: "Every job line needs an input product." }
+    if (!isPositive(totalInputWeight)) return { field: "total-input", message: "Input weight must be greater than zero." }
+    if (totalOutputWeight < 0 || totalByproductWeight < 0 || wasteWeight < 0) return { field: "totals", message: "Output, by-product and waste weights cannot be negative." }
+    if (totalOutputWeight + totalByproductWeight + wasteWeight > totalInputWeight) return { field: "totals", message: `Output (${totalOutputWeight} kg) + by-product (${totalByproductWeight} kg) + waste (${wasteWeight} kg) exceeds input (${totalInputWeight} kg). Correct the weights before saving.` }
+    if (rate < 0) return { field: "rate", message: "Rate cannot be negative." }
+    if (rateBasis === "per_bag" && !(bagCount > 0)) return { field: "bag-count", message: "Enter the actual bag count for per-bag billing." }
+    if (bagCount < 0) return { field: "bag-count", message: "Bag count cannot be negative." }
+    if (rateBasis === "per_maund" && !(maundKg > 0)) return { field: "maund-kg", message: "Enter the client-approved kg per maund for per-maund billing." }
+    return null
+  }
+
   const handleCreateJob = (e: React.FormEvent) => {
     e.preventDefault()
     if (isPending) return
-    // Spec §7: required fields, positive weights, non-negative waste and
-    // rate — output + by-product + waste may not exceed input. Each
-    // failure names its field, shown under the field and in the banner.
-    const failJob = (field: string, message: string) => {
-      setJobFieldErr(field)
-      setFormError(message)
+    const problem = validateJobForm()
+    if (problem) {
+      setJobFieldErr(problem.field)
+      setFormError(problem.message)
+      return
     }
-    if (!customerId) { failJob("customer", "Select the customer / grain owner for this job."); return }
-    if (!machineId) { failJob("machine", "Select the machine that will run this job."); return }
-    if (!godownId) { failJob("godown", "Select the godown where this job runs."); return }
-    if (!processingType.trim()) { failJob("processing-type", "Select or enter the processing type."); return }
-    if (!jobLines.length) { failJob("job-lines", "Add at least one job line."); return }
-    const badLine = jobLines.find((l) => !l.inputProductId)
-    if (badLine) { failJob(`job-input-product-${badLine.key}`, "Every job line needs an input product."); return }
-    if (!isPositive(totalInputWeight)) { failJob("total-input", "Input weight must be greater than zero."); return }
-    if (totalOutputWeight < 0 || totalByproductWeight < 0 || wasteWeight < 0) { failJob("totals", "Output, by-product and waste weights cannot be negative."); return }
-    if (totalOutputWeight + totalByproductWeight + wasteWeight > totalInputWeight) { failJob("totals", `Output (${totalOutputWeight} kg) + by-product (${totalByproductWeight} kg) + waste (${wasteWeight} kg) exceeds input (${totalInputWeight} kg). Correct the weights before saving.`); return }
-    if (rate < 0) { failJob("rate", "Rate cannot be negative."); return }
-    if (rateBasis === "per_bag" && !(bagCount > 0)) { failJob("bag-count", "Enter the actual bag count for per-bag billing."); return }
-    if (bagCount < 0) { failJob("bag-count", "Bag count cannot be negative."); return }
-    if (rateBasis === "per_maund" && !(maundKg > 0)) { failJob("maund-kg", "Enter the client-approved kg per maund for per-maund billing."); return }
     setJobFieldErr("")
     setFormError("")
     const selectedCust = customers.find((c) => c.id === customerId)
@@ -202,28 +209,63 @@ export default function MachineryJobsPage() {
     setShowConfirm(true)
   }
 
+  // The draft payload both Save as draft and the post flow use.
+  const jobDraftPayload = () => {
+    const first = jobLines[0]
+    return {
+      customerId, machineId, godownId, processingType,
+      operatorName: operatorName || undefined,
+      inputProductId: first?.inputProductId ?? "", inputWeightKg: totalInputWeight,
+      outputProductId: first?.outputProductId || undefined, outputWeightKg: totalOutputWeight,
+      byproductProductId: first?.byproductProductId || undefined, byproductWeightKg: totalByproductWeight,
+      wasteWeightKg: wasteWeight,
+      lines: jobLines.map((l) => ({
+        inputProductId: l.inputProductId, inputQtyKg: Number(l.inputQty) || 0,
+        outputProductId: l.outputProductId || undefined, outputQtyKg: Number(l.outputQty) || 0,
+        byproductProductId: l.byproductProductId || undefined, byproductQtyKg: Number(l.byproductQty) || 0,
+      })),
+      bags: bagCount > 0 ? bagCount : undefined,
+      maundKg: maundKg > 0 ? maundKg : undefined,
+      rateBasis, rate, isCustomerOwned, notes: notes || undefined,
+    }
+  }
+
+  // Save as draft: the workflow already supports drafts (draft rows
+  // post from the list), but the dialog only offered Save & Record —
+  // so a job could only become a draft by a failed post. This writes
+  // the same draft without posting it.
+  const handleSaveJobDraft = async () => {
+    if (isPending) return
+    const problem = validateJobForm()
+    if (problem) {
+      setJobFieldErr(problem.field)
+      setFormError(problem.message)
+      return
+    }
+    setJobFieldErr("")
+    setFormError("")
+    setIsPending(true)
+    try {
+      const created = await createJobDraft(jobDraftPayload())
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not save the job draft.")
+        return
+      }
+      setFormNotice(`${(created.data as any)?.job_no ?? "Job"} saved as draft — post it from the list below.`)
+      setIsModalOpen(false)
+      await loadData()
+    } finally {
+      setIsPending(false)
+    }
+  }
+
   const handleConfirmJob = async () => {
     if (!draftJob || jobGuard.current) return
     jobGuard.current = true
     setIsPending(true)
     try {
       const first = jobLines[0]
-      const created = await createJobDraft({
-        customerId, machineId, godownId, processingType,
-        operatorName: operatorName || undefined,
-        inputProductId: first?.inputProductId ?? "", inputWeightKg: totalInputWeight,
-        outputProductId: first?.outputProductId || undefined, outputWeightKg: totalOutputWeight,
-        byproductProductId: first?.byproductProductId || undefined, byproductWeightKg: totalByproductWeight,
-        wasteWeightKg: wasteWeight,
-        lines: jobLines.map((l) => ({
-          inputProductId: l.inputProductId, inputQtyKg: Number(l.inputQty) || 0,
-          outputProductId: l.outputProductId || undefined, outputQtyKg: Number(l.outputQty) || 0,
-          byproductProductId: l.byproductProductId || undefined, byproductQtyKg: Number(l.byproductQty) || 0,
-        })),
-        bags: bagCount > 0 ? bagCount : undefined,
-        maundKg: maundKg > 0 ? maundKg : undefined,
-        rateBasis, rate, isCustomerOwned, notes: notes || undefined,
-      })
+      const created = await createJobDraft(jobDraftPayload())
       if (!created.success || !(created.data as any)?.id) {
         setFormError(created.error ?? "Could not create the machinery job draft.")
         return
@@ -707,6 +749,14 @@ export default function MachineryJobsPage() {
                   className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer"
                 >
                   Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveJobDraft}
+                  disabled={isPending}
+                  className="px-4 py-2 rounded-lg bg-background border border-border text-foreground text-xs font-bold cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <span>{isPending ? "Saving…" : "Save as draft"}</span>
                 </button>
                 <button
                   type="submit"
