@@ -25,6 +25,7 @@ import { BatchSheetPrint } from "@/components/print/batch-sheet-print"
 import { PrintButton } from "@/components/print/print-button"
 import { ProductionBatch, Godown, Product, Machine, Recipe } from "@/lib/types/database"
 import { formatWeight, formatDate } from "@/lib/utils"
+import { lineSharePct } from "@/lib/dialog-calcs"
 import {
   AlertBanner,
   ConfirmDialog,
@@ -61,6 +62,14 @@ export default function ProductionPage() {
   const [isLoading, setIsLoading] = React.useState(true)
   const [formError, setFormError] = React.useState("")
   const [formNotice, setFormNotice] = React.useState("")
+  const [batchFieldErr, setBatchFieldErr] = React.useState("")
+  const [recipeFieldErr, setRecipeFieldErr] = React.useState("")
+  // Inline error under one field: rendered only when the latest
+  // validation failure names that field (banner keeps the message too).
+  const inlineErr = (key: string, current: string) =>
+    current === key && formError ? (
+      <p className="mt-1 text-[11px] font-medium text-red-600 dark:text-red-400">{formError}</p>
+    ) : null
   const [isPending, setIsPending] = React.useState(false)
   const [showPostConfirm, setShowPostConfirm] = React.useState(false)
   const [draftBatch, setDraftBatch] = React.useState<ProductionBatch | null>(null)
@@ -184,33 +193,60 @@ export default function ProductionPage() {
     }
   }
 
-  const handlePostBatch = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isPending) return
-    // Spec §6.2/§6.4: required fields, positive input, mass balance, and
-    // the stock guard — each failure names the fix, never a silent return.
-    if (!machineId) return setFormError("Select the machine / cleaning plant for this batch.")
-    if (!godownId) return setFormError("Select the target godown for this batch.")
-    if (!inputLines.length) return setFormError("Add at least one input line.")
-    if (inputLines.some((l) => !l.productId)) return setFormError("Every input line needs a product.")
-    if (inputLines.some((l) => (Number(l.qty) || 0) < 0)) return setFormError("Input quantities cannot be negative.")
-    if (!outputProductId) return setFormError("Select the finished output product.")
-    if (!isPositive(totalInputKg)) return setFormError("Input weight must be greater than zero.")
-    if (outputWeightKg < 0 || byProductKg < 0 || wasteKg < 0) return setFormError("Output, by-product and waste weights cannot be negative.")
-    if (outputWeightKg + byProductKg + wasteKg > totalInputKg) return setFormError(`Mass balance check failed: output (${outputWeightKg} kg) + by-product (${byProductKg} kg) + waste (${wasteKg} kg) exceeds input (${totalInputKg} kg). Correct the weights before posting.`)
-    if (bagsConsumed < 0 || packingRatePerBag < 0 || damagedBags < 0) return setFormError("Bags consumed, packing rate and damaged bags cannot be negative.")
-    // Client pre-check, aggregated per product and scoped to the
-    // owner pool (the server re-guards the same pool).
+  // Field-level validation shared by Post and Save as draft: returns
+  // the field key + message for the first failure, so the dialog can
+  // show the error under the field as well as in the banner. No rule
+  // changed here — the checks are the ones the form already ran.
+  const validateBatchForm = (): { field: string; message: string } | null => {
+    if (!machineId) return { field: "machine", message: "Select the machine / cleaning plant for this batch." }
+    if (!godownId) return { field: "godown", message: "Select the target godown for this batch." }
+    if (!inputLines.length) return { field: "inputs", message: "Add at least one input line." }
+    const badProduct = inputLines.find((l) => !l.productId)
+    if (badProduct) return { field: `input-product-${badProduct.key}`, message: "Every input line needs a product." }
+    const badQty = inputLines.find((l) => (Number(l.qty) || 0) < 0)
+    if (badQty) return { field: `input-qty-${badQty.key}`, message: "Input quantities cannot be negative." }
+    if (!outputProductId) return { field: "output-product", message: "Select the finished output product." }
+    if (!isPositive(totalInputKg)) return { field: "total-input", message: "Input weight must be greater than zero." }
+    if (outputWeightKg < 0 || byProductKg < 0 || wasteKg < 0) return { field: "output", message: "Output, by-product and waste weights cannot be negative." }
+    if (outputWeightKg + byProductKg + wasteKg > totalInputKg) return { field: "output", message: `Mass balance check failed: output (${outputWeightKg} kg) + by-product (${byProductKg} kg) + waste (${wasteKg} kg) exceeds input (${totalInputKg} kg). Correct the weights before posting.` }
+    if (bagsConsumed < 0 || packingRatePerBag < 0 || damagedBags < 0) return { field: "output", message: "Bags consumed, packing rate and damaged bags cannot be negative." }
     const aggregated = new Map<string, number>()
     for (const l of inputLines) aggregated.set(l.productId, (aggregated.get(l.productId) ?? 0) + (Number(l.qty) || 0))
     for (const [productId, qty] of aggregated) {
       const available = stockForProduct(productId)
       if (qty > available) {
-        const name = products.find((p) => p.id === productId)?.name ?? productId
+        const name = products.find((x) => x.id === productId)?.name ?? productId
         const pool = isCustomerOwned ? "for this owner" : "in company stock"
-        return setFormError(`Insufficient input stock in this godown ${pool}: ${available} kg of ${name} available, but ${qty} kg requested. Reduce the batch size or choose another godown.`)
+        return { field: "total-input", message: `Insufficient input stock in this godown ${pool}: ${available} kg of ${name} available, but ${qty} kg requested. Reduce the batch size or choose another godown.` }
       }
     }
+    return null
+  }
+
+  // The draft payload both Post (draft-then-post) and Save as draft use.
+  const batchDraftPayload = () => ({
+    recipeId: recipeId || undefined,
+    machineId, godownId, plannedSizeKg: totalInputKg,
+    inputs: inputLines.map((l) => ({ productId: l.productId, actualQtyKg: Number(l.qty) || 0 })),
+    outputProductId, actualOutputKg: outputWeightKg,
+    byproductProductId: byProductId || undefined, byproductKg: byProductKg, wasteKg,
+    packagingTypeId: packagingTypeId || undefined, bagsConsumed, packingRatePerBag, damagedBags,
+    notes: batchNotes || undefined,
+    isCustomerOwned, ownerPartyId: effectiveOwnerPartyId ?? undefined,
+    customerId: batchCustomerId || undefined, orderRef: batchOrderRef || undefined,
+    operatorName: batchOperatorName || undefined, varianceReason: varianceReason || undefined,
+  })
+
+  const handlePostBatch = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (isPending) return
+    const problem = validateBatchForm()
+    if (problem) {
+      setBatchFieldErr(problem.field)
+      setFormError(problem.message)
+      return
+    }
+    setBatchFieldErr("")
     setFormError("")
     const selectedMachine = machines.find((m) => m.id === machineId)
     const selectedGodown = godowns.find((g) => g.id === godownId)
@@ -236,23 +272,41 @@ export default function ProductionPage() {
     setShowPostConfirm(true)
   }
 
+  // Save as draft: the workflow already supports drafts (draft rows
+  // post from the list), but the dialog only offered Post — so a
+  // batch could only become a draft by a failed post. This writes the
+  // same draft without posting it.
+  const handleSaveBatchDraft = async () => {
+    if (isPending) return
+    const problem = validateBatchForm()
+    if (problem) {
+      setBatchFieldErr(problem.field)
+      setFormError(problem.message)
+      return
+    }
+    setBatchFieldErr("")
+    setFormError("")
+    setIsPending(true)
+    try {
+      const created = await createBatchDraft(batchDraftPayload())
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not save the batch draft.")
+        return
+      }
+      setFormNotice(`${(created.data as any)?.batch_no ?? "Batch"} saved as draft — post it from the list below.`)
+      setIsBatchModalOpen(false)
+      await loadData()
+    } finally {
+      setIsPending(false)
+    }
+  }
+
   const handleConfirmPost = async () => {
     if (!draftBatch || postGuard.current) return
     postGuard.current = true
     setIsPending(true)
     try {
-      const created = await createBatchDraft({
-        recipeId: recipeId || undefined,
-        machineId, godownId, plannedSizeKg: totalInputKg,
-        inputs: inputLines.map((l) => ({ productId: l.productId, actualQtyKg: Number(l.qty) || 0 })),
-        outputProductId, actualOutputKg: outputWeightKg,
-        byproductProductId: byProductId || undefined, byproductKg: byProductKg, wasteKg,
-        packagingTypeId: packagingTypeId || undefined, bagsConsumed, packingRatePerBag, damagedBags,
-        notes: batchNotes || undefined,
-        isCustomerOwned, ownerPartyId: effectiveOwnerPartyId ?? undefined,
-        customerId: batchCustomerId || undefined, orderRef: batchOrderRef || undefined,
-        operatorName: batchOperatorName || undefined, varianceReason: varianceReason || undefined,
-      })
+      const created = await createBatchDraft(batchDraftPayload())
       if (!created.success || !(created.data as any)?.id) {
         setFormError(created.error ?? "Could not create the batch draft.")
         return
@@ -282,20 +336,27 @@ export default function ProductionPage() {
   const handleCreateRecipe = async (e: React.FormEvent) => {
     e.preventDefault()
     if (recipePending) return
+    const failRecipe = (field: string, message: string) => {
+      setRecipeFieldErr(field)
+      setFormError(message)
+    }
     if (!recipeCode.trim() || !recipeName.trim() || !recipeOutputId) {
-      setFormError("Recipe code, name and output product are required.")
+      if (!recipeCode.trim()) failRecipe("recipe-code", "Recipe code is required.")
+      else if (!recipeName.trim()) failRecipe("recipe-name", "Recipe name is required.")
+      else failRecipe("recipe-output", "Recipe output product is required.")
       return
     }
     const items = recipeItems.filter((i) => i.productId)
     if (!items.length) {
-      setFormError("A recipe needs at least one input product.")
+      failRecipe("recipe-items", "A recipe needs at least one input product.")
       return
     }
-    const ratioSum = items.reduce((s, i) => s + (Number(i.ratioPct) || 0), 0)
+    const ratioSum = items.reduce((acc, i) => acc + (Number(i.ratioPct) || 0), 0)
     if (Math.abs(ratioSum - 100) > 0.01) {
-      setFormError(`Recipe input ratios must sum to 100 (got ${ratioSum}).`)
+      failRecipe("recipe-ratio", `Recipe input ratios must sum to 100 (got ${ratioSum}).`)
       return
     }
+    setRecipeFieldErr("")
     setRecipePending(true)
     try {
       const exists = recipes.find((r) => r.code === recipeCode.trim())
@@ -384,6 +445,7 @@ export default function ProductionPage() {
       }
       setFormNotice(`${batch.batch_no} posted.`)
       await loadData()
+      await handlePrintBatch(batch)
     } finally {
       setIsPostingDraft(false)
     }
@@ -604,7 +666,7 @@ export default function ProductionPage() {
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="machine-cleaning-plant">Machine / Cleaning Plant</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="machine-cleaning-plant">Machine / Cleaning Plant *</label>
                   <div className="flex flex-wrap items-start gap-2"><select id="machine-cleaning-plant"
                     value={machineId}
                     onChange={(e) => setMachineId(e.target.value)}
@@ -617,10 +679,11 @@ export default function ProductionPage() {
                       </option>
                     ))}
                   </select> <InlineAdd label="Machine" fields={MACHINE_FIELDS} createAction={async (v) => createMachine({ code: v.code, name: v.name, processing_type: v.processing_type })} onCreated={async (id) => { const r = await listMachines(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setMachines(list); } setMachineId(id); }} /></div>
+                  {inlineErr("machine", batchFieldErr)}
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="target-godown">Target Godown</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="target-godown">Target Godown *</label>
                   <div className="flex flex-wrap items-start gap-2"><select id="target-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
@@ -633,6 +696,7 @@ export default function ProductionPage() {
                       </option>
                     ))}
                   </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setGodowns(list); } setGodownId(id); }} /></div>
+                  {inlineErr("godown", batchFieldErr)}
                 </div>
               </div>
 
@@ -730,7 +794,7 @@ export default function ProductionPage() {
                 {inputLines.map((line, idx) => (
                   <div key={line.key} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`raw-seed-product-${line.key}`}>Raw Seed Product</label>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`raw-seed-product-${line.key}`}>Raw Seed Product *</label>
                       <div className="flex flex-wrap items-start gap-2"><select id={`raw-seed-product-${line.key}`}
                         value={line.productId}
                         onChange={(e) => setInputLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, productId: e.target.value } : l)))}
@@ -745,10 +809,11 @@ export default function ProductionPage() {
                             </option>
                           ))}
                       </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setInputLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, productId: id } : l))); }} /></div>
+                      {inlineErr(`input-product-${line.key}`, batchFieldErr)}
                     </div>
 
                     <div>
-                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`production-input-weight-kg-${line.key}`}>Input Weight (kg){line.productId ? ` — in godown: ${formatWeight(stockForProduct(line.productId))}` : ""}</label>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`production-input-weight-kg-${line.key}`}>Input Weight (kg) *{line.productId ? ` — in godown: ${formatWeight(stockForProduct(line.productId))}` : ""}</label>
                       <div className="flex gap-2">
                         <input id={`production-input-weight-kg-${line.key}`}
                           type="number"
@@ -762,6 +827,8 @@ export default function ProductionPage() {
                           <button type="button" onClick={() => setInputLines((lines) => lines.filter((l) => l.key !== line.key))} className="px-2 rounded-md bg-muted text-muted-foreground text-xs font-bold cursor-pointer" title="Remove this input line">✕</button>
                         )}
                       </div>
+                      <p className="mt-1 text-[11px] text-muted-foreground">Share of total input: {totalInputKg > 0 ? `${lineSharePct(Number(line.qty) || 0, totalInputKg)}%` : "—"}</p>
+                      {inlineErr(`input-qty-${line.key}`, batchFieldErr)}
                     </div>
                   </div>
                 ))}
@@ -776,7 +843,7 @@ export default function ProductionPage() {
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="finished-output-seed">Finished Output Seed</label>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="finished-output-seed">Finished Output Seed *</label>
                     <div className="flex flex-wrap items-start gap-2"><select id="finished-output-seed"
                       value={outputProductId}
                       onChange={(e) => setOutputProductId(e.target.value)}
@@ -790,10 +857,11 @@ export default function ProductionPage() {
                           </option>
                         ))}
                     </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setOutputProductId(id); }} /></div>
+                    {inlineErr("output-product", batchFieldErr)}
                   </div>
 
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="usable-output-kg">Usable Output (kg)</label>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="usable-output-kg">Usable Output (kg) *</label>
                     <input id="usable-output-kg"
                       type="number"
                       value={outputWeightKg}
@@ -853,6 +921,15 @@ export default function ProductionPage() {
                 </div>
               </div>
 
+              <div className="flex flex-wrap gap-4 text-[11px] text-muted-foreground">
+                <span>Output: <strong className="text-foreground font-mono">{calculatedYield}% of input</strong></span>
+                <span>By-product: <strong className="text-foreground font-mono">{totalInputKg > 0 ? Math.round((byProductKg / totalInputKg) * 100) : 0}% of input</strong></span>
+                <span>Waste: <strong className="text-foreground font-mono">{totalInputKg > 0 ? Math.round((wasteKg / totalInputKg) * 100) : 0}% of input</strong></span>
+              </div>
+              {inlineErr("output", batchFieldErr)}
+              {inlineErr("total-input", batchFieldErr)}
+              {inlineErr("inputs", batchFieldErr)}
+
               {/* Batch packing moved to the Packing page: pack a
                   batch's output there instead of inside this form. */}
               <div className="p-3 rounded-lg bg-muted border border-border space-y-2">
@@ -895,10 +972,18 @@ export default function ProductionPage() {
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setIsBatchModalOpen(false)}
+                  onClick={() => { setIsBatchModalOpen(false); setBatchFieldErr("") }}
                   className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer"
                 >
                   Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveBatchDraft}
+                  disabled={isPending}
+                  className="px-4 py-2 rounded-lg bg-background border border-border text-foreground text-xs font-bold cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <span>{isPending ? "Saving…" : "Save as draft"}</span>
                 </button>
                 <button
                   type="submit"
@@ -1053,7 +1138,7 @@ export default function ProductionPage() {
         <div className="hidden print:block">
           <BatchSheetPrint
             batchNo={selectedBatchForPrint.batch_no}
-            date={selectedBatchForPrint.date}
+            date={formatDate(selectedBatchForPrint.date)}
             status={(selectedBatchForPrint as any).status}
             recipeName={(selectedBatchForPrint as any).recipe_id ? recipes.find((r: any) => r.id === (selectedBatchForPrint as any).recipe_id)?.name : undefined}
             recipeVersion={(selectedBatchForPrint as any).recipe_version_used ?? undefined}
@@ -1082,15 +1167,15 @@ export default function ProductionPage() {
         <p className="text-xs text-muted-foreground mb-4">Saving with an existing code creates a new version. Old versions are kept, never overwritten.</p>
         <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Code</th><th className="pb-2">Name</th><th className="pb-2">Version</th><th className="pb-2">Expected yield</th></tr></thead>
           <tbody className="divide-y divide-border">
-            {recipes.length === 0 && <tr><td colSpan={4} className="py-4 text-muted-foreground">No recipes yet — create the first one below.</td></tr>}
+            {recipes.length === 0 && (<tr><td colSpan={4} className="py-4"><EmptyState title="No recipes yet" hint="A recipe sets the input mix for a batch. Fill in the form below to create the first one." /></td></tr>)}
             {recipes.map((r: any) => (<tr key={r.id}><td className="py-2 font-mono">{r.code}</td><td className="py-2 font-semibold">{r.name}</td><td className="py-2">{r.version}</td><td className="py-2">{r.expected_yield_pct ?? "—"}%</td></tr>))}
           </tbody></table></div>
         <form onSubmit={handleCreateRecipe} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="code">Code *</label><input id="code" value={recipeCode} onChange={(e) => setRecipeCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="name">Name *</label><input id="name" value={recipeName} onChange={(e) => setRecipeName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="output-product">Output product *</label><select id="output-product" value={recipeOutputId} onChange={(e) => setRecipeOutputId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select output</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="code">Code *</label>{inlineErr("recipe-code", recipeFieldErr)}<input id="code" value={recipeCode} onChange={(e) => setRecipeCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="name">Name *</label>{inlineErr("recipe-name", recipeFieldErr)}<input id="name" value={recipeName} onChange={(e) => setRecipeName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="output-product">Output product *</label>{inlineErr("recipe-output", recipeFieldErr)}<select id="output-product" value={recipeOutputId} onChange={(e) => setRecipeOutputId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select output</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select></div>
           <div className="sm:col-span-2 lg:col-span-3 space-y-2">
-            <span className="block font-medium text-foreground">Input items (ratios must sum to 100)</span>
+            <span className="block font-medium text-foreground">Input items * (ratios must sum to 100)</span>{inlineErr("recipe-items", recipeFieldErr)}
             {recipeItems.map((item) => (
               <div key={item.key} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <select value={item.productId} onChange={(e) => setRecipeItems((items) => items.map((i) => (i.key === item.key ? { ...i, productId: e.target.value } : i)))} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select input</option>{products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}</select>
@@ -1102,7 +1187,7 @@ export default function ProductionPage() {
             ))}
             <div className="flex items-center justify-between">
               <button type="button" onClick={() => setRecipeItems((items) => [...items, { key: Date.now(), productId: "", ratioPct: 0 }])} className="px-3 py-1.5 rounded-md bg-background border border-border text-foreground text-[11px] font-semibold cursor-pointer">+ Add input item</button>
-              <span className="text-muted-foreground">Total: {recipeItems.reduce((s, i) => s + (Number(i.ratioPct) || 0), 0)}%</span>
+              <span className="text-muted-foreground">Total: {recipeItems.reduce((s, i) => s + (Number(i.ratioPct) || 0), 0)}%</span>{inlineErr("recipe-ratio", recipeFieldErr)}
             </div>
           </div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="expected-yield">Expected yield (%)</label><input id="expected-yield" type="number" value={recipeYield} onChange={(e) => setRecipeYield(Number(e.target.value))} min="0" max="100" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
