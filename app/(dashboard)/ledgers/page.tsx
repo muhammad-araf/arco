@@ -26,6 +26,7 @@ import {
 } from "@/app/actions/masters"
 import { listProductionCostLedger } from "@/app/actions/ledgers"
 import { DaybookPrint } from "@/components/print/daybook-print"
+import { StockLedgerPrint } from "@/components/print/stock-ledger-print"
 import { CustomerStatementPrint } from "@/components/print/customer-statement-print"
 import { PrintButton } from "@/components/print/print-button"
 import { formatCurrency, formatWeight } from "@/lib/utils"
@@ -33,7 +34,7 @@ import { exportReportToCsv, exportToExcel, exportToPdf } from "@/lib/export-util
 import { logExport } from "@/app/actions/audit-log"
 import { AlertBanner, EmptyState, PageSkeleton } from "@/components/erp-ui"
 
-type Tab = "stock" | "party" | "cash" | "bardana" | "cost"
+type Tab = "stock" | "party" | "cash" | "bardana" | "cost" | "payments"
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "stock", label: "Stock", icon: <Boxes size={14} /> },
@@ -41,6 +42,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "cash", label: "Cash", icon: <Wallet size={14} /> },
   { id: "bardana", label: "Bardana", icon: <PackageCheck size={14} /> },
   { id: "cost", label: "Cost", icon: <ScrollText size={14} /> },
+  { id: "payments", label: "Payments", icon: <Wallet size={14} /> },
 ]
 
 const inputCls =
@@ -335,6 +337,7 @@ export default function LedgersPage() {
         <div className="expensive-card p-5">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <h2 className="text-sm font-bold text-foreground">Stock ledger</h2>
+            <PrintButton label="Print stock ledger" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
             <span className="flex gap-2 text-xs">
               {(["csv", "xlsx", "pdf"] as const).map((f) => (
                 <button
@@ -396,6 +399,15 @@ export default function LedgersPage() {
             <input aria-label="Voucher filter" value={stVoucher} onChange={(e) => setStVoucher(e.target.value)} placeholder="Voucher no" className={inputCls} />
             <input aria-label="Lot filter" value={stLot} onChange={(e) => setStLot(e.target.value)} placeholder="Lot no" className={inputCls} />
           </div>
+          <div className="hidden print:block">
+            <StockLedgerPrint
+              godown={stGodown ? godownName(stGodown) : "All godowns"}
+              product={stProduct ? productName(stProduct) : "All products"}
+              dateFrom={from}
+              dateTo={to}
+              rows={stockRows.map((e: any) => ({ date: e.date?.slice(0, 10), voucherNo: e.voucher_no, type: e.voucher_type, godown: godownName(e.godown_id), product: productName(e.product_id), lot: e.lot_number ?? undefined, inwardQty: e.inward_qty, outwardQty: e.outward_qty, balance: e.running_balance }))}
+            />
+          </div>
           {stockBusy ? (
             <p className="text-xs text-muted-foreground py-4">Loading…</p>
           ) : stockRows.length === 0 ? (
@@ -438,6 +450,32 @@ export default function LedgersPage() {
               <span className="font-mono self-center">Page {stockPage} of {Math.max(1, Math.ceil(stockTotal / 50))}</span>
               <button type="button" disabled={stockPage * 50 >= stockTotal || stockBusy} onClick={() => void loadStock(stockPage + 1)} className={ghostBtnCls}>Next</button>
             </span>
+          </div>
+        </div>
+      )}
+
+      {activeTab === "payments" && (
+        <div className="space-y-4">
+          <div className="expensive-card p-5">
+            <h2 className="text-sm font-bold text-foreground mb-1">Payments</h2>
+            <p className="text-xs text-muted-foreground">Links to the three existing pay flows. Nothing is paid from this tab — each link opens the form where it already lives.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="expensive-card p-5">
+              <h3 className="text-sm font-bold text-foreground mb-1">Vendor payments</h3>
+              <p className="text-xs text-muted-foreground mb-3">Pay a posted purchase from its balance on the Purchases page.</p>
+              <Link href="/purchases" className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold inline-block">Go to Purchases</Link>
+            </div>
+            <div className="expensive-card p-5">
+              <h3 className="text-sm font-bold text-foreground mb-1">Customer receipts</h3>
+              <p className="text-xs text-muted-foreground mb-3">Record a customer receipt (a collection, not new revenue) on the Billing page.</p>
+              <Link href="/billing" className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold inline-block">Go to Billing</Link>
+            </div>
+            <div className="expensive-card p-5">
+              <h3 className="text-sm font-bold text-foreground mb-1">Salary payments</h3>
+              <p className="text-xs text-muted-foreground mb-3">Pay an approved payroll period on the Employees Payroll tab.</p>
+              <Link href="/employees?tab=payroll" className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold inline-block">Go to Employees payroll</Link>
+            </div>
           </div>
         </div>
       )}
