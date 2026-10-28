@@ -22,6 +22,7 @@ import { PrintButton } from "@/components/print/print-button"
 import { MachineryJob, Machine, Party, Product, RateBasis } from "@/lib/types/database"
 import { machineryCharge } from "@/lib/calc"
 import { formatCurrency, formatWeight, formatDate } from "@/lib/utils"
+import { lineUnaccountedKg, lineYieldPct } from "@/lib/dialog-calcs"
 import {
   AlertBanner,
   ConfirmDialog,
@@ -47,6 +48,11 @@ export default function MachineryJobsPage() {
   const [isLoading, setIsLoading] = React.useState(true)
   const [formError, setFormError] = React.useState("")
   const [formNotice, setFormNotice] = React.useState("")
+  const [jobFieldErr, setJobFieldErr] = React.useState("")
+  const inlineErr = (key: string, current: string) =>
+    current === key && formError ? (
+      <p className="mt-1 text-[11px] font-medium text-red-600 dark:text-red-400">{formError}</p>
+    ) : null
   const [isPending, setIsPending] = React.useState(false)
   const [showConfirm, setShowConfirm] = React.useState(false)
   const [draftJob, setDraftJob] = React.useState<MachineryJob | null>(null)
@@ -136,20 +142,27 @@ export default function MachineryJobsPage() {
     e.preventDefault()
     if (isPending) return
     // Spec §7: required fields, positive weights, non-negative waste and
-    // rate — output + by-product + waste may not exceed input.
-    if (!customerId) return setFormError("Select the customer / grain owner for this job.")
-    if (!machineId) return setFormError("Select the machine that will run this job.")
-    if (!godownId) return setFormError("Select the godown where this job runs.")
-    if (!processingType.trim()) return setFormError("Select or enter the processing type.")
-    if (!jobLines.length) return setFormError("Add at least one job line.")
-    if (jobLines.some((l) => !l.inputProductId)) return setFormError("Every job line needs an input product.")
-    if (!isPositive(totalInputWeight)) return setFormError("Input weight must be greater than zero.")
-    if (totalOutputWeight < 0 || totalByproductWeight < 0 || wasteWeight < 0) return setFormError("Output, by-product and waste weights cannot be negative.")
-    if (totalOutputWeight + totalByproductWeight + wasteWeight > totalInputWeight) return setFormError(`Output (${totalOutputWeight} kg) + by-product (${totalByproductWeight} kg) + waste (${wasteWeight} kg) exceeds input (${totalInputWeight} kg). Correct the weights before saving.`)
-    if (rate < 0) return setFormError("Rate cannot be negative.")
-    if (rateBasis === "per_bag" && !(bagCount > 0)) return setFormError("Enter the actual bag count for per-bag billing.")
-    if (bagCount < 0) return setFormError("Bag count cannot be negative.")
-    if (rateBasis === "per_maund" && !(maundKg > 0)) return setFormError("Enter the client-approved kg per maund for per-maund billing.")
+    // rate — output + by-product + waste may not exceed input. Each
+    // failure names its field, shown under the field and in the banner.
+    const failJob = (field: string, message: string) => {
+      setJobFieldErr(field)
+      setFormError(message)
+    }
+    if (!customerId) { failJob("customer", "Select the customer / grain owner for this job."); return }
+    if (!machineId) { failJob("machine", "Select the machine that will run this job."); return }
+    if (!godownId) { failJob("godown", "Select the godown where this job runs."); return }
+    if (!processingType.trim()) { failJob("processing-type", "Select or enter the processing type."); return }
+    if (!jobLines.length) { failJob("job-lines", "Add at least one job line."); return }
+    const badLine = jobLines.find((l) => !l.inputProductId)
+    if (badLine) { failJob(`job-input-product-${badLine.key}`, "Every job line needs an input product."); return }
+    if (!isPositive(totalInputWeight)) { failJob("total-input", "Input weight must be greater than zero."); return }
+    if (totalOutputWeight < 0 || totalByproductWeight < 0 || wasteWeight < 0) { failJob("totals", "Output, by-product and waste weights cannot be negative."); return }
+    if (totalOutputWeight + totalByproductWeight + wasteWeight > totalInputWeight) { failJob("totals", `Output (${totalOutputWeight} kg) + by-product (${totalByproductWeight} kg) + waste (${wasteWeight} kg) exceeds input (${totalInputWeight} kg). Correct the weights before saving.`); return }
+    if (rate < 0) { failJob("rate", "Rate cannot be negative."); return }
+    if (rateBasis === "per_bag" && !(bagCount > 0)) { failJob("bag-count", "Enter the actual bag count for per-bag billing."); return }
+    if (bagCount < 0) { failJob("bag-count", "Bag count cannot be negative."); return }
+    if (rateBasis === "per_maund" && !(maundKg > 0)) { failJob("maund-kg", "Enter the client-approved kg per maund for per-maund billing."); return }
+    setJobFieldErr("")
     setFormError("")
     const selectedCust = customers.find((c) => c.id === customerId)
     const selectedMach = machines.find((m) => m.id === machineId)
@@ -229,6 +242,7 @@ export default function MachineryJobsPage() {
       setIsModalOpen(false)
       setDraftJob(null)
       await loadData()
+      await handlePrintJob({ id: (created.data as any).id })
     } finally {
       setIsPending(false)
       jobGuard.current = false
@@ -246,6 +260,7 @@ export default function MachineryJobsPage() {
       }
       setFormNotice(`${job.job_no} posted.`)
       await loadData()
+      await handlePrintJob(job)
     } finally {
       setIsPostingDraft(false)
     }
@@ -420,7 +435,7 @@ export default function MachineryJobsPage() {
       {/* Creation Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+          <div className="expensive-card w-full max-w-2xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <Cog className="h-4 w-4 text-emerald-500" />
@@ -439,7 +454,7 @@ export default function MachineryJobsPage() {
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="customer-grain-owner">Customer / Grain Owner</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="customer-grain-owner">Customer / Grain Owner *</label>
                   <div className="flex flex-wrap items-start gap-2"><select id="customer-grain-owner"
                     value={customerId}
                     onChange={(e) => setCustomerId(e.target.value)}
@@ -452,10 +467,11 @@ export default function MachineryJobsPage() {
                       </option>
                     ))}
                   </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setCustomers(list.filter((x) => x.type === "customer" || x.type === "both")); } setCustomerId(id); }} /></div>
+                  {inlineErr("customer", jobFieldErr)}
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="machine-cleaner-grader">Machine Cleaner / Grader</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="machine-cleaner-grader">Machine Cleaner / Grader *</label>
                   <div className="flex flex-wrap items-start gap-2"><select id="machine-cleaner-grader"
                     value={machineId}
                     onChange={(e) => setMachineId(e.target.value)}
@@ -468,18 +484,20 @@ export default function MachineryJobsPage() {
                       </option>
                     ))}
                   </select> <InlineAdd label="Machine" fields={MACHINE_FIELDS} createAction={async (v) => createMachine({ code: v.code, name: v.name, processing_type: v.processing_type })} onCreated={async (id) => { const r = await listMachines(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setMachines(list); } setMachineId(id); }} /></div>
+                  {inlineErr("machine", jobFieldErr)}
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="godown">Godown</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="godown">Godown *</label>
                   <div className="flex flex-wrap items-start gap-2"><select id="godown" value={godownId} onChange={(e) => setGodownId(e.target.value)} className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
                     {godowns.map((g) => (<option key={g.id} value={g.id}>{g.name}</option>))}
                   </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setGodowns(list); } setGodownId(id); }} /></div>
+                  {inlineErr("godown", jobFieldErr)}
                 </div>
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="processing-type">Processing Type</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="processing-type">Processing Type *</label>{inlineErr("processing-type", jobFieldErr)}
                   {processingTypes.length > 0 ? (
                     <select id="processing-type"
                       value={processingTypes.includes(processingType) ? processingType : ""}
@@ -539,9 +557,9 @@ export default function MachineryJobsPage() {
                   </span>
                 </div>
                 {jobLines.map((line) => (
-                  <div key={line.key} className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-2 rounded-md bg-background border border-border">
+                  <div key={line.key} className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-2 rounded-md bg-background border border-border">
                     <div>
-                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-input-product-${line.key}`}>Input Product</label>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-input-product-${line.key}`}>Input Product *</label>
                       <div className="flex flex-wrap items-start gap-2"><select id={`job-input-product-${line.key}`}
                         value={line.inputProductId}
                         onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, inputProductId: e.target.value } : l)))}
@@ -550,9 +568,10 @@ export default function MachineryJobsPage() {
                         <option value="">Select product</option>
                         {products.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
                       </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setJobLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, inputProductId: id } : l))); }} /></div>
+                      {inlineErr(`job-input-product-${line.key}`, jobFieldErr)}
                     </div>
                     <div>
-                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-input-qty-${line.key}`}>Input (kg)</label>
+                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`job-input-qty-${line.key}`}>Input (kg) *</label>
                       <input id={`job-input-qty-${line.key}`} type="number" value={line.inputQty}
                         onChange={(e) => setJobLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, inputQty: Number(e.target.value) } : l)))}
                         min="0" className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono" required />
@@ -595,11 +614,15 @@ export default function MachineryJobsPage() {
                           <button type="button" onClick={() => setJobLines((lines) => lines.filter((l) => l.key !== line.key))} className="px-2 rounded-md bg-muted text-muted-foreground text-xs font-bold cursor-pointer" title="Remove this job line">✕</button>
                         )}
                       </div>
+                    <p className="mt-1 text-[11px] text-muted-foreground sm:col-span-2">Line yield: <strong className="text-foreground font-mono">{lineYieldPct(Number(line.outputQty) || 0, Number(line.inputQty) || 0)}%</strong> · Unaccounted (input − output − by-product): <strong className="text-foreground font-mono">{formatWeight(lineUnaccountedKg(Number(line.inputQty) || 0, Number(line.outputQty) || 0, Number(line.byproductQty) || 0))}</strong> — job-level waste below is separate.</p>
                     </div>
                   </div>
                 ))}
                 <button type="button" onClick={() => setJobLines((lines) => [...lines, { key: Date.now(), inputProductId: "", inputQty: 0, outputProductId: "", outputQty: 0, byproductProductId: "", byproductQty: 0 }])} className="px-3 py-1.5 rounded-md bg-background border border-border text-foreground text-[11px] font-semibold cursor-pointer">+ Add job line</button>
                 <div>
+                  {inlineErr("totals", jobFieldErr)}
+                  {inlineErr("total-input", jobFieldErr)}
+                  {inlineErr("job-lines", jobFieldErr)}
                   <label className="block font-medium text-foreground mb-1" htmlFor="waste-weight-kg">Waste Weight (kg, job-level — never stocked)</label>
                   <input id="waste-weight-kg"
                     type="number"
@@ -613,7 +636,7 @@ export default function MachineryJobsPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="actual-bag-count">Actual Bag Count</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="actual-bag-count">Actual Bag Count</label>{inlineErr("bag-count", jobFieldErr)}
                   <input id="actual-bag-count"
                     type="number"
                     value={bagCount}
@@ -626,7 +649,7 @@ export default function MachineryJobsPage() {
 
                 {rateBasis === "per_maund" && (
                   <div>
-                    <label className="block font-medium text-foreground mb-1" htmlFor="kg-per-maund-client-approved">Kg per Maund (client-approved)</label>
+                    <label className="block font-medium text-foreground mb-1" htmlFor="kg-per-maund-client-approved">Kg per Maund (client-approved) *</label>{inlineErr("maund-kg", jobFieldErr)}
                     <input id="kg-per-maund-client-approved"
                       type="number"
                       value={maundKg}
@@ -657,7 +680,7 @@ export default function MachineryJobsPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="unit-service-rate-pkr">Unit Service Rate (PKR)</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="unit-service-rate-pkr">Unit Service Rate (PKR) *</label>{inlineErr("rate", jobFieldErr)}
                   <input id="unit-service-rate-pkr"
                     type="number"
                     value={rate}
@@ -730,7 +753,7 @@ export default function MachineryJobsPage() {
           <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-md rounded-md printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
             <MachineryJobPrint
               jobNo={selectedJobForPrint.job_no}
-              date={selectedJobForPrint.date}
+              date={formatDate(selectedJobForPrint.date)}
               status={selectedJobForPrint.status}
               customerName={selectedJobForPrint.customer_name}
               machine={selectedJobForPrint.machine_name}
@@ -775,7 +798,7 @@ export default function MachineryJobsPage() {
         <div className="hidden print:block">
           <MachineryJobPrint
             jobNo={selectedJobForPrint.job_no}
-            date={selectedJobForPrint.date}
+            date={formatDate(selectedJobForPrint.date)}
             status={selectedJobForPrint.status}
             customerName={selectedJobForPrint.customer_name}
             machine={selectedJobForPrint.machine_name}
