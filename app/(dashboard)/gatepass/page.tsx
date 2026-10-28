@@ -28,6 +28,7 @@ import { AttachmentFields } from "@/components/attachment-fields"
 import { PrintButton } from "@/components/print/print-button"
 import { GatePass, GatePassItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDate, formatDateTime } from "@/lib/utils"
+import { kgPerBag } from "@/lib/dialog-calcs"
 import { exportReportToCsv, exportToExcel, exportToPdf } from "@/lib/export-utils"
 import { logExport } from "@/app/actions/audit-log"
 import {
@@ -298,6 +299,83 @@ export default function GatePassPage() {
     setShowPostConfirm(true)
   }
 
+  // Save-as-draft: the workflow already has drafts (createGatePassDraft
+  // writes status "draft" and a rejected pass returns to draft), but the
+  // dialog offered no way to save one. Draft validation follows the
+  // server's draft rules only: customer, godown, vehicle, driver, one
+  // product per line with weight > 0. Destination and the stock guard
+  // are post-time checks, not draft-time ones.
+  const handleSaveDraft = async () => {
+    if (isPending) return
+    if (!customerId) return setFormError("Select the customer / receiver before saving a draft.")
+    if (!godownId) return setFormError("Select the dispatch godown before saving a draft.")
+    if (!vehicleNo.trim()) return setFormError("Vehicle number is required before saving a draft.")
+    if (!driverName.trim()) return setFormError("Driver name is required before saving a draft.")
+    for (let i = 0; i < items.length; i++) {
+      if (!items[i].productId) return setFormError(`Line ${i + 1}: select a product before saving a draft.`)
+      if (!isPositive(Number(items[i].netWeight))) return setFormError(`Line ${i + 1}: net weight must be greater than zero before saving a draft.`)
+    }
+    setFormError("")
+    setIsPending(true)
+    try {
+      const created = await createGatePassDraft({
+        customerId, godownId, vehicleNo: vehicleNo.trim(), driverName: driverName.trim(),
+        driverPhone: driverPhone || undefined, transporter: transporter || undefined,
+        destination: destination.trim() || undefined, orderRef: orderRef || undefined, notes: notes || undefined,
+        receiverName: receiverName.trim() || undefined, receiverContact: receiverContact.trim() || undefined,
+        dispatchMode: dispatchMode || undefined,
+        attachmentUrl: attachmentUrl || undefined, attachmentNote: attachmentNote || undefined,
+        items: items.map((it) => ({ productId: it.productId, bags: Number(it.bags), netWeightKg: Number(it.netWeight), remarks: it.remarks, partyId: it.ownerId || undefined, packagingTypeId: it.packagingTypeId || undefined })),
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not save the gate pass draft.")
+        return
+      }
+      setFormNotice(`${(created.data as any).pass_no ?? "Gate pass"} saved as a draft — nothing has been deducted yet. Post it from the register when ready.`)
+      setIsModalOpen(false)
+      await loadData()
+    } finally {
+      setIsPending(false)
+    }
+  }
+
+  // Post a draft pass from the register (e.g. one saved via "Save as
+  // draft" or rejected back to draft). Uses the existing post action;
+  // a posted pass opens its print document immediately.
+  const handlePostDraft = async (gp: GatePassRow) => {
+    if (isPending) return
+    setIsPending(true)
+    try {
+      const posted = await postGatePass(gp.id, postToken("gatepass:post", gp.id))
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the gate pass.")
+        return
+      }
+      const row: any = posted.data ?? gp
+      if (row.status === "awaiting_approval") {
+        setFormNotice(`${gp.pass_no} submitted for approval — stock will be deducted when it is approved.`)
+      } else {
+        setFormNotice(`${gp.pass_no} dispatched — ${formatWeight(row.total_weight_kg ?? gp.total_weight_kg)} deducted from ${gp.godown_name || "the godown"}.`)
+      }
+      if (row.status === "posted") {
+        const fresh = await getGatePass(gp.id)
+        const serverRow: any = fresh.success ? fresh.data : row
+        setSelectedPassForPrint({
+          ...serverRow,
+          customer_name: customers.find((x) => x.id === serverRow.customer_id)?.name ?? serverRow.customer_id,
+          godown_name: godowns.find((x) => x.id === serverRow.godown_id)?.name ?? serverRow.godown_id,
+          items: (serverRow.gate_pass_items ?? serverRow.items ?? []).map((it: any) => ({
+            ...it,
+            product_name: products.find((x) => x.id === it.product_id)?.name ?? "Not set",
+          })),
+        })
+      }
+      await loadData()
+    } finally {
+      setIsPending(false)
+    }
+  }
+
   const handleConfirmPost = async () => {
     if (!draftPass || postGuard.current) return
     postGuard.current = true
@@ -516,7 +594,7 @@ export default function GatePassPage() {
   // rows, columns, title and totals, so all formats agree.
   const getGatepassExport = () => ({
     rows: visiblePasses.map((gp) => ({
-      pass_no: gp.pass_no, date: gp.date, customer: gp.customer_name,
+      pass_no: gp.pass_no, date: formatDate(gp.date), customer: gp.customer_name,
       receiver_name: gp.receiver_name || "", receiver_contact: gp.receiver_contact || "",
       dispatch_mode: gp.dispatch_mode || "",
       destination: gp.destination || "Direct", godown: gp.godown_name,
@@ -524,8 +602,8 @@ export default function GatePassPage() {
       driver_phone: gp.driver_phone || "N/A", bags: gp.total_bags,
       weight_kg: gp.total_weight_kg, status: gp.status,
       prepared_by: gp.prepared_by || "", approved_by: gp.approved_by || "",
-      return_reason: gp.return_reason || "", returned_at: gp.returned_at || "",
-      reversal_reason: gp.reversal_reason || "", reversed_at: gp.reversed_at || "",
+      return_reason: gp.return_reason || "", returned_at: gp.returned_at ? formatDate(gp.returned_at) : "",
+      reversal_reason: gp.reversal_reason || "", reversed_at: gp.reversed_at ? formatDate(gp.reversed_at) : "",
     })),
     filename: "gate_pass_register",
     columns: [{ key: "pass_no", label: "Pass no" }, { key: "date", label: "Date" }, { key: "customer", label: "Customer" }, { key: "receiver_name", label: "Receiver" }, { key: "receiver_contact", label: "Receiver contact" }, { key: "dispatch_mode", label: "Dispatch mode" }, { key: "destination", label: "Destination" }, { key: "godown", label: "Godown" }, { key: "vehicle_no", label: "Vehicle" }, { key: "driver_name", label: "Driver" }, { key: "driver_phone", label: "Driver phone" }, { key: "bags", label: "Bags" }, { key: "weight_kg", label: "Weight (kg)" }, { key: "status", label: "Status" }, { key: "prepared_by", label: "Prepared by" }, { key: "approved_by", label: "Approved by" }, { key: "return_reason", label: "Return reason" }, { key: "returned_at", label: "Returned at" }, { key: "reversal_reason", label: "Reversal reason" }, { key: "reversed_at", label: "Reversed at" }],
@@ -708,6 +786,17 @@ export default function GatePassPage() {
                   </td>
                   <td className="py-3 text-center">
                     <div className="flex items-center justify-center gap-1">
+                      {gp.status === "draft" && (
+                        <button
+                          type="button"
+                          onClick={() => void handlePostDraft(gp)}
+                          disabled={isPending}
+                          className="px-2 py-1 rounded-md hover:bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer disabled:opacity-60"
+                          title="Post this draft: deducts stock (or sends for approval when approval is on)"
+                        >
+                          Post
+                        </button>
+                      )}
                       {gp.status === "awaiting_approval" && (
                         <>
                           <button
@@ -782,7 +871,7 @@ export default function GatePassPage() {
       {/* Gate Pass Creator Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
-          <div className="expensive-card w-full max-w-3xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-8 max-h-[90dvh] overflow-y-auto">
+          <div className="expensive-card w-full max-w-4xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-8 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <div>
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
@@ -804,10 +893,10 @@ export default function GatePassPage() {
 
             <form onSubmit={handleIssueGatePass} className="space-y-4 text-xs">
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="customer-consignee">Customer / Consignee</label>
-                  <div className="flex flex-wrap items-start gap-2"><select id="customer-consignee"
+                  <label className="block font-medium text-foreground mb-1" htmlFor="customer-consignee">Customer / Consignee *</label>
+                  <div className="flex flex-wrap items-start gap-2"><select id="customer-consignee" title={customers.find((c) => c.id === customerId)?.name ?? ""}
                     value={customerId}
                     onChange={(e) => setCustomerId(e.target.value)}
                     className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -822,8 +911,8 @@ export default function GatePassPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="dispatch-godown">Dispatch Godown</label>
-                  <div className="flex flex-wrap items-start gap-2"><select id="dispatch-godown"
+                  <label className="block font-medium text-foreground mb-1" htmlFor="dispatch-godown">Dispatch Godown *</label>
+                  <div className="flex flex-wrap items-start gap-2"><select id="dispatch-godown" title={godowns.find((g) => g.id === godownId)?.name ?? ""}
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
                     className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -838,7 +927,7 @@ export default function GatePassPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="delivery-destination">Delivery Destination</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="delivery-destination">Delivery Destination *</label>
                   <input id="delivery-destination"
                     type="text"
                     value={destination}
@@ -849,7 +938,7 @@ export default function GatePassPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="vehicle-truck-no">Vehicle / Truck No</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="vehicle-truck-no">Vehicle / Truck No *</label>
                   <input id="vehicle-truck-no"
                     type="text"
                     value={vehicleNo}
@@ -861,7 +950,7 @@ export default function GatePassPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="driver-full-name">Driver Full Name</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="driver-full-name">Driver Full Name *</label>
                   <input id="driver-full-name"
                     type="text"
                     value={driverName}
@@ -979,11 +1068,11 @@ export default function GatePassPage() {
                     return (
                       <div
                         key={idx}
-                        className="grid grid-cols-1 sm:grid-cols-6 gap-2 p-2.5 rounded-lg bg-muted border border-border text-xs items-center"
+                        className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-2.5 rounded-lg bg-muted border border-border text-xs items-start"
                       >
                         <div className="sm:col-span-2">
                           <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`gatepass-item-product-${idx}`}>
-                            Product (Available: {formatWeight(available)})
+                            Product * (Available: {formatWeight(available)})
                           </label>
                           <div className="flex flex-wrap items-start gap-2"><select id={`gatepass-item-product-${idx}`}
                             value={item.productId}
@@ -999,7 +1088,7 @@ export default function GatePassPage() {
                         </div>
 
                         <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`bags-count-${idx}`}>Bags Count</label>
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`bags-count-${idx}`}>Bags Count *</label>
                           <input id={`bags-count-${idx}`}
                             type="number"
                             value={item.bags}
@@ -1010,7 +1099,7 @@ export default function GatePassPage() {
                         </div>
 
                         <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`net-wt-kg-${idx}`}>Net Wt (kg)</label>
+                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`net-wt-kg-${idx}`}>Net Wt (kg) *</label>
                           <input id={`net-wt-kg-${idx}`}
                             type="number"
                             value={item.netWeight}
@@ -1073,6 +1162,13 @@ export default function GatePassPage() {
                             </button>
                           )}
                         </div>
+                        <div className="sm:col-span-2 text-[11px] text-muted-foreground">
+                          Line {idx + 1}: <strong className="text-foreground">{formatWeight(Number(item.netWeight) || 0)}</strong>
+                          {Number(item.bags) > 0 && (
+                            <> — {kgPerBag(Number(item.netWeight) || 0, Number(item.bags)).toFixed(2)} kg per bag</>
+                          )}
+                          {available > 0 && <> — {formatWeight(available)} available in this godown</>}
+                        </div>
                       </div>
                     )
                   })}
@@ -1100,6 +1196,14 @@ export default function GatePassPage() {
                   className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer"
                 >
                   Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSaveDraft()}
+                  disabled={isPending}
+                  className="px-5 py-2 rounded-lg bg-card border border-border text-foreground text-xs font-bold cursor-pointer disabled:opacity-60"
+                >
+                  Save as draft
                 </button>
                 <button
                   type="submit"
@@ -1176,11 +1280,11 @@ export default function GatePassPage() {
             <p className="text-xs text-muted-foreground">Reduce a quantity for a partial return. The remainder stays returnable, and the pass stays reversible until it is fully returned. Only quantities marked Accepted return to stock — Rejected quantities are recorded but never restocked.</p>
             <div className="space-y-2 text-xs">
               {returnLines.map((line, idx) => (
-                <div key={idx} className="grid grid-cols-1 sm:grid-cols-4 gap-2 p-2.5 rounded-lg bg-muted border border-border items-center">
+                <div key={idx} className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-2.5 rounded-lg bg-muted border border-border items-start">
                   <div><div className="font-bold text-foreground">{line.productName}</div><div className="text-muted-foreground">Owner: {line.ownerName}</div></div>
                   <div className="text-muted-foreground">Still returnable: <strong className="text-foreground">{line.remainingKg} kg</strong></div>
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`return-qty-kg-${idx}`}>Return qty (kg)</label>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`return-qty-kg-${idx}`}>Return qty (kg) *</label>
                     <input id={`return-qty-kg-${idx}`} type="number" min="0" max={line.remainingKg} value={line.qtyKg} onChange={(e) => setReturnLines((prev) => prev.map((l, i) => (i === idx ? { ...l, qtyKg: Number(e.target.value) } : l)))} className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono" />
                   </div>
                   <div className="text-muted-foreground">Left after return: <strong className="text-foreground">{Math.max(0, Math.round((line.remainingKg - (Number(line.qtyKg) || 0)) * 100) / 100)} kg</strong></div>
