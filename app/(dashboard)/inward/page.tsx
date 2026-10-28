@@ -17,7 +17,8 @@ import {
   Boxes,
 } from "lucide-react"
 import { listInward, getInward, createInwardDraft, postInward, reverseInward } from "@/app/actions/inward"
-import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
+import { listGodowns, listProducts, listParties, createParty, createGodown, createProduct } from "@/app/actions/masters"
+import { InlineAdd, PARTY_FIELDS, GODOWN_FIELDS, PRODUCT_FIELDS } from "@/components/print/inline-add"
 import { getCompanySettings } from "@/app/actions/settings"
 import { InwardSlipPrint } from "@/components/print/inward-slip-print"
 import { AttachmentFields } from "@/components/attachment-fields"
@@ -510,10 +511,10 @@ export default function InwardPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="supplier-party">Supplier / Party</label>
-                  <select id="supplier-party"
+                  <div className="flex flex-wrap items-start gap-2"><select id="supplier-party"
                     value={partyId}
                     onChange={(e) => setPartyId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   >
                     {parties.map((p) => (
@@ -521,15 +522,15 @@ export default function InwardPage() {
                         {p.name}
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "supplier" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setParties((list.filter((x) => x.type === "supplier" || x.type === "both" || x.type === "source"))); } setPartyId(id); }} /></div>
                 </div>
 
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="target-godown">Target Godown</label>
-                  <select id="target-godown"
+                  <div className="flex flex-wrap items-start gap-2"><select id="target-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   >
                     {godowns.map((g) => (
@@ -537,15 +538,15 @@ export default function InwardPage() {
                         {g.name}
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setGodowns(list); } setGodownId(id); }} /></div>
                 </div>
 
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="stock-owner">Stock owner</label>
-                  <select id="stock-owner"
+                  <div className="flex flex-wrap items-start gap-2"><select id="stock-owner"
                     value={ownerId}
                     onChange={(e) => setOwnerId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                   >
                     <option value="">Company stock</option>
                     {owners.map((p) => (
@@ -553,7 +554,7 @@ export default function InwardPage() {
                         {p.name}
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setOwners(list); } setOwnerId(id); }} /></div>
                 </div>
 
                 <div>
@@ -685,17 +686,17 @@ export default function InwardPage() {
                       >
                         <div className="sm:col-span-2">
                           <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`product-${idx}`}>Product</label>
-                          <select id={`product-${idx}`}
+                          <div className="flex flex-wrap items-start gap-2"><select id={`product-${idx}`}
                             value={item.productId}
                             onChange={(e) => handleItemChange(idx, "productId", e.target.value)}
-                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                            className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
                           >
                             {products.map((p) => (
                               <option key={p.id} value={p.id}>
                                 {p.name}
                               </option>
                             ))}
-                          </select>
+                          </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } handleItemChange(idx, "productId", id); }} /></div>
                         </div>
 
                         <div>

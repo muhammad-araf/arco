@@ -20,7 +20,8 @@ import {
 } from "lucide-react"
 import { listGatePasses, getGatePass, createGatePassDraft, postGatePass, reverseGatePass, returnGatePass, approveGatePass, rejectGatePass } from "@/app/actions/gatepass"
 import { getStockSummary } from "@/app/actions/inventory"
-import { listGodowns, listProducts, listParties, listPackagingTypes } from "@/app/actions/masters"
+import { listGodowns, listProducts, listParties, listPackagingTypes, createParty, createGodown, createProduct, createPackagingType } from "@/app/actions/masters"
+import { InlineAdd, PARTY_FIELDS, GODOWN_FIELDS, PRODUCT_FIELDS, PACKAGING_FIELDS } from "@/components/print/inline-add"
 import { getCompanySettings, getAppSetting } from "@/app/actions/settings"
 import { GatePassPrint } from "@/components/print/gate-pass-print"
 import { AttachmentFields } from "@/components/attachment-fields"
@@ -806,10 +807,10 @@ export default function GatePassPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="customer-consignee">Customer / Consignee</label>
-                  <select id="customer-consignee"
+                  <div className="flex flex-wrap items-start gap-2"><select id="customer-consignee"
                     value={customerId}
                     onChange={(e) => setCustomerId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   >
                     {customers.map((c) => (
@@ -817,15 +818,15 @@ export default function GatePassPage() {
                         {c.name}
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setCustomers(list.filter((x) => x.type === "customer" || x.type === "both")); } setCustomerId(id); }} /></div>
                 </div>
 
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="dispatch-godown">Dispatch Godown</label>
-                  <select id="dispatch-godown"
+                  <div className="flex flex-wrap items-start gap-2"><select id="dispatch-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                     required
                   >
                     {godowns.map((g) => (
@@ -833,7 +834,7 @@ export default function GatePassPage() {
                         {g.name}
                       </option>
                     ))}
-                  </select>
+                  </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setGodowns(list); } setGodownId(id); }} /></div>
                 </div>
 
                 <div>
@@ -984,17 +985,17 @@ export default function GatePassPage() {
                           <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`gatepass-item-product-${idx}`}>
                             Product (Available: {formatWeight(available)})
                           </label>
-                          <select id={`gatepass-item-product-${idx}`}
+                          <div className="flex flex-wrap items-start gap-2"><select id={`gatepass-item-product-${idx}`}
                             value={item.productId}
                             onChange={(e) => handleItemChange(idx, "productId", e.target.value)}
-                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                            className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
                           >
                             {products.map((p) => (
                               <option key={p.id} value={p.id}>
                                 {p.name}
                               </option>
                             ))}
-                          </select>
+                          </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } handleItemChange(idx, "productId", id); }} /></div>
                         </div>
 
                         <div>
@@ -1021,10 +1022,10 @@ export default function GatePassPage() {
 
                         <div>
                           <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`stock-owner-${idx}`}>Stock owner</label>
-                          <select id={`stock-owner-${idx}`}
+                          <div className="flex flex-wrap items-start gap-2"><select id={`stock-owner-${idx}`}
                             value={item.ownerId}
                             onChange={(e) => handleItemChange(idx, "ownerId", e.target.value)}
-                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                            className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
                           >
                             <option value="">Company stock</option>
                             {owners.map((o) => (
@@ -1032,15 +1033,15 @@ export default function GatePassPage() {
                                 {o.name}
                               </option>
                             ))}
-                          </select>
+                          </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setOwners(list); } handleItemChange(idx, "ownerId", id); }} /></div>
                         </div>
 
                         <div>
                           <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`bag-type-${idx}`}>Bag type</label>
-                          <select id={`bag-type-${idx}`}
+                          <div className="flex flex-wrap items-start gap-2"><select id={`bag-type-${idx}`}
                             value={item.packagingTypeId}
                             onChange={(e) => handleItemChange(idx, "packagingTypeId", e.target.value)}
-                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                            className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
                           >
                             <option value="">No specific type</option>
                             {packagingTypes.map((t: any) => (
@@ -1048,7 +1049,7 @@ export default function GatePassPage() {
                                 {t.name}
                               </option>
                             ))}
-                          </select>
+                          </select> <InlineAdd label="Packaging" fields={PACKAGING_FIELDS} createAction={async (v) => createPackagingType({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listPackagingTypes(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setPackagingTypes(list); } handleItemChange(idx, "packagingTypeId", id); }} /></div>
                         </div>
 
                         <div className="sm:col-span-2 flex items-center gap-2">
