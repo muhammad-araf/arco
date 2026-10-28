@@ -139,25 +139,34 @@ export default function BillingPage() {
   const totalReceivables = customers.reduce((sum, c) => sum + Math.max(0, custBalance(c)), 0)
   const customerInvoices = invoices.filter((i) => i.customer_id === customerId && i.status === "posted" && Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)) > 0)
 
-  const handleRecordReceipt = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isPending) return
-    // Spec §11.2: a receipt collects an earlier receivable — it must name a
-    // customer, be positive, and may not over-collect that customer's balance.
-    if (!customerId) return setFormError("Select the customer paying this receipt.")
-    if (!isPositive(amount)) return setFormError("Receipt amount must be greater than zero.")
-    if (!receiptCashAccountId) return setFormError("Select a cash account for this receipt. Create one on the Daybook page first if none exists.")
+  // Receipt validation shared by the Post path and Save-as-draft: the
+  // same missing-field errors, so a draft can never be an empty voucher.
+  // Spec §11.2: a receipt collects an earlier receivable — it must name a
+  // customer, be positive, and may not over-collect that customer's balance.
+  const receiptFormError = (): string | null => {
+    if (!customerId) return "Select the customer paying this receipt."
+    if (!isPositive(amount)) return "Receipt amount must be greater than zero."
+    if (!receiptCashAccountId) return "Select a cash account for this receipt. Create one on the Daybook page first if none exists."
     const selectedCust = customers.find((c) => c.id === customerId)
     const bal = selectedCust ? custBalance(selectedCust) : 0
-    if (allocInvoiceId && allocAmount > amount) return setFormError(`Allocation (${formatCurrency(allocAmount)}) cannot exceed the receipt amount (${formatCurrency(amount)}).`)
-    if (allocInvoiceId && allocAmount <= 0) return setFormError("An allocation amount must be greater than zero.")
+    if (allocInvoiceId && allocAmount > amount) return `Allocation (${formatCurrency(allocAmount)}) cannot exceed the receipt amount (${formatCurrency(amount)}).`
+    if (allocInvoiceId && allocAmount <= 0) return "An allocation amount must be greater than zero."
     if (allocInvoiceId) {
       const target = invoices.find((i) => i.id === allocInvoiceId)
       const targetBal = target ? Number(target.balance_amount ?? Number(target.total_amount || 0) - Number(target.paid_amount || 0)) : 0
-      if (allocAmount > targetBal) return setFormError(`Allocation (${formatCurrency(allocAmount)}) exceeds invoice ${target?.invoice_no ?? ""} balance (${formatCurrency(targetBal)}).`)
+      if (allocAmount > targetBal) return `Allocation (${formatCurrency(allocAmount)}) exceeds invoice ${target?.invoice_no ?? ""} balance (${formatCurrency(targetBal)}).`
     }
-    if (!allocInvoiceId && amount > bal && bal > 0) return setFormError(`Receipt (${formatCurrency(amount)}) exceeds ${selectedCust?.name || "this customer"}'s outstanding balance (${formatCurrency(bal)}). Allocate it to a specific invoice, or record the balance amount or less.`)
+    if (!allocInvoiceId && amount > bal && bal > 0) return `Receipt (${formatCurrency(amount)}) exceeds ${selectedCust?.name || "this customer"}'s outstanding balance (${formatCurrency(bal)}). Allocate it to a specific invoice, or record the balance amount or less.`
+    return null
+  }
+
+  const handleRecordReceipt = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (isPending) return
+    const validationError = receiptFormError()
+    if (validationError) return setFormError(validationError)
     setFormError("")
+    const selectedCust = customers.find((c) => c.id === customerId)
     const receiptNo = `RCT-2026-${String(receipts.length + 1).padStart(3, "0")}`
     setDraftReceipt({
       id: `rct-${Date.now()}`,
@@ -211,6 +220,52 @@ export default function BillingPage() {
     }
   }
 
+  const handleSaveReceiptDraft = async () => {
+    if (isPending) return
+    const validationError = receiptFormError()
+    if (validationError) return setFormError(validationError)
+    setIsPending(true)
+    try {
+      const created = await createReceipt({
+        customerId, cashAccountId: receiptCashAccountId, account: paymentMethod, amount,
+        referenceNo: referenceNo || undefined, purpose: purpose || undefined,
+        receivedBy: receivedBy || undefined, notes: notes || undefined,
+        clientToken: submissionToken(receiptTokenRef, "receipt"),
+        allocations: allocInvoiceId && allocAmount > 0 ? [{ invoiceId: allocInvoiceId, amount: allocAmount }] : [],
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not save the receipt draft.")
+        return
+      }
+      const row: any = created.data
+      setFormNotice(`${row.receipt_no ?? "Receipt"} saved as draft — post it from the receipts list.`)
+      setIsReceiptModalOpen(false)
+      resetSubmissionToken(receiptTokenRef)
+      await loadData()
+    } finally {
+      setIsPending(false)
+    }
+  }
+
+  const handlePostReceiptDraft = async (row: any) => {
+    if (isPending) return
+    setIsPending(true)
+    try {
+      const posted = await postReceipt(row.id)
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the receipt.")
+        return
+      }
+      const postedRow: any = posted.data ?? row
+      const selectedCust = customers.find((c) => c.id === row.customer_id)
+      setFormNotice(`${postedRow.receipt_no ?? row.receipt_no} posted — ${formatCurrency(Number(row.amount || 0))} received from ${selectedCust?.name ?? row.customer_name ?? "the customer"}.`)
+      setPrintReceipt({ ...row, ...postedRow, status: "posted", customer_name: selectedCust?.name ?? row.customer_name })
+      await loadData()
+    } finally {
+      setIsPending(false)
+    }
+  }
+
   const handleReceiptReverse = async (reasonCode: string, reason: string) => {
     if (!receiptReverseTarget || receiptReversing) return
     setReceiptReversing(true)
@@ -230,6 +285,10 @@ export default function BillingPage() {
       setFormError("Invoice needs a customer, a description, a positive quantity and a non-negative price.")
       return
     }
+    if (invQty * invPrice <= 0) {
+      setFormError("Invoice total must be greater than zero — set a unit price above zero.")
+      return
+    }
     setInvPending(true)
     try {
       const created = await createInvoice({
@@ -247,7 +306,68 @@ export default function BillingPage() {
       }
       const row: any = posted.data ?? created.data
       setFormNotice(`Invoice ${row.invoice_no ?? ""} posted for ${formatCurrency(invQty * invPrice)}.`)
+      setPrintInvoice({
+        ...row,
+        customer_id: invCustomerId,
+        invoice_lines: (row.invoice_lines ?? row.lines ?? []).length > 0
+          ? (row.invoice_lines ?? row.lines)
+          : [{ description: invDesc.trim(), quantity: invQty, unit_price: invPrice, line_total: invQty * invPrice }],
+        total_amount: row.total_amount ?? invQty * invPrice,
+        paid_amount: row.paid_amount ?? 0,
+        balance_amount: row.balance_amount ?? invQty * invPrice,
+        status: "posted",
+      })
       resetSubmissionToken(invoiceTokenRef)
+      await loadData()
+    } finally { setInvPending(false) }
+  }
+
+  const handleSaveInvoiceDraft = async () => {
+    if (invPending) return
+    if (!invCustomerId || !invDesc.trim() || !(invQty > 0) || invPrice < 0) {
+      setFormError("Invoice needs a customer, a description, a positive quantity and a non-negative price.")
+      return
+    }
+    if (invQty * invPrice <= 0) {
+      setFormError("Invoice total must be greater than zero — set a unit price above zero.")
+      return
+    }
+    setInvPending(true)
+    try {
+      const created = await createInvoice({
+        customerId: invCustomerId, sourceType: "manual", clientToken: submissionToken(invoiceTokenRef, "invoice"),
+        lines: [{ description: invDesc.trim(), quantity: invQty, unitPrice: invPrice }],
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not save the invoice draft.")
+        return
+      }
+      const row: any = created.data
+      setFormNotice(`Invoice ${row.invoice_no ?? ""} saved as draft — post it from the invoices table below.`)
+      resetSubmissionToken(invoiceTokenRef)
+      await loadData()
+    } finally { setInvPending(false) }
+  }
+
+  const handlePostInvoiceDraft = async (row: any) => {
+    if (invPending) return
+    setInvPending(true)
+    try {
+      const posted = await postInvoice(row.id)
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the invoice.")
+        return
+      }
+      const postedRow: any = posted.data ?? row
+      setPrintInvoice({
+        ...row,
+        ...postedRow,
+        invoice_lines: (postedRow.invoice_lines ?? postedRow.lines ?? row.invoice_lines ?? row.lines ?? []).length > 0
+          ? (postedRow.invoice_lines ?? postedRow.lines ?? row.invoice_lines ?? row.lines)
+          : [{ description: postedRow.notes ?? "Invoice", quantity: 1, unit_price: Number(postedRow.total_amount || row.total_amount || 0), line_total: Number(postedRow.total_amount || row.total_amount || 0) }],
+        status: "posted",
+      })
+      setFormNotice(`Invoice ${postedRow.invoice_no ?? row.invoice_no} posted for ${formatCurrency(Number(postedRow.total_amount ?? row.total_amount ?? 0))}.`)
       await loadData()
     } finally { setInvPending(false) }
   }
@@ -384,6 +504,7 @@ export default function BillingPage() {
                 </div>
                 <div className="flex gap-2 pt-1">
                   <button type="button" onClick={() => setPrintReceipt(r)} className="px-2 py-1 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print voucher</button>
+                  {(r as any).status === "draft" && (<button type="button" onClick={() => handlePostReceiptDraft(r)} className="px-2 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Post</button>)}
                   {(r as any).status === "posted" && (<button type="button" onClick={() => setReceiptReverseTarget(r)} className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}
                 </div>
               </div>
@@ -410,7 +531,7 @@ export default function BillingPage() {
       {/* Receipt Modal */}
       {isReceiptModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+          <div className="expensive-card w-full max-w-2xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <Receipt className="h-4 w-4 text-emerald-500" />
@@ -428,8 +549,8 @@ export default function BillingPage() {
             <form onSubmit={handleRecordReceipt} className="space-y-4 text-xs">
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="customer-payer">Customer / Payer</label>
-                <div className="flex flex-wrap items-start gap-2"><select id="customer-payer"
+                <label className="block font-medium text-foreground mb-1" htmlFor="customer-payer">Customer / Payer *</label>
+                <div className="flex flex-wrap items-start gap-2"><select id="customer-payer" title={customers.find((c) => c.id === customerId)?.name ?? ""}
                   value={customerId}
                   onChange={(e) => setCustomerId(e.target.value)}
                   className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -445,7 +566,7 @@ export default function BillingPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="amount-received-pkr">Amount Received (PKR)</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="amount-received-pkr">Amount Received (PKR) *</label>
                   <input id="amount-received-pkr"
                     type="number"
                     value={amount}
@@ -457,8 +578,8 @@ export default function BillingPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="deposit-account">Deposit Account</label>
-                  <select id="deposit-account"
+                  <label className="block font-medium text-foreground mb-1" htmlFor="deposit-account">Deposit Account *</label>
+                  <select id="deposit-account" required
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value as any)}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -472,7 +593,7 @@ export default function BillingPage() {
 
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="cash-account">Cash account *</label>
-                <select id="cash-account" value={receiptCashAccountId} onChange={(e) => setReceiptCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
+                <select id="cash-account" title={cashAccounts.find((a) => a.id === receiptCashAccountId) ? `${cashAccounts.find((a) => a.id === receiptCashAccountId)?.code} — ${cashAccounts.find((a) => a.id === receiptCashAccountId)?.name}` : ""} value={receiptCashAccountId} onChange={(e) => setReceiptCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
                   <option value="">Select account</option>
                   {cashAccounts.filter((a) => a.account_kind === paymentMethod).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}
                 </select>
@@ -481,11 +602,11 @@ export default function BillingPage() {
 
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="allocate-to-invoice-explicit-allocation">Allocate to invoice (explicit allocation)</label>
-                <select id="allocate-to-invoice-explicit-allocation" value={allocInvoiceId} onChange={(e) => { setAllocInvoiceId(e.target.value); const inv = invoices.find((i) => i.id === e.target.value); setAllocAmount(inv ? Number(inv.balance_amount ?? Number(inv.total_amount || 0) - Number(inv.paid_amount || 0)) : 0) }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                <select id="allocate-to-invoice-explicit-allocation" title={invoices.find((i) => i.id === allocInvoiceId)?.invoice_no ?? ""} value={allocInvoiceId} onChange={(e) => { setAllocInvoiceId(e.target.value); const inv = invoices.find((i) => i.id === e.target.value); setAllocAmount(inv ? Number(inv.balance_amount ?? Number(inv.total_amount || 0) - Number(inv.paid_amount || 0)) : 0) }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
                   <option value="">Unallocated (advance / on-account)</option>
                   {customerInvoices.map((i) => (<option key={i.id} value={i.id}>{i.invoice_no} — outstanding {formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</option>))}
                 </select>
-                {allocInvoiceId && (<input type="number" value={allocAmount} onChange={(e) => setAllocAmount(Number(e.target.value))} min="1" placeholder="Allocation amount" className="mt-2 w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" />)}
+                {allocInvoiceId && (<><input type="number" value={allocAmount} onChange={(e) => setAllocAmount(Number(e.target.value))} min="1" placeholder="Allocation amount" aria-label="Allocation amount" className="mt-2 w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /><p className="mt-1 text-[11px] text-muted-foreground">Allocated {formatCurrency(allocAmount)} of {formatCurrency(amount)} — unallocated remainder {formatCurrency(amount - allocAmount)}.</p></>)}
                 <p className="mt-1 text-[11px] text-muted-foreground">Allocations are recorded on the receipt (invoice_allocations). An unallocated receipt is an on-account collection, not revenue.</p>
               </div>
 
@@ -543,6 +664,14 @@ export default function BillingPage() {
                   Cancel
                 </button>
                 <button
+                  type="button"
+                  onClick={handleSaveReceiptDraft}
+                  disabled={isPending}
+                  className="px-4 py-2 rounded-lg bg-card border border-border text-xs font-semibold cursor-pointer disabled:opacity-60"
+                >
+                  Save as draft
+                </button>
+                <button
                   type="submit"
                   disabled={isPending}
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
@@ -558,10 +687,10 @@ export default function BillingPage() {
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Customer Invoices</h2>
         <p className="text-xs text-muted-foreground mb-4">Invoices count as revenue when posted. Receipts only collect them.</p>
-        <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Invoice</th><th className="pb-2">Customer</th><th className="pb-2 text-right">Total</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
+        <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Invoice</th><th className="pb-2">Date</th><th className="pb-2">Customer</th><th className="pb-2 text-right">Total</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
-            {invoices.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No invoices yet.</td></tr>}
-            {invoices.map((i) => (<tr key={i.id}><td className="py-2 font-mono font-bold">{i.invoice_no}</td><td className="py-2">{customers.find((c) => c.id === i.customer_id)?.name ?? "Not set"}</td><td className="py-2 text-right">{formatCurrency(Number(i.total_amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(i.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</td><td className="py-2 text-center">{i.status}<button type="button" onClick={() => setPrintInvoice(i)} className="ml-2 px-2 py-0.5 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print</button>{i.status === "posted" && (<button type="button" onClick={() => setInvReverseTarget(i)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
+            {invoices.length === 0 && <tr><td colSpan={7} className="py-4"><EmptyState title="No invoices yet" hint="An invoice bills a customer for work done. Create one in the form below — it posts as revenue, and receipts collect it." actionLabel="Create invoice" onAction={() => document.getElementById("customer")?.focus()} /></td></tr>}
+            {invoices.map((i) => (<tr key={i.id}><td className="py-2 font-mono font-bold">{i.invoice_no}</td><td className="py-2 text-muted-foreground">{formatDate(i.date)}</td><td className="py-2">{customers.find((c) => c.id === i.customer_id)?.name ?? "Not set"}</td><td className="py-2 text-right">{formatCurrency(Number(i.total_amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(i.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</td><td className="py-2 text-center">{i.status}{i.status === "draft" && (<button type="button" onClick={() => handlePostInvoiceDraft(i)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Post</button>)}<button type="button" onClick={() => setPrintInvoice(i)} className="ml-2 px-2 py-0.5 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print</button>{i.status === "posted" && (<button type="button" onClick={() => setInvReverseTarget(i)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
           </tbody></table>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>Showing {invoices.length === 0 ? 0 : (invoicePage - 1) * pageSize + 1}–{(invoicePage - 1) * pageSize + invoices.length} of {totalInvoices} invoices</span>
@@ -571,11 +700,11 @@ export default function BillingPage() {
             </span>
           </div></div>
         <form onSubmit={handleCreateInvoice} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="customer">Customer *</label><div className="flex flex-wrap items-start gap-2"><select id="customer" value={invCustomerId} onChange={(e) => setInvCustomerId(e.target.value)} className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select customer</option>{customers.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}</select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) setCustomers((r.data as any[]).filter((x) => x.type === "customer" || x.type === "both")); setInvCustomerId(id); }} /></div></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="customer">Customer *</label><div className="flex flex-wrap items-start gap-2"><select id="customer" title={customers.find((c) => c.id === invCustomerId)?.name ?? ""} value={invCustomerId} onChange={(e) => setInvCustomerId(e.target.value)} className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select customer</option>{customers.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}</select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) setCustomers((r.data as any[]).filter((x) => x.type === "customer" || x.type === "both")); setInvCustomerId(id); }} /></div></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="description">Description *</label><input id="description" value={invDesc} onChange={(e) => setInvDesc(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="quantity">Quantity *</label><input id="quantity" type="number" value={invQty} onChange={(e) => setInvQty(Number(e.target.value))} min="1" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="unit-price">Unit price *</label><input id="unit-price" type="number" value={invPrice} onChange={(e) => setInvPrice(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
-          <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={invPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{invPending ? "Posting…" : "Create & post invoice"}</button></div>
+          <div className="sm:col-span-2 lg:col-span-4 flex flex-wrap items-center justify-between gap-3"><span className="font-semibold text-foreground">Line amount: {formatCurrency(invQty * invPrice)}</span><span className="flex gap-2"><button type="button" onClick={handleSaveInvoiceDraft} disabled={invPending} className="px-4 py-2 rounded-lg bg-card border border-border font-bold cursor-pointer disabled:opacity-60">Save as draft</button><button type="submit" disabled={invPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{invPending ? "Posting…" : "Create & post invoice"}</button></span></div>
         </form>
       </div>
       {printReceipt && printReceipt.status === "posted" && (
@@ -590,7 +719,7 @@ export default function BillingPage() {
           <div className="hidden print:block mt-2">
             <ReceiptVoucherPrint
               receiptNo={printReceipt.receipt_no}
-              date={printReceipt.date}
+              date={formatDate(printReceipt.date)}
               customerName={printReceipt.customer_name}
               paymentMethod={printReceipt.payment_method}
               account={receiptAccountLabel(printReceipt)}
@@ -617,7 +746,7 @@ export default function BillingPage() {
           <div className="hidden print:block mt-2">
             <InvoicePrint
               invoiceNo={printInvoice.invoice_no}
-              date={printInvoice.date?.slice(0, 10)}
+              date={formatDate(printInvoice.date)}
               customerName={customers.find((c) => c.id === printInvoice.customer_id)?.name ?? printInvoice.customer_name}
               status={printInvoice.status}
               lines={(printInvoice.invoice_lines ?? printInvoice.lines ?? []).length > 0 ? (printInvoice.invoice_lines ?? printInvoice.lines).map((l: any) => ({ description: l.description, quantity: l.quantity, unitPrice: l.unit_price ?? l.unitPrice, amount: l.line_total ?? l.amount })) : [{ description: printInvoice.notes ?? "Invoice", quantity: 1, unitPrice: Number(printInvoice.total_amount || 0), amount: Number(printInvoice.total_amount || 0) }]}
