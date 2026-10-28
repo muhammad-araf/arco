@@ -17,11 +17,11 @@ import {
   Boxes,
 } from "lucide-react"
 import { listInward, getInward, createInwardDraft, postInward, reverseInward } from "@/app/actions/inward"
-import { listGodowns, listProducts, listParties, createParty, createGodown, createProduct } from "@/app/actions/masters"
+import { listGodowns, listProducts, listParties, createParty, createGodown, createProduct, listEmployees } from "@/app/actions/masters"
 import { InlineAdd, PARTY_FIELDS, GODOWN_FIELDS, PRODUCT_FIELDS } from "@/components/print/inline-add"
 import { getCompanySettings } from "@/app/actions/settings"
 import { InwardSlipPrint } from "@/components/print/inward-slip-print"
-import { AttachmentFields } from "@/components/attachment-fields"
+import { AttachmentFields, AttachmentLink } from "@/components/attachment-fields"
 import { PrintButton } from "@/components/print/print-button"
 import { IncomingGoodsVoucher, IncomingGoodsItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatCurrency, formatDate } from "@/lib/utils"
@@ -44,6 +44,7 @@ export default function InwardPage() {
   const [products, setProducts] = React.useState<Product[]>([])
   const [parties, setParties] = React.useState<Party[]>([])
   const [owners, setOwners] = React.useState<Party[]>([])
+  const [employees, setEmployees] = React.useState<{ id: string; full_name: string }[]>([])
   const [ownerId, setOwnerId] = React.useState("")
   const [company, setCompany] = React.useState<{ name?: string; address?: string; phone?: string; email?: string; logoUrl?: string } | null>(null)
   const [inwardDate, setInwardDate] = React.useState("")
@@ -69,6 +70,7 @@ export default function InwardPage() {
   const [isPending, setIsPending] = React.useState(false)
   const [showPostConfirm, setShowPostConfirm] = React.useState(false)
   const [draftVoucher, setDraftVoucher] = React.useState<IncomingGoodsVoucher | null>(null)
+  const [isSavingDraft, setIsSavingDraft] = React.useState(false)
   const [reversalTarget, setReversalTarget] = React.useState<IncomingGoodsVoucher | null>(null)
   const [isReversing, setIsReversing] = React.useState(false)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
@@ -106,10 +108,11 @@ export default function InwardPage() {
   const loadInwardPage = async (page: number) => {
     setIsLoading(true)
     try {
-      const [v, g, pr, pa, co] = await Promise.all([
+      const [v, g, pr, pa, co, em] = await Promise.all([
         listInward({ page, pageSize: 50, search: filterRef.current.search || undefined, from: filterRef.current.from || undefined, to: filterRef.current.to || undefined }),
-        listGodowns(), listProducts(), listParties(), getCompanySettings(),
+        listGodowns(), listProducts(), listParties(), getCompanySettings(), listEmployees(),
       ])
+      if (em.success && Array.isArray(em.data)) setEmployees((em.data as any[]).map((e) => ({ id: e.id, full_name: e.full_name })))
       const failed = [v, g, pr, pa].find((r) => !r.success)
       if (failed) setFormError(failed.error ?? "Could not load inward data.")
       const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
@@ -195,6 +198,59 @@ export default function InwardPage() {
     0
   )
 
+  // Header + all-zero checks shared by the footer actions. A voucher with
+  // 0 bags / 0.00 kg is never posted; the Post button is disabled while
+  // any of these hold, and submit re-checks them with a named error.
+  const validationIssues: string[] = []
+  if (!partyId) validationIssues.push("Supplier / source")
+  if (!godownId) validationIssues.push("Target godown")
+  if (!inwardDate) validationIssues.push("Receipt date")
+  if (totalBags <= 0) validationIssues.push("At least one product line with bags greater than zero")
+  if (totalNetWeight <= 0) validationIssues.push("At least one product line with net weight greater than zero")
+  const canPost = validationIssues.length === 0
+  const selectedSupplierName = parties.find((x) => x.id === partyId)?.name ?? ""
+  const selectedGodownName = godowns.find((x) => x.id === godownId)?.name ?? ""
+  const selectedOwnerName = owners.find((x) => x.id === ownerId)?.name ?? ""
+
+  const draftPayloadItems = () => items.map((it) => ({
+    productId: it.productId, bags: Number(it.bags), grossWeightKg: Number(it.grossWeight),
+    tareWeightKg: Number(it.tareWeight), ratePerUnit: Number(it.rate), lotNo: it.lotNo || undefined,
+  }))
+
+  // "Save as draft": the existing createInwardDraft action only, with no
+  // posting. The register reload shows the draft (status "draft"); stock
+  // is untouched until the voucher is posted.
+  const handleSaveDraft = async () => {
+    if (isPending || isSavingDraft) return
+    if (!partyId) return setFormError("Select a supplier / source before saving a draft. Add one in Masters if the list is empty.")
+    if (!godownId) return setFormError("Select the target godown before saving a draft.")
+    if (!inwardDate) return setFormError("Select the receipt date before saving a draft.")
+    if (!items.some((it) => it.productId && Number(it.grossWeight) > 0)) return setFormError("Add at least one product line with a product and a gross weight greater than zero before saving a draft.")
+    setFormError("")
+    setIsSavingDraft(true)
+    try {
+      const created = await createInwardDraft({
+        partyId, godownId, date: inwardDate ? `${inwardDate}T00:00:00.000Z` : undefined,
+        biltyNo: biltyNo || undefined, vehicleNo: vehicleNo || undefined,
+        driverName: driverName || undefined, driverPhone: driverPhone || undefined, notes: notes || undefined,
+        receivedBy: receivedBy || undefined, byHand, nature: nature || undefined,
+        attachmentUrl: attachmentUrl || undefined, attachmentNote: attachmentNote || undefined,
+        isCustomerOwned: ownerId ? true : false, ownerPartyId: ownerId || undefined,
+        items: draftPayloadItems(),
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not save the draft.")
+        return
+      }
+      const row: any = created.data
+      setFormNotice(`${row.voucher_no ?? "Draft"} saved as draft — stock is unchanged until it is posted.`)
+      setIsFormOpen(false)
+      await loadData()
+    } finally {
+      setIsSavingDraft(false)
+    }
+  }
+
   const handleSubmitVoucher = (e: React.FormEvent) => {
     e.preventDefault()
     if (isPending) return
@@ -202,6 +258,8 @@ export default function InwardPage() {
     // actionable message — never a silent return.
     if (!partyId) return setFormError("Select a supplier / source before posting. Add one in Masters if the list is empty.")
     if (!godownId) return setFormError("Select the target godown that will receive this stock.")
+    if (!inwardDate) return setFormError("Select the receipt date before posting.")
+    if (totalBags <= 0 || totalNetWeight <= 0) return setFormError("Cannot post an empty receipt: add at least one product line with bags and net weight greater than zero.")
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
       if (!item.productId) return setFormError(`Line ${i + 1}: select a product.`)
@@ -407,10 +465,10 @@ export default function InwardPage() {
             <tbody className="divide-y divide-border">
               {visibleVouchers.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-4">
+                  <td colSpan={9} className="py-4">
                     <EmptyState
                       title={drillFilter ? "No vouchers match this filter" : "No inward vouchers yet"}
-                      hint={drillFilter ? "Clear the filter, or record a new arrival." : "Record your first arrival."}
+                      hint={drillFilter ? "Clear the filter, or record a new arrival." : "Inward records stock received into a godown. Posting a receipt increases stock here; the vendor bill for that receipt is created separately in Purchases. Use New Receiving Voucher to record an arrival."}
                       actionLabel="New Receiving Voucher"
                       onAction={() => setIsFormOpen(true)}
                     />
@@ -488,13 +546,14 @@ export default function InwardPage() {
       {/* Creation Modal */}
       {isFormOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
-          <div className="expensive-card w-full max-w-3xl p-6 bg-card border border-border shadow-md rounded-md my-8 max-h-[90dvh] overflow-y-auto">
+          <div className="expensive-card w-full max-w-5xl p-6 bg-card border border-border shadow-md rounded-md my-8 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-4 border-b border-border">
               <div>
                 <h3 className="text-base font-bold text-foreground flex items-center gap-2">
                   <Truck className="h-5 w-5 text-emerald-500" />
                   New Receiving Voucher
                 </h3>
+                <p className="text-xs text-muted-foreground mt-1">A receipt only: posting increases godown stock. The vendor bill is created separately in Purchases.</p>
               </div>
               <button
                 type="button"
@@ -508,9 +567,9 @@ export default function InwardPage() {
             <form onSubmit={handleSubmitVoucher} className="space-y-5 pt-4">
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               {/* Header Details Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="supplier-party">Supplier / Party</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="supplier-party">Supplier / Party *</label>
                   <div className="flex flex-wrap items-start gap-2"><select id="supplier-party"
                     value={partyId}
                     onChange={(e) => setPartyId(e.target.value)}
@@ -523,10 +582,11 @@ export default function InwardPage() {
                       </option>
                     ))}
                   </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "supplier" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setParties((list.filter((x) => x.type === "supplier" || x.type === "both" || x.type === "source"))); } setPartyId(id); }} /></div>
+                  {selectedSupplierName && <p className="mt-1 break-words text-muted-foreground">Selected: {selectedSupplierName}</p>}
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="target-godown">Target Godown</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="target-godown">Target Godown *</label>
                   <div className="flex flex-wrap items-start gap-2"><select id="target-godown"
                     value={godownId}
                     onChange={(e) => setGodownId(e.target.value)}
@@ -539,6 +599,7 @@ export default function InwardPage() {
                       </option>
                     ))}
                   </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setGodowns(list); } setGodownId(id); }} /></div>
+                  {selectedGodownName && <p className="mt-1 break-words text-muted-foreground">Selected: {selectedGodownName}</p>}
                 </div>
 
                 <div>
@@ -555,6 +616,7 @@ export default function InwardPage() {
                       </option>
                     ))}
                   </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setOwners(list); } setOwnerId(id); }} /></div>
+                  <p className="mt-1 break-words text-muted-foreground">{selectedOwnerName ? `Selected: ${selectedOwnerName}` : "Leave as Company stock unless the goods belong to a customer."}</p>
                 </div>
 
                 <div>
@@ -602,7 +664,7 @@ export default function InwardPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="inward-date">Date</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="inward-date">Date *</label>
                   <input id="inward-date"
                     type="date"
                     value={inwardDate}
@@ -613,14 +675,25 @@ export default function InwardPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="received-by">Received By (staff)</label>
-                  <input id="received-by"
-                    type="text"
-                    value={receivedBy}
-                    onChange={(e) => setReceivedBy(e.target.value)}
-                    placeholder="Staff member who received the goods"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
+                  <label className="block font-medium text-foreground mb-1" htmlFor="received-by">Received by (staff)</label>
+                  {employees.length > 0 ? (
+                    <select id="received-by"
+                      value={receivedBy}
+                      onChange={(e) => setReceivedBy(e.target.value)}
+                      className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                    >
+                      <option value="">Not recorded</option>
+                      {employees.map((emp) => (
+                        <option key={emp.id} value={emp.full_name}>
+                          {emp.full_name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="px-2.5 py-2 rounded-lg bg-muted border border-border text-muted-foreground">
+                      No staff on record yet — add staff on the <a href="/employees" className="underline font-semibold text-foreground">Employees page</a>, then pick them here.
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -655,6 +728,8 @@ export default function InwardPage() {
                   />
                 </div>
                 <div className="sm:col-span-2">
+                  <p className="font-medium text-foreground mb-1">Attachments</p>
+                  <p className="text-muted-foreground mb-2">Paste link to scanned bill (optional) — no file is uploaded; only the link is saved with the voucher, and it becomes a clickable link on the slip once saved.</p>
                   <AttachmentFields url={attachmentUrl} note={attachmentNote} onUrlChange={setAttachmentUrl} onNoteChange={setAttachmentNote} idPrefix="inward" />
                 </div>
               </div>
@@ -679,70 +754,76 @@ export default function InwardPage() {
                   {items.map((item, idx) => {
                     const netWeight = Math.max(0, item.grossWeight - item.tareWeight)
                     const lineTotal = netWeight * item.rate
+                    const lineIssues: string[] = []
+                    if (!item.productId) lineIssues.push("product")
+                    if (!(Number(item.bags) > 0)) lineIssues.push("bags greater than zero")
+                    if (!(Number(item.grossWeight) > 0)) lineIssues.push("gross weight greater than zero")
+                    if (Number(item.tareWeight) >= Number(item.grossWeight) && Number(item.grossWeight) > 0) lineIssues.push("tare weight less than gross weight")
                     return (
                       <div
                         key={idx}
-                        className="grid grid-cols-1 sm:grid-cols-7 gap-2 p-2.5 rounded-lg bg-muted border border-border text-xs items-center"
+                        className="p-2.5 rounded-lg bg-muted border border-border text-xs space-y-2"
                       >
-                        <div className="sm:col-span-2">
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`product-${idx}`}>Product</label>
-                          <div className="flex flex-wrap items-start gap-2"><select id={`product-${idx}`}
-                            value={item.productId}
-                            onChange={(e) => handleItemChange(idx, "productId", e.target.value)}
-                            className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
-                          >
-                            {products.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name}
-                              </option>
-                            ))}
-                          </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } handleItemChange(idx, "productId", id); }} /></div>
+                        <div className="flex items-start gap-2">
+                          <div className="flex-1 min-w-0">
+                            <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`product-${idx}`}>Product *</label>
+                            <div className="flex flex-wrap items-start gap-2"><select id={`product-${idx}`}
+                              value={item.productId}
+                              onChange={(e) => handleItemChange(idx, "productId", e.target.value)}
+                              className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                            >
+                              {products.map((pr) => (
+                                <option key={pr.id} value={pr.id}>
+                                  {pr.name}
+                                </option>
+                              ))}
+                            </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } handleItemChange(idx, "productId", id); }} /></div>
+                            {products.find((pr) => pr.id === item.productId) && (
+                              <p className="mt-1 break-words text-muted-foreground">Selected: {products.find((pr) => pr.id === item.productId)?.name}</p>
+                            )}
+                          </div>
+                          {items.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveItem(idx)}
+                              className="mt-4 p-1 text-destructive hover:bg-destructive/10 rounded cursor-pointer"
+                              title="Delete Row"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                         </div>
 
-                        <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`bags-count-${idx}`}>Bags Count</label>
-                          <input id={`bags-count-${idx}`}
-                            type="number"
-                            value={item.bags}
-                            onChange={(e) => handleItemChange(idx, "bags", Number(e.target.value))}
-                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
-                            min="1"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`gross-wt-kg-${idx}`}>Gross Wt (kg)</label>
-                          <input id={`gross-wt-kg-${idx}`}
-                            type="number"
-                            value={item.grossWeight}
-                            onChange={(e) => handleItemChange(idx, "grossWeight", Number(e.target.value))}
-                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`tare-wt-kg-${idx}`}>Tare Wt (kg)</label>
-                          <input id={`tare-wt-kg-${idx}`}
-                            type="number"
-                            value={item.tareWeight}
-                            onChange={(e) => handleItemChange(idx, "tareWeight", Number(e.target.value))}
-                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`lot-no-${idx}`}>Lot No. (optional)</label>
-                          <input id={`lot-no-${idx}`}
-                            type="text"
-                            value={item.lotNo}
-                            onChange={(e) => handleItemChange(idx, "lotNo", e.target.value)}
-                            placeholder="Leave empty for no lot tracking"
-                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
-                          />
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <div className="flex-1">
+                        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                          <div>
+                            <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`bags-count-${idx}`}>Bags Count *</label>
+                            <input id={`bags-count-${idx}`}
+                              type="number"
+                              value={item.bags}
+                              onChange={(e) => handleItemChange(idx, "bags", Number(e.target.value))}
+                              className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                              min="1"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`gross-wt-kg-${idx}`}>Gross Wt (kg) *</label>
+                            <input id={`gross-wt-kg-${idx}`}
+                              type="number"
+                              value={item.grossWeight}
+                              onChange={(e) => handleItemChange(idx, "grossWeight", Number(e.target.value))}
+                              className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`tare-wt-kg-${idx}`}>Tare Wt (kg)</label>
+                            <input id={`tare-wt-kg-${idx}`}
+                              type="number"
+                              value={item.tareWeight}
+                              onChange={(e) => handleItemChange(idx, "tareWeight", Number(e.target.value))}
+                              className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                            />
+                          </div>
+                          <div>
                             <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`rate-kg-${idx}`}>Rate / kg</label>
                             <input id={`rate-kg-${idx}`}
                               type="number"
@@ -751,15 +832,23 @@ export default function InwardPage() {
                               className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
                             />
                           </div>
-                          {items.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveItem(idx)}
-                              className="mt-3.5 p-1 text-destructive hover:bg-destructive/10 rounded cursor-pointer"
-                              title="Delete Row"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
+                          <div>
+                            <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`lot-no-${idx}`}>Lot No. (optional)</label>
+                            <input id={`lot-no-${idx}`}
+                              type="text"
+                              value={item.lotNo}
+                              onChange={(e) => handleItemChange(idx, "lotNo", e.target.value)}
+                              placeholder="Leave empty for no lot tracking"
+                              className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap gap-4 text-foreground">
+                          <span><span className="text-muted-foreground">Net weight: </span><strong className="font-mono">{formatWeight(netWeight)}</strong></span>
+                          <span><span className="text-muted-foreground">Line value: </span><strong className="font-mono">{formatCurrency(lineTotal)}</strong></span>
+                          {lineIssues.length > 0 && (
+                            <span className="text-red-600 dark:text-red-400">Line {idx + 1} still needs: {lineIssues.join(", ")}.</span>
                           )}
                         </div>
                       </div>
@@ -781,13 +870,19 @@ export default function InwardPage() {
                   </strong>
                 </div>
                 <div>
-                  <span className="text-muted-foreground">Total Estimated Value: </span>
+                  <span className="text-muted-foreground">Estimated value (receipt estimate — not a purchase bill): </span>
                   <strong className="text-foreground font-mono">{formatCurrency(totalValue)}</strong>
                 </div>
               </div>
 
+              {!canPost && (
+                <p className="text-xs text-red-600 dark:text-red-400">
+                  Before posting, complete: {validationIssues.join("; ")}.
+                </p>
+              )}
+
               {/* Action Buttons */}
-              <div className="flex items-center justify-end gap-3 pt-2">
+              <div className="flex flex-wrap items-center justify-end gap-3 pt-2">
                 <button
                   type="button"
                   onClick={() => setIsFormOpen(false)}
@@ -796,8 +891,19 @@ export default function InwardPage() {
                   Cancel
                 </button>
                 <button
+                  type="button"
+                  onClick={handleSaveDraft}
+                  disabled={isPending || isSavingDraft}
+                  title="Save without posting — stock is unchanged until the voucher is posted."
+                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-muted text-foreground text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isSavingDraft ? <SubmitSpinner /> : null}
+                  <span>{isSavingDraft ? "Saving…" : "Save as draft"}</span>
+                </button>
+                <button
                   type="submit"
-                  disabled={isPending}
+                  disabled={isPending || !canPost}
+                  title={!canPost ? `Complete before posting: ${validationIssues.join("; ")}` : "Post and add this stock to the ledger"}
                   className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
@@ -881,6 +987,21 @@ export default function InwardPage() {
               <div className="border-t pt-2">Godown Scale Operator</div>
               <div className="border-t pt-2">Authorized Officer</div>
             </div>
+
+            {(selectedVoucherForPrint as any).attachment_url && (
+              <div className="text-xs no-print">
+                <span className="text-gray-500">Scanned bill: </span>
+                <AttachmentLink url={(selectedVoucherForPrint as any).attachment_url} note={(selectedVoucherForPrint as any).attachment_note ?? undefined} />
+              </div>
+            )}
+            {selectedVoucherForPrint.status === "posted" && (
+              <div className="text-xs no-print">
+                <a href="/purchases" className="underline font-semibold text-emerald-700">
+                  Create purchase bill for this receipt
+                </a>
+                <span className="text-gray-500"> — the Purchases page does not pre-select a supplier from a link yet, so pick supplier “{selectedVoucherForPrint.party_name}” there. No bill is created automatically.</span>
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-3 pt-4 border-t no-print">
               <button
