@@ -113,6 +113,13 @@ function PartiesPageInner() {
   const [error, setError] = React.useState("")
   const [notice, setNotice] = React.useState("")
   const [pending, setPending] = React.useState(false)
+  const [openingsError, setOpeningsError] = React.useState("")
+
+  // Keep the tab in sync if the URL changes under us (back/forward).
+  React.useEffect(() => {
+    const fromUrl = tabFromParam(searchParams.get("tab"))
+    setTab((current) => (current === fromUrl ? current : fromUrl))
+  }, [searchParams])
 
   const goTab = (t: Tab) => {
     setTab(t)
@@ -127,7 +134,7 @@ function PartiesPageInner() {
       const [pa, ob] = await Promise.all([listParties(true), listOpeningBalances()])
       if (!pa.success) setError(pa.error ?? "Could not load parties.")
       else setParties(Array.isArray(pa.data) ? pa.data : [])
-      if (ob.success) setOpenings(Array.isArray(ob.data) ? ob.data : [])
+      if (ob.success) { setOpenings(Array.isArray(ob.data) ? ob.data : []); setOpeningsError("") }
       // listOpeningBalances failing must not hide the directory: the
       // Openings tab reports its own error instead.
       else setOpeningsError(ob.error ?? "Could not load opening balances.")
@@ -137,7 +144,6 @@ function PartiesPageInner() {
       setIsLoading(false)
     }
   }, [])
-  const [openingsError, setOpeningsError] = React.useState("")
 
   React.useEffect(() => { loadData() }, [loadData])
 
