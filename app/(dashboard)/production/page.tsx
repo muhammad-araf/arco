@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { postToken } from "@/lib/idempotency"
 
 import * as React from "react"
@@ -851,58 +852,21 @@ export default function ProductionPage() {
                 </div>
               </div>
 
-              {/* Packaging: writes a packing record + bardana ledger row on post */}
-              <div className="p-3 rounded-lg bg-muted border border-border space-y-3">
+              {/* Batch packing moved to the Packing page: pack a
+                  batch's output there instead of inside this form. */}
+              <div className="p-3 rounded-lg bg-muted border border-border space-y-2">
                 <span className="font-bold text-foreground uppercase tracking-wider text-[10px] block">
                   Packaging (Bardana)
                 </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="bag-bardana-type">Bag / Bardana Type</label>
-                    <select id="bag-bardana-type"
-                      value={packagingTypeId}
-                      onChange={(e) => setPackagingTypeId(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
-                    >
-                      <option value="">No packaging for this batch</option>
-                      {packagingTypes.map((p: any) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name} — {p.current_stock} bags available
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="bags-consumed">Bags Consumed</label>
-                    <input id="bags-consumed"
-                      type="number"
-                      value={bagsConsumed}
-                      onChange={(e) => setBagsConsumed(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
-                      min="0"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="packing-rate-bag-pkr">Packing Rate / Bag (PKR)</label>
-                    <input id="packing-rate-bag-pkr"
-                      type="number"
-                      value={packingRatePerBag}
-                      onChange={(e) => setPackingRatePerBag(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
-                      min="0"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="damaged-bags">Damaged Bags</label>
-                    <input id="damaged-bags"
-                      type="number"
-                      value={damagedBags}
-                      onChange={(e) => setDamagedBags(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
-                      min="0"
-                    />
-                  </div>
-                </div>
+                <p className="text-xs text-muted-foreground">
+                  Batch packing now lives on the Packing page, with the
+                  batch&apos;s output, bag type, bags, rate and damaged
+                  bags in one place.
+                </p>
+                <Link href="/packing?tab=batch-packing" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold cursor-pointer">
+                  Pack this batch&apos;s output
+                  <ChevronRight className="h-3 w-3" />
+                </Link>
               </div>
 
               <div>
