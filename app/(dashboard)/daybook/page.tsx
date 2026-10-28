@@ -19,14 +19,18 @@ import { getDaybook, listExpenses, createExpense, postExpense, reverseExpense, u
 import { listParties } from "@/app/actions/masters"
 import { ExpenseVoucher } from "@/lib/types/database"
 import { AttachmentFields, AttachmentLink } from "@/components/attachment-fields"
-import { formatCurrency } from "@/lib/utils"
+import { formatCurrency, formatDate } from "@/lib/utils"
 import {
   AlertBanner,
   ConfirmDialog,
+  EmptyState,
   ReversalDialog,
   SubmitSpinner,
   isPositive,
 } from "@/components/erp-ui"
+import { ExpenseVoucherPrint } from "@/components/print/expense-voucher-print"
+import { PrintButton } from "@/components/print/print-button"
+import { amountInWordsPKR } from "@/lib/calc/finance"
 import { DaybookSkeleton } from "@/components/route-skeletons"
 
 export default function DaybookPage() {
@@ -84,6 +88,7 @@ export default function DaybookPage() {
   const [expSettlement, setExpSettlement] = React.useState<"paid" | "credit">("paid")
   const [expVendorId, setExpVendorId] = React.useState("")
   const [expCashAccountId, setExpCashAccountId] = React.useState("")
+  const [printExpense, setPrintExpense] = React.useState<any | null>(null)
   const [expensePage, setExpensePage] = React.useState(1)
   const [totalExpenses, setTotalExpenses] = React.useState(0)
   const expensePageSize = 50
@@ -160,17 +165,25 @@ export default function DaybookPage() {
   const currentBankBalance = bankClosing
   const currentOnlineBalance = onlineClosing
 
+  // Expense validation shared by the Post path and Save-as-draft, so a
+  // draft can never be an empty voucher. Spec §12: an expense needs a
+  // payee, a category, a description and a positive amount — each
+  // failure says what is missing.
+  const expenseFormError = (): string | null => {
+    if (!payee.trim()) return "Payee is required — who was this expense paid to?"
+    if (!categoryName.trim()) return "Select or enter an expense category."
+    if (!description.trim()) return "A short description is required so the daybook stays auditable."
+    if (!isPositive(amount)) return "Expense amount must be greater than zero."
+    if (expSettlement === "credit" && !expVendorId) return "A credit expense needs a vendor — the unpaid amount has to be owed to someone."
+    if (expSettlement === "paid" && !expCashAccountId) return "Select the cash account this expense is paid from."
+    return null
+  }
+
   const handleAddExpense = (e: React.FormEvent) => {
     e.preventDefault()
     if (isPending) return
-    // Spec §12: an expense needs a payee, a category, a description and a
-    // positive amount — each failure says what is missing.
-    if (!payee.trim()) return setFormError("Payee is required — who was this expense paid to?")
-    if (!categoryName.trim()) return setFormError("Select or enter an expense category.")
-    if (!description.trim()) return setFormError("A short description is required so the daybook stays auditable.")
-    if (!isPositive(amount)) return setFormError("Expense amount must be greater than zero.")
-    if (expSettlement === "credit" && !expVendorId) return setFormError("A credit expense needs a vendor — the unpaid amount has to be owed to someone.")
-    if (expSettlement === "paid" && !expCashAccountId) return setFormError("Select the cash account this expense is paid from.")
+    const validationError = expenseFormError()
+    if (validationError) return setFormError(validationError)
     setFormError("")
     setDraftExpense({
       id: `exp-${Date.now()}`,
@@ -213,6 +226,7 @@ export default function DaybookPage() {
       }
       const row: any = posted.data ?? created.data
       setFormNotice(`${row.expense_no ?? draftExpense.expense_no} posted — ${formatCurrency(amount)} for ${categoryName} (${expSettlement === "credit" ? "credit, unpaid" : paymentMethod}).`)
+      setPrintExpense({ ...draftExpense, ...row, status: "posted", category_name: categoryName, payee, amount, payment_method: paymentMethod, description })
       setShowConfirm(false)
       setIsExpenseModalOpen(false)
       resetSubmissionToken(expenseTokenRef)
@@ -221,6 +235,53 @@ export default function DaybookPage() {
     } finally {
       setIsPending(false)
       expenseGuard.current = false
+    }
+  }
+
+  const handleSaveExpenseDraft = async () => {
+    if (isPending) return
+    const validationError = expenseFormError()
+    if (validationError) return setFormError(validationError)
+    setIsPending(true)
+    try {
+      const created = await createExpense({
+        categoryName, categoryId: expCategoryId || undefined, payee: payee.trim(), amount, paymentMethod,
+        location: location.trim() || undefined,
+        description: description.trim(), settlement: expSettlement,
+        attachmentUrl: attachmentUrl || undefined, attachmentNote: attachmentNote || undefined,
+        vendorId: expSettlement === "credit" ? expVendorId : undefined,
+        cashAccountId: expSettlement === "paid" ? expCashAccountId : undefined,
+        clientToken: submissionToken(expenseTokenRef, "expense"),
+      })
+      if (!created.success || !(created.data as any)?.id) {
+        setFormError(created.error ?? "Could not save the expense draft.")
+        return
+      }
+      const row: any = created.data
+      setFormNotice(`${row.expense_no ?? "Expense"} saved as draft — post it from the expenses table below.`)
+      setIsExpenseModalOpen(false)
+      resetSubmissionToken(expenseTokenRef)
+      await loadData()
+    } finally {
+      setIsPending(false)
+    }
+  }
+
+  const handlePostExpenseDraft = async (row: any) => {
+    if (isPending) return
+    setIsPending(true)
+    try {
+      const posted = await postExpense(row.id)
+      if (!posted.success) {
+        setFormError(posted.error ?? "Could not post the expense.")
+        return
+      }
+      const postedRow: any = posted.data ?? row
+      setFormNotice(`${postedRow.expense_no ?? row.expense_no} posted — ${formatCurrency(Number(row.amount || 0))} for ${row.category_name ?? categoryName}.`)
+      setPrintExpense({ ...row, ...postedRow, status: "posted" })
+      await loadData()
+    } finally {
+      setIsPending(false)
     }
   }
 
@@ -373,7 +434,7 @@ export default function DaybookPage() {
       {/* Expense Modal */}
       {isExpenseModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+          <div className="expensive-card w-full max-w-2xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
                 <Receipt className="h-4 w-4 text-emerald-500" />
@@ -391,8 +452,8 @@ export default function DaybookPage() {
             <form onSubmit={handleAddExpense} className="space-y-4 text-xs">
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="expense-category">Expense Category</label>
-                <select id="expense-category"
+                <label className="block font-medium text-foreground mb-1" htmlFor="expense-category">Expense Category *</label>
+                <select id="expense-category" title={categoryName} required
                   value={categoryName}
                   onChange={(e) => {
                     setCategoryName(e.target.value)
@@ -434,7 +495,7 @@ export default function DaybookPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="payee-vendor-name">Payee / Vendor Name</label>
+                <label className="block font-medium text-foreground mb-1" htmlFor="payee-vendor-name">Payee / Vendor Name *</label>
                 <input id="payee-vendor-name"
                   type="text"
                   value={payee}
@@ -447,7 +508,7 @@ export default function DaybookPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="amount-pkr">Amount (PKR)</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="amount-pkr">Amount (PKR) *</label>
                   <input id="amount-pkr"
                     type="number"
                     value={amount}
@@ -459,8 +520,8 @@ export default function DaybookPage() {
                 </div>
 
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="paid-from">Paid From</label>
-                  <select id="paid-from"
+                  <label className="block font-medium text-foreground mb-1" htmlFor="paid-from">Paid From *</label>
+                  <select id="paid-from" required
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value as "cash" | "bank")}
                     className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -472,8 +533,8 @@ export default function DaybookPage() {
               </div>
 
               <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="settlement">Settlement</label>
-                <select id="settlement" value={expSettlement} onChange={(e) => setExpSettlement(e.target.value as "paid" | "credit")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
+                <label className="block font-medium text-foreground mb-1" htmlFor="settlement">Settlement *</label>
+                <select id="settlement" required value={expSettlement} onChange={(e) => setExpSettlement(e.target.value as "paid" | "credit")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
                   <option value="paid">Paid now (cash out on posting)</option>
                   <option value="credit">Credit (unpaid — settle later as a vendor payment)</option>
                 </select>
@@ -481,7 +542,7 @@ export default function DaybookPage() {
               {expSettlement === "credit" && (
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="vendor-owed">Vendor owed *</label>
-                  <select id="vendor-owed" value={expVendorId} onChange={(e) => setExpVendorId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
+                  <select id="vendor-owed" title={vendors.find((v: any) => v.id === expVendorId)?.name ?? ""} value={expVendorId} onChange={(e) => setExpVendorId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
                     <option value="">Select vendor</option>
                     {vendors.map((v: any) => (<option key={v.id} value={v.id}>{v.name}</option>))}
                   </select>
@@ -490,7 +551,7 @@ export default function DaybookPage() {
               {expSettlement === "paid" && (
                 <div>
                   <label className="block font-medium text-foreground mb-1" htmlFor="cash-account">Cash account *</label>
-                  <select id="cash-account" value={expCashAccountId} onChange={(e) => setExpCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
+                  <select id="cash-account" title={cashAccounts.find((a) => a.id === expCashAccountId) ? `${cashAccounts.find((a) => a.id === expCashAccountId)?.code} — ${cashAccounts.find((a) => a.id === expCashAccountId)?.name}` : ""} value={expCashAccountId} onChange={(e) => setExpCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
                     <option value="">Select account</option>
                     {cashAccounts.filter((a) => a.account_kind === paymentMethod && a.is_active !== false).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}
                   </select>
@@ -499,9 +560,9 @@ export default function DaybookPage() {
               )}
 
               <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="particulars-description">Particulars / Description</label>
+                <label className="block font-medium text-foreground mb-1" htmlFor="particulars-description">Particulars / Description *</label>
                 <input id="particulars-description"
-                  type="text"
+                  type="text" required
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="e.g. 50L diesel for cleaner"
@@ -518,6 +579,14 @@ export default function DaybookPage() {
                   className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer"
                 >
                   Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveExpenseDraft}
+                  disabled={isPending}
+                  className="px-4 py-2 rounded-lg bg-card border border-border text-xs font-semibold cursor-pointer disabled:opacity-60"
+                >
+                  Save as draft
                 </button>
                 <button
                   type="submit"
@@ -542,8 +611,8 @@ export default function DaybookPage() {
         <h2 className="text-sm font-bold text-foreground mb-1">Cash transfer</h2>
         <p className="text-xs text-muted-foreground mb-4">Move cash between two accounts. A transfer is never revenue or expense.</p>
         <form onSubmit={handleTransfer} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="from-account">From account *</label><select id="from-account" value={trFrom} onChange={(e) => setTrFrom(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.filter((a) => a.is_active !== false).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name} ({a.account_kind})</option>))}</select></div>
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="to-account">To account *</label><select id="to-account" value={trTo} onChange={(e) => setTrTo(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.filter((a) => a.is_active !== false).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name} ({a.account_kind})</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="from-account">From account *</label><select id="from-account" title={cashAccounts.find((a) => a.id === trFrom) ? `${cashAccounts.find((a) => a.id === trFrom)?.code} — ${cashAccounts.find((a) => a.id === trFrom)?.name}` : ""} required value={trFrom} onChange={(e) => setTrFrom(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.filter((a) => a.is_active !== false).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name} ({a.account_kind})</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="to-account">To account *</label><select id="to-account" title={cashAccounts.find((a) => a.id === trTo) ? `${cashAccounts.find((a) => a.id === trTo)?.code} — ${cashAccounts.find((a) => a.id === trTo)?.name}` : ""} required value={trTo} onChange={(e) => setTrTo(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select account</option>{cashAccounts.filter((a) => a.is_active !== false).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name} ({a.account_kind})</option>))}</select></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="amount">Amount *</label><input id="amount" type="number" value={trAmount} onChange={(e) => setTrAmount(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="reference">Reference</label><input id="reference" value={trRef} onChange={(e) => setTrRef(e.target.value)} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
           <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={trPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{trPending ? "Posting…" : "Post transfer"}</button></div>
@@ -553,10 +622,10 @@ export default function DaybookPage() {
         <div className="mb-3">
           <h2 className="text-sm font-bold text-foreground">Expenses in range</h2>
         </div>
-        <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Expense</th><th className="pb-2">Category</th><th className="pb-2">Payee</th><th className="pb-2">Location</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
+        <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Expense</th><th className="pb-2">Date</th><th className="pb-2">Category</th><th className="pb-2">Payee</th><th className="pb-2">Location</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
-            {expenses.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No expenses recorded yet.</td></tr>}
-            {expenses.map((e: any) => (<tr key={e.id}><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}{(e as any).attachment_url ? (<div><AttachmentLink url={(e as any).attachment_url} note={(e as any).attachment_note} /></div>) : null}</td><td className="py-2 text-muted-foreground">{e.location || "—"}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.settlement ? ` (${e.settlement})` : ""}{e.status === "draft" && (<button type="button" onClick={() => openEditExpense(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Edit</button>)}{e.status === "posted" && (<button type="button" onClick={() => setExpReverseTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
+            {expenses.length === 0 && <tr><td colSpan={7} className="py-4"><EmptyState title="No expenses in this range" hint="An expense records money spent running the godown — fuel, repairs, wages. Record one with New Expense; posted expenses appear here and reduce cash." actionLabel="Record Expense" onAction={() => setIsExpenseModalOpen(true)} /></td></tr>}
+            {expenses.map((e: any) => (<tr key={e.id}><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2 text-muted-foreground">{formatDate(e.date)}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}{(e as any).attachment_url ? (<div><AttachmentLink url={(e as any).attachment_url} note={(e as any).attachment_note} /></div>) : null}</td><td className="py-2 text-muted-foreground">{e.location || "—"}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.settlement ? ` (${e.settlement})` : ""}{e.status === "draft" && (<><button type="button" onClick={() => handlePostExpenseDraft(e)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Post</button><button type="button" onClick={() => openEditExpense(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Edit</button></>)} {e.status === "posted" && (<button type="button" onClick={() => setExpReverseTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
           </tbody></table>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>Showing {expenses.length === 0 ? 0 : (expensePage - 1) * expensePageSize + 1}–{(expensePage - 1) * expensePageSize + expenses.length} of {totalExpenses} expenses</span>
@@ -568,30 +637,56 @@ export default function DaybookPage() {
       </div>
       {editExpense && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
+          <div className="expensive-card w-full max-w-2xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="text-sm font-bold text-foreground">Edit draft expense {editExpense.expense_no}</h3>
               <button type="button" onClick={() => setEditExpense(null)} className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer">✕</button>
             </div>
             <form onSubmit={handleSaveExpenseEdit} className="space-y-4 text-xs">
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
-              <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-expense-category">Category</label><select id="edit-expense-category" value={editCategoryName} onChange={(e) => setEditCategoryName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">{expenseCategories.filter((c: any) => c.is_active !== false).map((c: any) => (<option key={c.id} value={c.name}>{c.name}</option>))}</select></div>
-              <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-payee">Payee</label><input id="edit-payee" value={editPayee} onChange={(e) => setEditPayee(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
+              <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-expense-category">Category *</label><select id="edit-expense-category" title={editCategoryName} required value={editCategoryName} onChange={(e) => setEditCategoryName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">{expenseCategories.filter((c: any) => c.is_active !== false).length > 0 ? expenseCategories.filter((c: any) => c.is_active !== false).map((c: any) => (<option key={c.id} value={c.name}>{c.name}</option>)) : (<><option value="Generator Fuel & Diesel">Generator Fuel & Diesel</option><option value="Electricity & Utility Bills">Electricity & Utility Bills</option><option value="Machine Repair & Maintenance">Machine Repair & Maintenance</option><option value="Loading & Unloading Wages">Loading & Unloading Wages</option><option value="Transport & Local Cartage">Transport & Local Cartage</option><option value="Staff Refreshment & Food">Staff Refreshment & Food</option><option value="General Store Supplies">General Store Supplies</option></>)}</select></div>
+              <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-payee">Payee *</label><input id="edit-payee" value={editPayee} onChange={(e) => setEditPayee(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-amount">Amount (PKR)</label><input id="edit-amount" type="number" min="1" value={editAmount} onChange={(e) => setEditAmount(Number(e.target.value))} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-paid-from">Paid From</label><select id="edit-paid-from" value={editPaymentMethod} onChange={(e) => setEditPaymentMethod(e.target.value as "cash" | "bank")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="cash">Godown Cash Counter</option><option value="bank">Bank Account</option></select></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-amount">Amount (PKR) *</label><input id="edit-amount" type="number" min="1" value={editAmount} onChange={(e) => setEditAmount(Number(e.target.value))} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
+                <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-paid-from">Paid From *</label><select id="edit-paid-from" required value={editPaymentMethod} onChange={(e) => setEditPaymentMethod(e.target.value as "cash" | "bank")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="cash">Godown Cash Counter</option><option value="bank">Bank Account</option></select></div>
               </div>
-              <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-settlement">Settlement</label><select id="edit-settlement" value={editSettlement} onChange={(e) => setEditSettlement(e.target.value as "paid" | "credit")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="paid">Paid now (cash out on posting)</option><option value="credit">Credit (unpaid — settle later as a vendor payment)</option></select></div>
+              <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-settlement">Settlement *</label><select id="edit-settlement" required value={editSettlement} onChange={(e) => setEditSettlement(e.target.value as "paid" | "credit")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="paid">Paid now (cash out on posting)</option><option value="credit">Credit (unpaid — settle later as a vendor payment)</option></select></div>
               {editSettlement === "credit" && (<div><label className="block font-medium text-foreground mb-1" htmlFor="edit-vendor">Vendor owed *</label><select id="edit-vendor" value={editVendorId} onChange={(e) => setEditVendorId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required><option value="">Select vendor</option>{vendors.map((v: any) => (<option key={v.id} value={v.id}>{v.name}</option>))}</select></div>)}
               {editSettlement === "paid" && (<div><label className="block font-medium text-foreground mb-1" htmlFor="edit-cash-account">Cash account *</label><select id="edit-cash-account" value={editCashAccountId} onChange={(e) => setEditCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required><option value="">Select account</option>{cashAccounts.filter((a) => a.account_kind === editPaymentMethod && a.is_active !== false).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}</select></div>)}
               <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-location">Location (optional)</label><input id="edit-location" value={editLocation} onChange={(e) => setEditLocation(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-              <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-description">Particulars / Description</label><input id="edit-description" value={editDescription} onChange={(e) => setEditDescription(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
+              <div><label className="block font-medium text-foreground mb-1" htmlFor="edit-description">Particulars / Description *</label><input id="edit-description" required value={editDescription} onChange={(e) => setEditDescription(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
               <p className="text-[11px] text-muted-foreground">Only draft expenses can be edited. Posted expenses are corrected by reversal.</p>
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button type="button" onClick={() => setEditExpense(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>
                 <button type="submit" disabled={editPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer disabled:opacity-60">{editPending ? "Saving…" : "Save changes"}</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {printExpense && printExpense.status === "posted" && (
+        <div className="expensive-card p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">Expense voucher print document for {printExpense.expense_no}.</p>
+            <div className="flex gap-2">
+              <PrintButton label="Print voucher" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
+              <button type="button" onClick={() => setPrintExpense(null)} className="px-4 py-2 rounded-lg bg-card border border-border text-xs font-semibold cursor-pointer">Close</button>
+            </div>
+          </div>
+          <div className="hidden print:block mt-2">
+            <ExpenseVoucherPrint
+              expenseNo={printExpense.expense_no}
+              date={formatDate(printExpense.date)}
+              payee={printExpense.payee}
+              category={printExpense.category_name}
+              paymentMethod={printExpense.payment_method}
+              account={cashAccounts.find((a) => a.id === printExpense.cash_account_id) ? `${cashAccounts.find((a) => a.id === printExpense.cash_account_id)?.code} — ${cashAccounts.find((a) => a.id === printExpense.cash_account_id)?.name}` : undefined}
+              settlement={printExpense.settlement}
+              amount={printExpense.amount}
+              amountInWords={amountInWordsPKR(Number(printExpense.amount || 0))}
+              description={printExpense.description}
+              status={printExpense.status}
+            />
           </div>
         </div>
       )}
