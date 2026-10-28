@@ -16,7 +16,9 @@ import {
 } from "lucide-react"
 import { listReceipts, listInvoices, createReceipt, postReceipt, reverseReceipt, createInvoice, postInvoice, reverseInvoice, listCashAccounts } from "@/app/actions/finance"
 import { amountInWordsPKR, customerBalanceNetOfAdvances } from "@/lib/calc/finance"
-import { listParties } from "@/app/actions/masters"
+import { listParties, createParty } from "@/app/actions/masters"
+import { InvoicePrint } from "@/components/print/invoice-print"
+import { InlineAdd, PARTY_FIELDS } from "@/components/print/inline-add"
 import { ReceiptVoucherPrint } from "@/components/print/receipt-voucher-print"
 import { PrintButton } from "@/components/print/print-button"
 import { CustomerReceipt, Party } from "@/lib/types/database"
@@ -67,6 +69,7 @@ export default function BillingPage() {
   const [allocInvoiceId, setAllocInvoiceId] = React.useState("")
   const [allocAmount, setAllocAmount] = React.useState<number>(0)
   const [printReceipt, setPrintReceipt] = React.useState<any | null>(null)
+  const [printInvoice, setPrintInvoice] = React.useState<any | null>(null)
   const [receiptReverseTarget, setReceiptReverseTarget] = React.useState<any | null>(null)
   const [receiptReversing, setReceiptReversing] = React.useState(false)
   const [invCustomerId, setInvCustomerId] = React.useState("")
@@ -426,10 +429,10 @@ export default function BillingPage() {
               <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="customer-payer">Customer / Payer</label>
-                <select id="customer-payer"
+                <div className="flex flex-wrap items-start gap-2"><select id="customer-payer"
                   value={customerId}
                   onChange={(e) => setCustomerId(e.target.value)}
-                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
+                  className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
                   required
                 >
                   {customers.map((c) => (
@@ -437,7 +440,7 @@ export default function BillingPage() {
                       {c.name} (Due: {formatCurrency(custBalance(c))})
                     </option>
                   ))}
-                </select>
+                </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) setCustomers((r.data as any[]).filter((x) => x.type === "customer" || x.type === "both")); setCustomerId(id); }} /></div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -558,7 +561,7 @@ export default function BillingPage() {
         <div className="overflow-x-auto mb-4"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Invoice</th><th className="pb-2">Customer</th><th className="pb-2 text-right">Total</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
             {invoices.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No invoices yet.</td></tr>}
-            {invoices.map((i) => (<tr key={i.id}><td className="py-2 font-mono font-bold">{i.invoice_no}</td><td className="py-2">{customers.find((c) => c.id === i.customer_id)?.name ?? "Not set"}</td><td className="py-2 text-right">{formatCurrency(Number(i.total_amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(i.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</td><td className="py-2 text-center">{i.status}{i.status === "posted" && (<button type="button" onClick={() => setInvReverseTarget(i)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
+            {invoices.map((i) => (<tr key={i.id}><td className="py-2 font-mono font-bold">{i.invoice_no}</td><td className="py-2">{customers.find((c) => c.id === i.customer_id)?.name ?? "Not set"}</td><td className="py-2 text-right">{formatCurrency(Number(i.total_amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(i.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</td><td className="py-2 text-center">{i.status}<button type="button" onClick={() => setPrintInvoice(i)} className="ml-2 px-2 py-0.5 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print</button>{i.status === "posted" && (<button type="button" onClick={() => setInvReverseTarget(i)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
           </tbody></table>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>Showing {invoices.length === 0 ? 0 : (invoicePage - 1) * pageSize + 1}–{(invoicePage - 1) * pageSize + invoices.length} of {totalInvoices} invoices</span>
@@ -568,7 +571,7 @@ export default function BillingPage() {
             </span>
           </div></div>
         <form onSubmit={handleCreateInvoice} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="customer">Customer *</label><select id="customer" value={invCustomerId} onChange={(e) => setInvCustomerId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select customer</option>{customers.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}</select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="customer">Customer *</label><div className="flex flex-wrap items-start gap-2"><select id="customer" value={invCustomerId} onChange={(e) => setInvCustomerId(e.target.value)} className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">Select customer</option>{customers.map((c) => (<option key={c.id} value={c.id}>{c.name}</option>))}</select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) setCustomers((r.data as any[]).filter((x) => x.type === "customer" || x.type === "both")); setInvCustomerId(id); }} /></div></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="description">Description *</label><input id="description" value={invDesc} onChange={(e) => setInvDesc(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="quantity">Quantity *</label><input id="quantity" type="number" value={invQty} onChange={(e) => setInvQty(Number(e.target.value))} min="1" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
           <div><label className="block font-medium text-foreground mb-1" htmlFor="unit-price">Unit price *</label><input id="unit-price" type="number" value={invPrice} onChange={(e) => setInvPrice(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required /></div>
@@ -598,6 +601,30 @@ export default function BillingPage() {
               amountInWords={amountInWordsPKR(Number(printReceipt.amount || 0))}
               allocations={(printReceipt.invoice_allocations ?? printReceipt.allocations ?? []).map((a: any) => ({ invoiceNo: a.invoice_no, amount: a.amount }))}
               notes={printReceipt.notes}
+            />
+          </div>
+        </div>
+      )}
+      {printInvoice && (
+        <div className="expensive-card p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">Invoice print document for {printInvoice.invoice_no}.</p>
+            <div className="flex gap-2">
+              <PrintButton label="Print invoice" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
+              <button type="button" onClick={() => setPrintInvoice(null)} className="px-4 py-2 rounded-lg bg-card border border-border text-xs font-semibold cursor-pointer">Close</button>
+            </div>
+          </div>
+          <div className="hidden print:block mt-2">
+            <InvoicePrint
+              invoiceNo={printInvoice.invoice_no}
+              date={printInvoice.date?.slice(0, 10)}
+              customerName={customers.find((c) => c.id === printInvoice.customer_id)?.name ?? printInvoice.customer_name}
+              status={printInvoice.status}
+              lines={(printInvoice.invoice_lines ?? printInvoice.lines ?? []).length > 0 ? (printInvoice.invoice_lines ?? printInvoice.lines).map((l: any) => ({ description: l.description, quantity: l.quantity, unitPrice: l.unit_price ?? l.unitPrice, amount: l.line_total ?? l.amount })) : [{ description: printInvoice.notes ?? "Invoice", quantity: 1, unitPrice: Number(printInvoice.total_amount || 0), amount: Number(printInvoice.total_amount || 0) }]}
+              total={printInvoice.total_amount}
+              paid={printInvoice.paid_amount}
+              balance={printInvoice.balance_amount}
+              notes={printInvoice.notes}
             />
           </div>
         </div>

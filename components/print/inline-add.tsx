@@ -55,7 +55,7 @@ export function InlineAdd({
     )
   }
   return (
-    <div className="mt-2 p-3 rounded-lg border border-border bg-muted/40 space-y-2 text-xs">
+    <div className="mt-2 p-3 rounded-lg border border-border bg-muted/40 space-y-2 text-xs basis-full">
       <p className="font-bold">New {label}</p>
       {error && <p className="text-red-600">{error}</p>}
       <form onSubmit={save} className="space-y-2">
