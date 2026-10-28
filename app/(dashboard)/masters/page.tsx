@@ -12,7 +12,7 @@ import {
   Tag,
   ListChecks,
 } from "lucide-react"
-import { listProducts, listGodowns, listMachines, listPackagingTypes, createProduct, deactivateProduct, reactivateProduct, updateProduct, createGodown, deactivateGodown, reactivateGodown, updateGodown, createMachine, deactivateMachine, reactivateMachine, updateMachine, createPackagingType, deactivatePackagingType, reactivatePackagingType, updatePackagingType } from "@/app/actions/masters"
+import { listProducts, listGodowns, listMachines, listPackagingTypes, createProduct, deactivateProduct, reactivateProduct, updateProduct, deactivateGodown, reactivateGodown, createMachine, deactivateMachine, reactivateMachine, updateMachine, createPackagingType, deactivatePackagingType, reactivatePackagingType, updatePackagingType } from "@/app/actions/masters"
 import { listExpenseCategories, createExpenseCategory, deactivateExpenseCategory, reactivateExpenseCategory, updateExpenseCategory, listCashAccounts, createCashAccount, deactivateCashAccount, reactivateCashAccount, updateCashAccount } from "@/app/actions/finance"
 import { listProcessingTypes, createProcessingType, deactivateProcessingType, reactivateProcessingType } from "@/app/actions/processing-types"
 import { getStockLedger } from "@/app/actions/inventory"
@@ -26,9 +26,10 @@ import {
   isPositive,
 } from "@/components/erp-ui"
 import { MastersSkeleton } from "@/components/route-skeletons"
+import { GodownFormDialog } from "@/components/godown-form-dialog"
 
 type Tab = "products" | "godowns" | "machines" | "packaging" | "expense-categories" | "cash-accounts" | "processing-types"
-type AddKind = "godown" | "machine" | "packaging" | "expense-category" | "cash-account" | "processing-type"
+type AddKind = "machine" | "packaging" | "expense-category" | "cash-account" | "processing-type"
 
 export default function MastersPage() {
   const [activeTab, setActiveTab] = React.useState<Tab>("products")
@@ -49,7 +50,7 @@ export default function MastersPage() {
   const [draftProduct, setDraftProduct] = React.useState<Product | null>(null)
   const [toggleTarget, setToggleTarget] = React.useState<Product | null>(null)
   const [referencedIds, setReferencedIds] = React.useState<Set<string>>(new Set())
-  const [masterKind, setMasterKind] = React.useState<AddKind>("godown")
+  const [masterKind, setMasterKind] = React.useState<AddKind>("machine")
   const [masterCode, setMasterCode] = React.useState("")
   const [masterName, setMasterName] = React.useState("")
   const [masterExtra, setMasterExtra] = React.useState("")
@@ -60,6 +61,8 @@ export default function MastersPage() {
   const [acctKind, setAcctKind] = React.useState<"cash" | "bank" | "online">("cash")
   const [masterPending, setMasterPending] = React.useState(false)
   const [deactTarget, setDeactTarget] = React.useState<{ kind: string; id: string; name: string } | null>(null)
+  // Godown add/edit lives in its own dialog now (POS pattern); "new" = creating.
+  const [godownForm, setGodownForm] = React.useState<Godown | "new" | null>(null)
   const [deactPending, setDeactPending] = React.useState(false)
   const productGuard = React.useRef(false)
   const [prodName, setProdName] = React.useState("")
@@ -158,8 +161,7 @@ export default function MastersPage() {
     setMasterPending(true)
     try {
       let res: any
-      if (masterKind === "godown") res = await createGodown({ code: masterCode.trim(), name: masterName.trim(), address: masterExtra.trim() || undefined, capacity_metric_tons: masterNum1 || undefined })
-      else if (masterKind === "machine") res = await createMachine({ code: masterCode.trim(), name: masterName.trim(), processing_type: masterExtra.trim() || "Grading", capacity_kg_per_hour: masterNum1 || undefined, operator_name: masterExtra2.trim() || undefined })
+      if (masterKind === "machine") res = await createMachine({ code: masterCode.trim(), name: masterName.trim(), processing_type: masterExtra.trim() || "Grading", capacity_kg_per_hour: masterNum1 || undefined, operator_name: masterExtra2.trim() || undefined })
       else if (masterKind === "packaging") res = await createPackagingType({ code: masterCode.trim(), name: masterName.trim(), capacity_kg: masterNum1 || undefined, cost_per_bag: masterNum2 || undefined })
       else if (masterKind === "expense-category") res = await createExpenseCategory({ name: masterName.trim(), description: masterDesc.trim() || undefined })
       else if (masterKind === "cash-account") res = await createCashAccount({ code: masterCode.trim(), name: masterName.trim(), accountKind: acctKind, openingBalance: masterNum1 })
@@ -225,7 +227,6 @@ export default function MastersPage() {
   const [editPending, setEditPending] = React.useState(false)
   const openEdit = (kind: string, row: any) => {
     if (kind === "product") setEditTarget({ kind, id: row.id, name: row.name, extra: row.category, extra2: "", num1: Number(row.weight_per_bag || 0), num2: Number(row.min_stock || 0), desc: "" })
-    else if (kind === "godown") setEditTarget({ kind, id: row.id, name: row.name, extra: row.address || "", extra2: "", num1: Number(row.capacity_metric_tons || 0), num2: 0, desc: "" })
     else if (kind === "machine") setEditTarget({ kind, id: row.id, name: row.name, extra: row.processing_type, extra2: row.operator_name || "", num1: Number(row.capacity_kg_per_hour || 0), num2: 0, desc: "" })
     else if (kind === "packaging") setEditTarget({ kind, id: row.id, name: row.name, extra: "", extra2: "", num1: Number(row.capacity_kg || 0), num2: Number(row.cost_per_bag || 0), desc: "" })
     else if (kind === "expense-category") setEditTarget({ kind, id: row.id, name: row.name, extra: "", extra2: "", num1: 0, num2: 0, desc: row.description || "" })
@@ -240,7 +241,6 @@ export default function MastersPage() {
     try {
       let res: any
       if (editTarget.kind === "product") res = await updateProduct(editTarget.id, { name: editTarget.name.trim(), category: editTarget.extra, weight_per_bag: editTarget.num1, min_stock: editTarget.num2 })
-      else if (editTarget.kind === "godown") res = await updateGodown(editTarget.id, { name: editTarget.name.trim(), address: editTarget.extra, capacity_metric_tons: editTarget.num1 })
       else if (editTarget.kind === "machine") res = await updateMachine(editTarget.id, { name: editTarget.name.trim(), processing_type: editTarget.extra, capacity_kg_per_hour: editTarget.num1, operator_name: editTarget.extra2 })
       else if (editTarget.kind === "packaging") res = await updatePackagingType(editTarget.id, { name: editTarget.name.trim(), capacity_kg: editTarget.num1, cost_per_bag: editTarget.num2 })
       else if (editTarget.kind === "expense-category") res = await updateExpenseCategory({ id: editTarget.id, name: editTarget.name.trim(), description: editTarget.desc.trim() || null })
@@ -286,7 +286,7 @@ export default function MastersPage() {
   )
   const rowActions = (kind: string, row: any, name: string) => (
     <>
-      {kind !== "processing-type" && (<button type="button" onClick={() => openEdit(kind, row)} className="px-2 py-0.5 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Edit</button>)}
+      {kind !== "processing-type" && (<button type="button" onClick={() => { if (kind === "godown") setGodownForm(row); else openEdit(kind, row) }} className="px-2 py-0.5 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Edit</button>)}
       {row.is_active !== false ? (<button type="button" onClick={() => setDeactTarget({ kind, id: row.id, name })} className="px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Deactivate</button>) : (<button type="button" onClick={() => handleReactivateOther(kind, row)} className="px-2 py-0.5 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Reactivate</button>)}
     </>
   )
@@ -311,6 +311,16 @@ export default function MastersPage() {
           >
             <Plus className="h-4 w-4" />
             <span>Add New Product</span>
+          </button>
+        )}
+        {activeTab === "godowns" && (
+          <button
+            type="button"
+            onClick={() => setGodownForm("new")}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Add godown</span>
           </button>
         )}
       </div>
@@ -389,13 +399,13 @@ export default function MastersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {godowns.length === 0 && (<tr><td colSpan={5} className="py-4 text-muted-foreground">No godowns yet — add one below.</td></tr>)}
+                {godowns.length === 0 && (<tr><td colSpan={5} className="py-4"><EmptyState title="No godowns yet" hint="Add your first godown." actionLabel="Add godown" onAction={() => setGodownForm("new")} /></td></tr>)}
                 {godowns.map((g) => (
                   <tr key={g.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-mono font-bold text-emerald-600 dark:text-emerald-400">{g.code}</td>
                     <td className="py-3 font-bold text-foreground">{g.name}</td>
                     <td className="py-3 text-muted-foreground">{g.address}</td>
-                    <td className="py-3 text-right font-mono font-black text-foreground">{g.capacity_metric_tons} MT</td>
+                    <td className="py-3 text-right font-mono font-black text-foreground">{g.capacity_metric_tons != null ? `${g.capacity_metric_tons} MT` : "—"}</td>
                     <td className="py-3 text-center">{statusBadge(g.is_active, "Operational")} {rowActions("godown", g, g.name)}</td>
                   </tr>
                 ))}
@@ -609,13 +619,10 @@ export default function MastersPage() {
         <h2 className="text-sm font-bold text-foreground mb-1">Add a master record</h2>
         <p className="text-xs text-muted-foreground mb-4">Deactivation is reversible from the list above.</p>
         <form onSubmit={handleCreateMaster} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="kind">Kind *</label><select id="kind" value={masterKind} onChange={(e) => setMasterKind(e.target.value as AddKind)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="godown">Godown</option><option value="machine">Machine</option><option value="packaging">Packaging type</option><option value="expense-category">Expense category</option><option value="cash-account">Cash account</option><option value="processing-type">Processing type</option></select></div>
+          <div><label className="block font-medium text-foreground mb-1" htmlFor="kind">Kind *</label><select id="kind" value={masterKind} onChange={(e) => setMasterKind(e.target.value as AddKind)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="machine">Machine</option><option value="packaging">Packaging type</option><option value="expense-category">Expense category</option><option value="cash-account">Cash account</option><option value="processing-type">Processing type</option></select></div>
           {masterKind !== "expense-category" && masterKind !== "processing-type" && (<div><label className="block font-medium text-foreground mb-1" htmlFor="code">Code *</label><input id="code" value={masterCode} onChange={(e) => setMasterCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>)}
           <div><label className="block font-medium text-foreground mb-1" htmlFor="name-2">Name *</label><input id="name-2" value={masterName} onChange={(e) => setMasterName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          {masterKind === "godown" && (<>
-            <div><label className="block font-medium text-foreground mb-1" htmlFor="address">Address</label><input id="address" value={masterExtra} onChange={(e) => setMasterExtra(e.target.value)} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-            <div><label className="block font-medium text-foreground mb-1" htmlFor="capacity-mt">Capacity (MT)</label><input id="capacity-mt" type="number" min="0" value={masterNum1} onChange={(e) => setMasterNum1(Number(e.target.value) || 0)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-          </>)}
+          
           {masterKind === "machine" && (<>
             <div><label className="block font-medium text-foreground mb-1" htmlFor="processing-type">Processing type</label><input id="processing-type" value={masterExtra} onChange={(e) => setMasterExtra(e.target.value)} placeholder="e.g. Grading" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
             <div><label className="block font-medium text-foreground mb-1" htmlFor="throughput">Throughput (kg/hr)</label><input id="throughput" type="number" min="0" value={masterNum1} onChange={(e) => setMasterNum1(Number(e.target.value) || 0)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
@@ -648,10 +655,7 @@ export default function MastersPage() {
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="standard-bag-kg">Standard bag (kg)</label><input id="standard-bag-kg" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="minimum-safety-stock-kg">Minimum safety stock (kg)</label><input id="minimum-safety-stock-kg" type="number" min="0" value={editTarget.num2} onChange={(e) => setEditTarget({ ...editTarget, num2: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
               </>)}
-              {editTarget.kind === "godown" && (<>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="address">Address</label><input id="address" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="capacity-mt">Capacity (MT)</label><input id="capacity-mt" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-              </>)}
+              
               {editTarget.kind === "machine" && (<>
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="processing-type">Processing type</label><input id="processing-type" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
                 <div><label className="block font-medium text-foreground mb-1" htmlFor="throughput-kg-hr">Throughput (kg/hr)</label><input id="throughput-kg-hr" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
@@ -694,6 +698,13 @@ export default function MastersPage() {
         destructive={toggleTarget?.is_active}
         onConfirm={handleConfirmToggle}
         onCancel={() => setToggleTarget(null)}
+      />
+      <GodownFormDialog
+        open={godownForm !== null}
+        godown={godownForm === "new" ? null : godownForm}
+        godowns={godowns}
+        onClose={() => setGodownForm(null)}
+        onSaved={(notice) => { setFormNotice(notice); void loadData() }}
       />
     </div>
   )
