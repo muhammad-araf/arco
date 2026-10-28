@@ -44,6 +44,7 @@ import { InlineAdd, PARTY_FIELDS, PRODUCT_FIELDS, PACKAGING_FIELDS } from "@/com
 import { listProcessingTypes } from "@/app/actions/processing-types"
 import { PackagingType, PackingRecord, Product } from "@/lib/types/database"
 import { formatBags, formatCurrency, formatWeight, formatDate } from "@/lib/utils"
+import { kgPerBag, packingLineCharge } from "@/lib/dialog-calcs"
 import {
   AlertBanner,
   ConfirmDialog,
@@ -106,6 +107,12 @@ function PackingPageInner() {
   const [isLoading, setIsLoading] = React.useState(true)
   const [formError, setFormError] = React.useState("")
   const [formNotice, setFormNotice] = React.useState("")
+  const [batchFieldErr, setBatchFieldErr] = React.useState("")
+  const [packFieldErr, setPackFieldErr] = React.useState("")
+  const inlineErr = (key: string, current: string) =>
+    current === key && formError ? (
+      <p className="mt-1 text-[11px] font-medium text-red-600 dark:text-red-400">{formError}</p>
+    ) : null
   const [isPending, setIsPending] = React.useState(false)
 
   // Standalone form state (unchanged from the old "New Packing" modal)
@@ -235,16 +242,22 @@ function PackingPageInner() {
   const handleBatchPacking = (e: React.FormEvent) => {
     e.preventDefault()
     if (isBatchPending) return
-    if (!selectedBatch) return setFormError("Select a posted batch to pack.")
-    if (!batchPackagingId) return setFormError("Select the bag / bardana type.")
-    if (!isPositive(batchBags)) return setFormError("Bags packed must be greater than zero.")
-    if (batchDamaged < 0) return setFormError("Damaged bags cannot be negative.")
-    if (batchRate < 0) return setFormError("Packing rate cannot be negative.")
+    const failBatch = (field: string, message: string) => {
+      setBatchFieldErr(field)
+      setFormError(message)
+    }
+    if (!selectedBatch) { failBatch("batch", "Select a posted batch to pack."); return }
+    if (!batchPackagingId) { failBatch("batch-packaging", "Select the bag / bardana type."); return }
+    if (!isPositive(batchBags)) { failBatch("batch-bags", "Bags packed must be greater than zero."); return }
+    if (batchDamaged < 0) { failBatch("batch-damaged", "Damaged bags cannot be negative."); return }
+    if (batchRate < 0) { failBatch("batch-rate", "Packing rate cannot be negative."); return }
     const pkg = packaging.find((p) => p.id === batchPackagingId)
     const closing = bardanaClosing(batchPackagingId)
     if (pkg && closing < batchBags + batchDamaged) {
-      return setFormError(`Insufficient bag stock: ${closing} ${pkg.name} bags available per the bardana ledger, but ${batchBags + batchDamaged} needed. Purchase more bardana first.`)
+      failBatch("batch-bags", `Insufficient bag stock: ${closing} ${pkg.name} bags available per the bardana ledger, but ${batchBags + batchDamaged} needed. Purchase more bardana first.`)
+      return
     }
+    setBatchFieldErr("")
     setFormError("")
     setBatchDraft({
       batch_no: selectedBatch.batch_no,
@@ -284,6 +297,20 @@ function PackingPageInner() {
       const row: any = res.data
       setFormNotice(`${row.packing_no ?? "Packing"} recorded for batch ${selectedBatch.batch_no} — ${batchBags} bags packed, ${batchDamaged} damaged, charge ${formatCurrency(batchCharge)}.`)
       setShowBatchConfirm(false)
+      // Offer the packing record print immediately (History tab shows it).
+      setPrintPacking({
+        packing_no: row.packing_no ?? "—",
+        date: new Date().toISOString(),
+        output_product_name: selectedBatchOutputName,
+        packaging_name: batchDraft.packaging_name,
+        bags_packed: batchBags,
+        total_packed_kg: selectedBatchOutputKg,
+        damaged_bags: batchDamaged,
+        packing_rate: batchRate,
+        packing_charge: batchCharge,
+        status: "posted",
+        notes: `Batch packing for ${selectedBatch.batch_no}`,
+      } as any)
       setBatchDraft(null)
       await loadData()
       goTab("history")
@@ -309,15 +336,21 @@ function PackingPageInner() {
     // Spec §8: positive bag count, non-negative damage/rate/packed kg,
     // and the bardana stock guard — packed + damaged bags both leave
     // inventory. The server re-guards all of this before writing.
-    if (!productId) return setFormError("Select the product being packed.")
-    if (!packingLines.length) return setFormError("Add at least one packing line.")
-    if (packingLines.some((l) => !l.packagingId)) return setFormError("Every packing line needs a bag / bardana type.")
-    if (packingLines.some((l) => (Number(l.bags) || 0) < 0 || (Number(l.packedKg) || 0) < 0)) return setFormError("Bags and packed weight per line cannot be negative.")
-    if (!isPositive(totalBagsPacked)) return setFormError("Bags packed must be greater than zero.")
-    if (damagedBags < 0) return setFormError("Damaged bags cannot be negative.")
-    if (packingRate < 0) return setFormError("Packing rate cannot be negative.")
-    if (processingAmount < 0) return setFormError("Processing amount cannot be negative.")
-    if (manualFee !== null && manualFee < 0) return setFormError("Manual packing fee cannot be negative.")
+    const failPack = (field: string, message: string) => {
+      setPackFieldErr(field)
+      setFormError(message)
+    }
+    if (!productId) { failPack("product", "Select the product being packed."); return }
+    if (!packingLines.length) { failPack("packing-lines", "Add at least one packing line."); return }
+    const badPkg = packingLines.find((l) => !l.packagingId)
+    if (badPkg) { failPack(`packing-pkg-${badPkg.key}`, "Every packing line needs a bag / bardana type."); return }
+    const badLine = packingLines.find((l) => (Number(l.bags) || 0) < 0 || (Number(l.packedKg) || 0) < 0)
+    if (badLine) { failPack(`packing-line-${badLine.key}`, "Bags and packed weight per line cannot be negative."); return }
+    if (!isPositive(totalBagsPacked)) { failPack("packing-bags", "Bags packed must be greater than zero."); return }
+    if (damagedBags < 0) { failPack("packing-damaged", "Damaged bags cannot be negative."); return }
+    if (packingRate < 0) { failPack("packing-rate", "Packing rate cannot be negative."); return }
+    if (processingAmount < 0) { failPack("packing-processing", "Processing amount cannot be negative."); return }
+    if (manualFee !== null && manualFee < 0) { failPack("packing-manual", "Manual packing fee cannot be negative."); return }
     // Bardana guard per bag type (damaged bags count against the
     // first line's type, matching the server), from the ledger.
     const neededByType = new Map<string, number>()
@@ -330,9 +363,11 @@ function PackingPageInner() {
       const closing = bardanaClosing(typeId)
       const pkg = packaging.find((p) => p.id === typeId)
       if (pkg && closing < needed) {
-        return setFormError(`Insufficient bag stock: ${closing} ${pkg.name} bags available per the bardana ledger, but ${needed} needed. Purchase more bardana first.`)
+        failPack("packing-bags", `Insufficient bag stock: ${closing} ${pkg.name} bags available per the bardana ledger, but ${needed} needed. Purchase more bardana first.`)
+        return
       }
     }
+    setPackFieldErr("")
     setFormError("")
     const selectedProd = products.find((p) => p.id === productId)
     setDraftRecord({
@@ -397,6 +432,8 @@ function PackingPageInner() {
       const row: any = res.data
       setFormNotice(`${row.packing_no ?? "Packing"} recorded — ${totalBagsPacked} bags packed, ${damagedBags} damaged, charge ${formatCurrency(totalCharge)}${manualFee !== null ? " (manual fee)" : ""}.`)
       setShowConfirm(false)
+      // Offer the packing record print immediately (History tab shows it).
+      setPrintPacking({ ...draftRecord, packing_no: row.packing_no ?? draftRecord.packing_no, status: "posted" } as any)
       setDraftRecord(null)
       await loadData()
       goTab("history")
@@ -462,7 +499,7 @@ function PackingPageInner() {
             ) : (
               <form onSubmit={handleBatchPacking} className="space-y-4 text-xs">
                 <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="batch-to-pack">Batch</label>
+                  <label className="block font-medium text-foreground mb-1" htmlFor="batch-to-pack">Batch *</label>
                   <select id="batch-to-pack"
                     value={batchId}
                     onChange={(e) => setBatchId(e.target.value)}
@@ -476,6 +513,7 @@ function PackingPageInner() {
                       </option>
                     ))}
                   </select>
+                  {inlineErr("batch", batchFieldErr)}
                 </div>
                 {selectedBatch && (
                   <div className="p-3 rounded-lg bg-muted border border-border grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -489,7 +527,7 @@ function PackingPageInner() {
                 )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block font-medium text-foreground mb-1" htmlFor="batch-bag-type">Bag / Bardana Type</label>
+                    <label className="block font-medium text-foreground mb-1" htmlFor="batch-bag-type">Bag / Bardana Type *</label>
                     <div className="flex flex-wrap items-start gap-2"><select id="batch-bag-type"
                       value={batchPackagingId}
                       onChange={(e) => setBatchPackagingId(e.target.value)}
@@ -503,20 +541,25 @@ function PackingPageInner() {
                         </option>
                       ))}
                     </select> <InlineAdd label="Packaging" fields={PACKAGING_FIELDS} createAction={async (v) => createPackagingType({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listPackagingTypes(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setPackaging(list); } setBatchPackagingId(id); }} /></div>
+                    {inlineErr("batch-packaging", batchFieldErr)}
                   </div>
                   <div>
-                    <label className="block font-medium text-foreground mb-1" htmlFor="batch-bags-consumed">Bags Consumed</label>
+                    <label className="block font-medium text-foreground mb-1" htmlFor="batch-bags-consumed">Bags Consumed *</label>
                     <input id="batch-bags-consumed" type="number" value={batchBags} onChange={(e) => setBatchBags(Number(e.target.value))} min="0" className={`${inputCls} font-mono`} required />
+                    {inlineErr("batch-bags", batchFieldErr)}
                   </div>
                   <div>
                     <label className="block font-medium text-foreground mb-1" htmlFor="batch-packing-rate">Packing Rate / Bag (PKR)</label>
                     <input id="batch-packing-rate" type="number" value={batchRate} onChange={(e) => setBatchRate(Number(e.target.value))} min="0" className={`${inputCls} font-mono`} />
+                    {inlineErr("batch-rate", batchFieldErr)}
                   </div>
                   <div>
                     <label className="block font-medium text-foreground mb-1" htmlFor="batch-damaged-bags">Damaged Bags</label>
                     <input id="batch-damaged-bags" type="number" value={batchDamaged} onChange={(e) => setBatchDamaged(Number(e.target.value))} min="0" className={`${inputCls} font-mono`} />
+                    {inlineErr("batch-damaged", batchFieldErr)}
                   </div>
                 </div>
+                <p className="text-[11px] text-muted-foreground">Packing charge: <strong className="text-emerald-600 dark:text-emerald-400 font-mono">{formatCurrency(batchCharge)}</strong> ({batchBags} bags × {formatCurrency(batchRate)} per bag)</p>
                 <div className="flex items-center justify-end gap-3 pt-2">
                   <button type="submit" disabled={isBatchPending} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed">
                     {isBatchPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
@@ -579,12 +622,13 @@ function PackingPageInner() {
           </div>
           <form onSubmit={handleRecordPacking} className="space-y-4 text-xs">
             <div>
-              <label className="block font-medium text-foreground mb-1" htmlFor="product-seed-to-pack">Product Seed to Pack</label>
+              <label className="block font-medium text-foreground mb-1" htmlFor="product-seed-to-pack">Product Seed to Pack *</label>
               <div className="flex flex-wrap items-start gap-2"><select id="product-seed-to-pack" value={productId} onChange={(e) => setProductId(e.target.value)} className={inputCls}>
                 {products.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
               </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "finished_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list.filter((x) => x.category === "finished_seed" || x.category === "intermediate")); } setProductId(id); }} /></div>
+              {inlineErr("product", packFieldErr)}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -617,26 +661,29 @@ function PackingPageInner() {
               {packingLines.map((line) => (
                 <div key={line.key} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packing-bag-type-${line.key}`}>Bag Type (Bardana)</label>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packing-bag-type-${line.key}`}>Bag Type (Bardana) *</label>
                     <div className="flex flex-wrap items-start gap-2"><select id={`packing-bag-type-${line.key}`} value={line.packagingId} onChange={(e) => setPackingLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, packagingId: e.target.value } : l)))} className={inputSmCls}>
                       <option value="">Select bag type</option>
                       {packaging.map((pkg) => (
-                        <option key={pkg.id} value={pkg.id}>{pkg.name} ({pkg.capacity_kg}kg) - Avail: {pkg.current_stock} bags</option>
+                        <option key={pkg.id} value={pkg.id}>{pkg.name} ({pkg.capacity_kg}kg) - Avail: {bardanaClosing(pkg.id)} bags</option>
                       ))}
                     </select> <InlineAdd label="Packaging" fields={PACKAGING_FIELDS} createAction={async (v) => createPackagingType({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listPackagingTypes(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setPackaging(list); } setPackingLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, packagingId: id } : l))); }} /></div>
+                    {inlineErr(`packing-pkg-${line.key}`, packFieldErr)}
                   </div>
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packing-line-bags-${line.key}`}>Bags</label>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packing-line-bags-${line.key}`}>Bags *</label>
                     <input id={`packing-line-bags-${line.key}`} type="number" value={line.bags} onChange={(e) => setPackingLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, bags: Number(e.target.value) } : l)))} min="0" className={`${inputSmCls} font-mono`} required />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packing-line-kg-${line.key}`}>Packed Weight (kg)</label>
+                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packing-line-kg-${line.key}`}>Packed Weight (kg) *</label>
                     <div className="flex gap-2">
                       <input id={`packing-line-kg-${line.key}`} type="number" value={line.packedKg} onChange={(e) => setPackingLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, packedKg: Number(e.target.value) } : l)))} min="0" className={`${inputSmCls} font-mono`} required />
                       {packingLines.length > 1 && (
                         <button type="button" onClick={() => setPackingLines((lines) => lines.filter((l) => l.key !== line.key))} className="px-2 rounded-md bg-muted text-muted-foreground text-xs font-bold cursor-pointer" title="Remove this packing line">✕</button>
                       )}
                     </div>
+                    <p className="mt-1 text-[11px] text-muted-foreground">Line charge: <strong className="text-foreground font-mono">{formatCurrency(packingLineCharge(Number(line.bags) || 0, packingRate))}</strong> · {kgPerBag(Number(line.packedKg) || 0, Number(line.bags) || 0).toFixed(2)} kg per bag</p>
+                    {inlineErr(`packing-line-${line.key}`, packFieldErr)}
                   </div>
                 </div>
               ))}
@@ -647,10 +694,12 @@ function PackingPageInner() {
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="damaged-torn-bags">Damaged / Torn Bags</label>
                 <input id="damaged-torn-bags" type="number" value={damagedBags} onChange={(e) => setDamagedBags(Number(e.target.value))} min="0" className={`${inputCls} font-mono`} />
+                {inlineErr("packing-damaged", packFieldErr)}
               </div>
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="packing-labor-rate-bag-pkr">Packing Labor Rate / Bag (PKR)</label>
                 <input id="packing-labor-rate-bag-pkr" type="number" value={packingRate} onChange={(e) => setPackingRate(Number(e.target.value))} min="0" className={`${inputCls} font-mono`} />
+                {inlineErr("packing-rate", packFieldErr)}
               </div>
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="packing-net-weight-kg">Net Weight (kg)</label>
@@ -659,12 +708,14 @@ function PackingPageInner() {
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="packing-processing-amount">Processing Amount (PKR)</label>
                 <input id="packing-processing-amount" type="number" value={processingAmount} onChange={(e) => setProcessingAmount(Number(e.target.value))} min="0" className={`${inputCls} font-mono`} />
+                {inlineErr("packing-processing", packFieldErr)}
               </div>
             </div>
 
             <div>
               <label className="block font-medium text-foreground mb-1" htmlFor="packing-manual-fee">Manual Packing Fee (PKR) — optional, overrides computed charge</label>
               <input id="packing-manual-fee" type="number" value={manualFee ?? ""} onChange={(e) => setManualFee(e.target.value === "" ? null : Number(e.target.value))} min="0" placeholder={`Computed: ${formatCurrency(computedCharge)} — leave blank to use it`} className={`${inputCls} font-mono`} />
+              {inlineErr("packing-manual", packFieldErr)}
               <p className="text-[11px] text-muted-foreground mt-1">Only used when you enter a value; otherwise the charge is bags × rate.</p>
             </div>
 
@@ -702,6 +753,8 @@ function PackingPageInner() {
               <button type="button" onClick={() => setTreatmentInputs((rows) => [...rows, { key: Date.now(), materialName: "", qty: 0, unit: "kg", note: "" }])} className="px-3 py-1.5 rounded-md bg-background border border-border text-foreground text-[11px] font-semibold cursor-pointer">+ Add treatment input</button>
             </div>
 
+            {inlineErr("packing-bags", packFieldErr)}
+            {inlineErr("packing-lines", packFieldErr)}
             <div className="p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 space-y-1">
               <div className="flex justify-between"><span className="text-muted-foreground">Total Packed Weight:</span><strong className="text-foreground font-mono">{formatWeight(totalPackedKg)}</strong></div>
               <div className="flex justify-between"><span className="text-muted-foreground">Total Bags Deducted:</span><strong className="text-destructive font-mono">{totalBagsPacked + damagedBags} bags</strong></div>
@@ -786,7 +839,7 @@ function PackingPageInner() {
           <div className="hidden print:block mt-2">
             <PackingRecordPrint
               packingNo={printPacking.packing_no}
-              date={printPacking.date?.slice(0, 10)}
+              date={formatDate(printPacking.date)}
               product={printPacking.output_product_name}
               packaging={printPacking.packaging_name}
               party={printPacking.party_name ?? undefined}
