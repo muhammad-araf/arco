@@ -217,6 +217,10 @@ export default function PurchasesPage() {
       // (total − paid) once the payment has landed.
       const balanceAfter = payOk ? draftPurchase.balance_amount : (row.balance_amount ?? draftPurchase.balance_amount)
       setFormNotice(`${row.purchase_no ?? draftPurchase.purchase_no} posted — remaining balance ${formatCurrency(balanceAfter)} owed to ${draftPurchase.vendor_name || "the vendor"}.${payNote}`)
+      // Print-after-post: offer the existing purchase print document
+      // immediately, with the posted totals (the draft already carries
+      // the vendor, godown, lines and post-payment balance).
+      setPrintPurchase({ ...draftPurchase, purchase_no: row.purchase_no ?? draftPurchase.purchase_no, status: "posted", paid_amount: payOk ? paidAmount : draftPurchase.paid_amount, balance_amount: balanceAfter })
       setShowConfirm(false)
       setIsModalOpen(false)
       resetSubmissionToken(purchaseTokenRef)
