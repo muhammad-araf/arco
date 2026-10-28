@@ -37,7 +37,10 @@ import {
 } from "lucide-react"
 import { getBardanaLedger } from "@/app/actions/finance"
 import { listPackingRecords, createPackingRecord, listBatches } from "@/app/actions/production"
-import { listPackagingTypes, listProducts, listParties } from "@/app/actions/masters"
+import { listPackagingTypes, listProducts, listParties, createParty, createProduct, createPackagingType } from "@/app/actions/masters"
+import { PackingRecordPrint } from "@/components/print/packing-record-print"
+import { PrintButton } from "@/components/print/print-button"
+import { InlineAdd, PARTY_FIELDS, PRODUCT_FIELDS, PACKAGING_FIELDS } from "@/components/print/inline-add"
 import { listProcessingTypes } from "@/app/actions/processing-types"
 import { PackagingType, PackingRecord, Product } from "@/lib/types/database"
 import { formatBags, formatCurrency, formatWeight, formatDate } from "@/lib/utils"
@@ -94,6 +97,7 @@ function PackingPageInner() {
 
   const [packaging, setPackaging] = React.useState<PackagingType[]>([])
   const [packingRecords, setPackingRecords] = React.useState<PackingRecord[]>([])
+  const [printPacking, setPrintPacking] = React.useState<PackingRecord | null>(null)
   const [products, setProducts] = React.useState<Product[]>([])
   const [parties, setParties] = React.useState<any[]>([])
   const [processingTypes, setProcessingTypes] = React.useState<string[]>([])
@@ -486,7 +490,7 @@ function PackingPageInner() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block font-medium text-foreground mb-1" htmlFor="batch-bag-type">Bag / Bardana Type</label>
-                    <select id="batch-bag-type"
+                    <div className="flex flex-wrap items-start gap-2"><select id="batch-bag-type"
                       value={batchPackagingId}
                       onChange={(e) => setBatchPackagingId(e.target.value)}
                       className={inputCls}
@@ -498,7 +502,7 @@ function PackingPageInner() {
                           {pkg.name} ({pkg.capacity_kg}kg) - Avail: {bardanaClosing(pkg.id)} bags
                         </option>
                       ))}
-                    </select>
+                    </select> <InlineAdd label="Packaging" fields={PACKAGING_FIELDS} createAction={async (v) => createPackagingType({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listPackagingTypes(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setPackaging(list); } setBatchPackagingId(id); }} /></div>
                   </div>
                   <div>
                     <label className="block font-medium text-foreground mb-1" htmlFor="batch-bags-consumed">Bags Consumed</label>
@@ -576,22 +580,22 @@ function PackingPageInner() {
           <form onSubmit={handleRecordPacking} className="space-y-4 text-xs">
             <div>
               <label className="block font-medium text-foreground mb-1" htmlFor="product-seed-to-pack">Product Seed to Pack</label>
-              <select id="product-seed-to-pack" value={productId} onChange={(e) => setProductId(e.target.value)} className={inputCls}>
+              <div className="flex flex-wrap items-start gap-2"><select id="product-seed-to-pack" value={productId} onChange={(e) => setProductId(e.target.value)} className={inputCls}>
                 {products.map((p) => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}
-              </select>
+              </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "finished_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list.filter((x) => x.category === "finished_seed" || x.category === "intermediate")); } setProductId(id); }} /></div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="packing-party">Customer / Owner Party</label>
-                <select id="packing-party" value={partyId} onChange={(e) => setPartyId(e.target.value)} className={inputCls}>
+                <div className="flex flex-wrap items-start gap-2"><select id="packing-party" value={partyId} onChange={(e) => setPartyId(e.target.value)} className={inputCls}>
                   <option value="">Company (no party)</option>
                   {parties.map((p: any) => (
                     <option key={p.id} value={p.id}>{p.name}</option>
                   ))}
-                </select>
+                </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setParties(list); } setPartyId(id); }} /></div>
               </div>
               <div>
                 <label className="block font-medium text-foreground mb-1" htmlFor="packing-processing-type">Processing Type</label>
@@ -614,12 +618,12 @@ function PackingPageInner() {
                 <div key={line.key} className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packing-bag-type-${line.key}`}>Bag Type (Bardana)</label>
-                    <select id={`packing-bag-type-${line.key}`} value={line.packagingId} onChange={(e) => setPackingLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, packagingId: e.target.value } : l)))} className={inputSmCls}>
+                    <div className="flex flex-wrap items-start gap-2"><select id={`packing-bag-type-${line.key}`} value={line.packagingId} onChange={(e) => setPackingLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, packagingId: e.target.value } : l)))} className={inputSmCls}>
                       <option value="">Select bag type</option>
                       {packaging.map((pkg) => (
                         <option key={pkg.id} value={pkg.id}>{pkg.name} ({pkg.capacity_kg}kg) - Avail: {pkg.current_stock} bags</option>
                       ))}
-                    </select>
+                    </select> <InlineAdd label="Packaging" fields={PACKAGING_FIELDS} createAction={async (v) => createPackagingType({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listPackagingTypes(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setPackaging(list); } setPackingLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, packagingId: id } : l))); }} /></div>
                   </div>
                   <div>
                     <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packing-line-bags-${line.key}`}>Bags</label>
@@ -735,7 +739,7 @@ function PackingPageInner() {
                   <th className="pb-3 font-bold text-right">Total Weight</th>
                   <th className="pb-3 font-bold text-right">Damaged Bags</th>
                   <th className="pb-3 font-bold text-right">Labor Charge</th>
-                  <th className="pb-3 font-bold text-center">Status</th>
+                  <th className="pb-3 font-bold text-center">Status</th><th className="pb-3 font-bold text-center">Print</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border font-mono">
@@ -754,11 +758,12 @@ function PackingPageInner() {
                         {r.status}
                       </span>
                     </td>
+                    <td className="py-3 text-center"><button type="button" onClick={() => setPrintPacking(r)} className="px-2 py-1 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print</button></td>
                   </tr>
                 ))}
                 {packingRecords.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="py-4 font-sans">
+                    <td colSpan={10} className="py-4 font-sans">
                       <EmptyState title="No packing entries yet" hint="Log a bagging run." actionLabel="Record Packing & Bagging" onAction={() => goTab("standalone")} />
                     </td>
                   </tr>
@@ -769,6 +774,33 @@ function PackingPageInner() {
         </div>
       )}
 
+      {printPacking && tab === "history" && (
+        <div className="expensive-card p-4">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">Packing print document for {printPacking.packing_no}.</p>
+            <div className="flex gap-2">
+              <PrintButton label="Print packing record" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
+              <button type="button" onClick={() => setPrintPacking(null)} className="px-4 py-2 rounded-lg bg-card border border-border text-xs font-semibold cursor-pointer">Close</button>
+            </div>
+          </div>
+          <div className="hidden print:block mt-2">
+            <PackingRecordPrint
+              packingNo={printPacking.packing_no}
+              date={printPacking.date?.slice(0, 10)}
+              product={printPacking.output_product_name}
+              packaging={printPacking.packaging_name}
+              party={printPacking.party_name ?? undefined}
+              bags={printPacking.bags_packed}
+              totalKg={printPacking.total_packed_kg}
+              damagedBags={printPacking.damaged_bags}
+              packingRate={printPacking.packing_rate}
+              packingCharge={printPacking.packing_charge}
+              status={printPacking.status}
+              notes={printPacking.notes}
+            />
+          </div>
+        </div>
+      )}
       {tab === "bardana" && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
