@@ -13,12 +13,6 @@ import {
   type SettingsSnapshot,
   type DocNumberingRow,
 } from "@/lib/settings-validation"
-import {
-  listProcessingTypes,
-  createProcessingType,
-  deactivateProcessingType,
-  reactivateProcessingType,
-} from "@/app/actions/processing-types"
 import { AlertBanner, SubmitSpinner, PageSkeleton } from "@/components/erp-ui"
 
 const inputCls =
@@ -50,19 +44,15 @@ export default function SettingsPage() {
   const [prefixDrafts, setPrefixDrafts] = React.useState<Record<string, string>>({})
   const [prefixPending, setPrefixPending] = React.useState<string | null>(null)
 
-  const [processingTypes, setProcessingTypes] = React.useState<any[]>([])
-  const [newProcessingType, setNewProcessingType] = React.useState("")
-  const [ptPending, setPtPending] = React.useState(false)
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [snap, num, pt] = await Promise.all([
+      const [snap, num] = await Promise.all([
         getSettingsSnapshot(),
         listDocNumbering(),
-        listProcessingTypes(true),
       ])
-      const failed = [snap, num, pt].find((x) => !x.success)
+      const failed = [snap, num].find((x) => !x.success)
       if (failed) setFormError(failed.error ?? "Could not load settings.")
       if (snap.success && snap.data) {
         const s = snap.data as SettingsSnapshot
@@ -87,7 +77,6 @@ export default function SettingsPage() {
           Object.fromEntries((num.data as DocNumberingRow[]).map((r) => [r.series, r.prefix])),
         )
       }
-      if (pt.success && Array.isArray(pt.data)) setProcessingTypes(pt.data)
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Could not load settings.")
     } finally {
@@ -186,43 +175,6 @@ export default function SettingsPage() {
     }
   }
 
-  const handleCreateProcessingType = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (ptPending || !newProcessingType.trim()) return
-    setPtPending(true)
-    setFormError("")
-    try {
-      const res = await createProcessingType(newProcessingType.trim())
-      if (!res.success) {
-        setFormError(res.error ?? "Could not create the processing type.")
-        return
-      }
-      setNewProcessingType("")
-      setFormNotice(`Processing type "${newProcessingType.trim()}" added.`)
-      await loadData()
-    } finally {
-      setPtPending(false)
-    }
-  }
-
-  const handleToggleProcessingType = async (row: any) => {
-    setPtPending(true)
-    setFormError("")
-    try {
-      const res = row.is_active
-        ? await deactivateProcessingType(row.id)
-        : await reactivateProcessingType(row.id)
-      if (!res.success) {
-        setFormError(res.error ?? "Could not change the processing type.")
-        return
-      }
-      setFormNotice(`Processing type "${row.name}" ${row.is_active ? "deactivated" : "reactivated"}.`)
-      await loadData()
-    } finally {
-      setPtPending(false)
-    }
-  }
-
   if (isLoading) return <PageSkeleton rows={8} />
 
   return (
@@ -298,23 +250,6 @@ export default function SettingsPage() {
         )}
       </div>
 
-      <div className="expensive-card p-5">
-        <h2 className="text-sm font-bold text-foreground mb-1">Processing types</h2>
-        <p className="text-xs text-muted-foreground mb-4">When this list is empty, processing type stays a free-text field. Deactivation never deletes a type.</p>
-        <form onSubmit={handleCreateProcessingType} className="flex flex-col sm:flex-row gap-3 text-xs mb-4">
-          <input aria-label="New processing type name" value={newProcessingType} onChange={(e) => setNewProcessingType(e.target.value)} placeholder="e.g. Grading" className={`${inputCls} flex-1`} />
-          <button type="submit" disabled={ptPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{ptPending ? "Adding…" : "Add type"}</button>
-        </form>
-        <div className="text-xs">
-          {processingTypes.map((pt: any) => (
-            <div key={pt.id} className="flex items-center justify-between py-2 border-b border-border">
-              <span className="font-semibold">{pt.name} {pt.is_active === false ? <span className="text-muted-foreground">— Inactive</span> : ""}</span>
-              <button type="button" disabled={ptPending} onClick={() => handleToggleProcessingType(pt)} className="px-2 py-0.5 rounded-md hover:bg-muted font-semibold cursor-pointer disabled:opacity-60">{pt.is_active ? "Deactivate" : "Reactivate"}</button>
-            </div>
-          ))}
-          {processingTypes.length === 0 && <p className="text-muted-foreground">No processing types yet.</p>}
-        </div>
-      </div>
     </div>
   )
 }
