@@ -75,6 +75,7 @@ export async function createProcessingType(
   });
   revalidatePath("/masters");
   revalidatePath("/settings");
+  revalidatePath("/ledgers");
   return { success: true, data: data as ProcessingType };
 }
 
@@ -104,6 +105,7 @@ export async function deactivateProcessingType(
   });
   revalidatePath("/masters");
   revalidatePath("/settings");
+  revalidatePath("/ledgers");
   return { success: true, data: data as ProcessingType };
 }
 
@@ -133,5 +135,6 @@ export async function reactivateProcessingType(
   });
   revalidatePath("/masters");
   revalidatePath("/settings");
+  revalidatePath("/ledgers");
   return { success: true, data: data as ProcessingType };
 }

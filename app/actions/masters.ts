@@ -38,6 +38,10 @@ async function db(): Promise<Db> {
 function revalidateMasters(): void {
   revalidatePath("/masters");
   revalidatePath("/dashboard");
+  revalidatePath("/employees");
+  revalidatePath("/parties");
+  revalidatePath("/ledgers");
+  revalidatePath("/people");
 }
 
 async function listTable(

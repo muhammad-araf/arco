@@ -105,6 +105,9 @@ async function validateCashAccount(
   }
   const { data: acct } = await db.from("cash_accounts").select("*").eq("id", cashAccountId).maybeSingle();
   if (!acct) return { ok: false, error: "The selected cash account does not exist." };
+  if ((acct as Record<string, unknown>).is_active === false) {
+    return { ok: false, error: "The selected cash account is inactive; reactivate it on the Masters page first." };
+  }
   if ((acct as Record<string, unknown>).account_kind !== kind) {
     return { ok: false, error: `The selected cash account is a ${(acct as Record<string, unknown>).account_kind} account, not a ${kind} account.` };
   }
@@ -512,7 +515,88 @@ export async function createCashAccount(input: {
     after: { code: input.code, opening_balance: opening },
     userId: gate.actor.userId, userEmail: gate.actor.email,
   });
+  revalidatePath("/masters");
+  revalidatePath("/daybook");
+  revalidatePath("/ledgers");
   return { success: true, data };
+}
+
+/**
+ * Edit a cash account. Code and kind are immutable after creation (the
+ * kind decides which movements may land in the account, and existing
+ * ledger rows already carry it); only the display name and the opening
+ * balance change. Rows are never deleted: use deactivate/reactivate.
+ */
+export async function updateCashAccount(input: {
+  id: string;
+  name?: string;
+  openingBalance?: number;
+}): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireWrite(db);
+  if ("error" in gate) return fail(gate.error);
+  if (!input.id) return fail("id is required.");
+  if (input.name !== undefined && !input.name.trim()) {
+    return fail("Cash account name is required.");
+  }
+  if (input.openingBalance !== undefined && nonNeg(input.openingBalance, "openingBalance") === null) {
+    return fail("openingBalance must be >= 0.");
+  }
+  const patch: Record<string, unknown> = {};
+  if (input.name !== undefined) patch.name = input.name.trim();
+  if (input.openingBalance !== undefined) patch.opening_balance = input.openingBalance;
+  if (Object.keys(patch).length === 0) return fail("Nothing to update.");
+  const { data: before } = await db.from("cash_accounts").select("*").eq("id", input.id).maybeSingle();
+  if (!before) return fail("Cash account not found.");
+  const { data, error: uError } = await db
+    .from("cash_accounts")
+    .update(patch)
+    .eq("id", input.id)
+    .select()
+    .single();
+  if (uError) return fail(uError.message);
+  await logAudit(db, {
+    action: "update", entityType: "cash_accounts", entityId: input.id,
+    before: before as Record<string, unknown>, after: patch,
+    userId: gate.actor.userId, userEmail: gate.actor.email,
+  });
+  revalidatePath("/masters");
+  revalidatePath("/daybook");
+  revalidatePath("/ledgers");
+  return { success: true, data };
+}
+
+async function setCashAccountActive(id: string, active: boolean): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireWrite(db);
+  if ("error" in gate) return fail(gate.error);
+  if (!id) return fail("id is required.");
+  const { data, error: uError } = await db
+    .from("cash_accounts")
+    .update({ is_active: active })
+    .eq("id", id)
+    .select()
+    .single();
+  if (uError) return fail(uError.message);
+  await logAudit(db, {
+    action: active ? "reactivate" : "deactivate", entityType: "cash_accounts", entityId: id,
+    before: { is_active: !active }, after: { is_active: active },
+    userId: gate.actor.userId, userEmail: gate.actor.email,
+  });
+  revalidatePath("/masters");
+  revalidatePath("/daybook");
+  revalidatePath("/ledgers");
+  return { success: true, data };
+}
+
+export async function deactivateCashAccount(id: string): Promise<ActionResult> {
+  return setCashAccountActive(id, false);
+}
+
+export async function reactivateCashAccount(id: string): Promise<ActionResult> {
+  return setCashAccountActive(id, true);
 }
 
 // ---------------------------------------------------------------- purchases
@@ -1816,6 +1900,46 @@ export async function createExpenseCategory(input: {
     after: { name: input.name.trim() },
     userId: gate.actor.userId, userEmail: gate.actor.email,
   });
+  revalidatePath("/masters");
+  revalidatePath("/daybook");
+  revalidatePath("/ledgers");
+  return { success: true, data };
+}
+
+export async function updateExpenseCategory(input: {
+  id: string;
+  name?: string;
+  description?: string | null;
+}): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireWrite(db);
+  if ("error" in gate) return fail(gate.error);
+  if (!input.id) return fail("id is required.");
+  if (input.name !== undefined && !input.name.trim()) {
+    return fail("Expense category name is required.");
+  }
+  const patch: Record<string, unknown> = {};
+  if (input.name !== undefined) patch.name = input.name.trim();
+  if (input.description !== undefined) patch.description = input.description?.trim() || null;
+  if (Object.keys(patch).length === 0) return fail("Nothing to update.");
+  const { data: before } = await db.from("expense_categories").select("*").eq("id", input.id).maybeSingle();
+  if (!before) return fail("Expense category not found.");
+  const { data, error: uError } = await db
+    .from("expense_categories")
+    .update(patch)
+    .eq("id", input.id)
+    .select()
+    .single();
+  if (uError) return fail(uError.message);
+  await logAudit(db, {
+    action: "update", entityType: "expense_categories", entityId: input.id,
+    before: before as Record<string, unknown>, after: patch,
+    userId: gate.actor.userId, userEmail: gate.actor.email,
+  });
+  revalidatePath("/masters");
+  revalidatePath("/daybook");
+  revalidatePath("/ledgers");
   return { success: true, data };
 }
 
@@ -1835,7 +1959,38 @@ export async function deactivateExpenseCategory(id: string): Promise<ActionResul
     action: "deactivate", entityType: "expense_categories", entityId: id,
     userId: gate.actor.userId, userEmail: gate.actor.email,
   });
+  revalidatePath("/masters");
+  revalidatePath("/daybook");
+  revalidatePath("/ledgers");
   return { success: true, data };
+}
+
+async function setExpenseCategoryActive(id: string, active: boolean): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireWrite(db);
+  if ("error" in gate) return fail(gate.error);
+  if (!id) return fail("id is required.");
+  const { data, error: uError } = await db
+    .from("expense_categories")
+    .update({ is_active: active })
+    .eq("id", id)
+    .select()
+    .single();
+  if (uError) return fail(uError.message);
+  await logAudit(db, {
+    action: active ? "reactivate" : "deactivate", entityType: "expense_categories", entityId: id,
+    before: { is_active: !active }, after: { is_active: active },
+    userId: gate.actor.userId, userEmail: gate.actor.email,
+  });
+  revalidatePath("/masters");
+  revalidatePath("/daybook");
+  revalidatePath("/ledgers");
+  return { success: true, data };
+}
+
+export async function reactivateExpenseCategory(id: string): Promise<ActionResult> {
+  return setExpenseCategoryActive(id, true);
 }
 
 /**
@@ -2056,6 +2211,100 @@ export async function reverseExpense(id: string, reason: string): Promise<Action
   }
 }
 
+/**
+ * Edit an expense. DRAFT ONLY: a posted expense has already written
+ * cash and/or party ledger rows, so changing its amount or account
+ * afterwards would desync the ledgers — posted expenses are corrected
+ * by reversal, never by edit. A draft has written nothing, so every
+ * field that createExpense accepts (except attachments, which stay as
+ * created) may change here, under the same guards as creation: a paid
+ * expense needs a real account of the payment method's kind, a credit
+ * expense needs a vendor, and a named category must exist.
+ */
+export async function updateExpense(input: {
+  id: string;
+  categoryName?: string;
+  categoryId?: string | null;
+  payee?: string;
+  vendorId?: string | null;
+  amount?: number;
+  settlement?: "paid" | "credit";
+  cashAccountId?: string | null;
+  paymentMethod?: "cash" | "bank";
+  location?: string | null;
+  description?: string | null;
+}): Promise<ActionResult> {
+  const { db, error } = await getDb();
+  if (!db) return fail(error);
+  const gate = await requireWrite(db);
+  if ("error" in gate) return fail(gate.error);
+  if (!input.id) return fail("id is required.");
+  const { data: exp } = await db.from("expenses").select("*").eq("id", input.id).maybeSingle();
+  if (!exp) return fail("Expense not found.");
+  if (exp.status !== "draft") {
+    return fail(`Only a draft expense can be edited (status: ${exp.status}). Reverse a posted expense instead.`);
+  }
+  if (input.categoryName !== undefined && !input.categoryName.trim()) {
+    return fail("Expense category is required.");
+  }
+  if (input.payee !== undefined && !input.payee.trim()) {
+    return fail("Payee is required.");
+  }
+  let amount: number | undefined;
+  if (input.amount !== undefined) {
+    const checked = pos(input.amount, "amount");
+    if (checked === null) return fail("Expense amount must be > 0.");
+    amount = checked;
+  }
+  const settlement = input.settlement ?? (exp.settlement as "paid" | "credit");
+  const vendorId = input.vendorId !== undefined ? input.vendorId : (exp.vendor_id as string | null);
+  if (settlement === "credit" && !vendorId) {
+    return fail("A credit expense needs a vendor: the unpaid amount has to be owed to someone.");
+  }
+  const paymentMethod = input.paymentMethod ?? (exp.payment_method as "cash" | "bank");
+  const cashAccountId = input.cashAccountId !== undefined ? input.cashAccountId : (exp.cash_account_id as string | null);
+  if (settlement === "paid") {
+    const cashCheck = await validateCashAccount(db, cashAccountId, paymentMethod);
+    if (!cashCheck.ok) return fail(cashCheck.error);
+  } else if (cashAccountId) {
+    const { data: acct } = await db.from("cash_accounts").select("id").eq("id", cashAccountId).maybeSingle();
+    if (!acct) return fail("The selected cash account does not exist.");
+  }
+  if (input.categoryId !== undefined && input.categoryId) {
+    const { data: cat } = await db.from("expense_categories").select("id").eq("id", input.categoryId).maybeSingle();
+    if (!cat) return fail("The selected expense category does not exist.");
+  }
+  const patch: Record<string, unknown> = {};
+  if (input.categoryName !== undefined) patch.category_name = input.categoryName.trim();
+  if (input.categoryId !== undefined) patch.category_id = input.categoryId;
+  if (input.payee !== undefined) patch.payee = input.payee.trim();
+  if (input.vendorId !== undefined) patch.vendor_id = input.vendorId;
+  if (amount !== undefined) patch.amount = amount;
+  if (input.settlement !== undefined) patch.settlement = input.settlement;
+  if (input.cashAccountId !== undefined) patch.cash_account_id = input.cashAccountId;
+  if (input.paymentMethod !== undefined) patch.payment_method = input.paymentMethod;
+  if (input.location !== undefined) patch.location = input.location?.trim() || null;
+  if (input.description !== undefined) patch.description = input.description?.trim() || null;
+  if (Object.keys(patch).length === 0) return fail("Nothing to update.");
+  // A draft's balance is its full amount until it posts or is settled.
+  if (amount !== undefined) patch.balance_amount = amount;
+  const { data, error: uError } = await db
+    .from("expenses")
+    .update(patch)
+    .eq("id", input.id)
+    .select()
+    .single();
+  if (uError) return fail(uError.message);
+  await logAudit(db, {
+    action: "update", entityType: "expenses", entityId: input.id,
+    voucherNo: exp.expense_no, before: exp as Record<string, unknown>, after: patch,
+    userId: gate.actor.userId, userEmail: gate.actor.email,
+  });
+  revalidatePath("/daybook");
+  revalidatePath("/ledgers");
+  return { success: true, data };
+}
+
 // ------------------------------------------------------- transfers & daybook
 
 /**
@@ -2088,6 +2337,9 @@ export async function postTransfer(input: {
     const { data: from } = await db.from("cash_accounts").select("*").eq("id", input.fromAccountId).maybeSingle();
     const { data: to } = await db.from("cash_accounts").select("*").eq("id", input.toAccountId).maybeSingle();
     if (!from || !to) return fail("Both transfer accounts must exist.");
+    if (from.is_active === false || to.is_active === false) {
+      return fail("Transfers cannot use an inactive cash account; reactivate it on the Masters page first.");
+    }
     const transferNo = await nextDocNo(db, "transfer", "TRF");
     const date = input.date ?? new Date().toISOString();
     const { data, error: iError } = await db
