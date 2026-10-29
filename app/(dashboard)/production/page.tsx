@@ -1,43 +1,34 @@
 "use client"
 
-import Link from "next/link"
 import { postToken } from "@/lib/idempotency"
 
 import * as React from "react"
 import {
   ScrollText,
   Boxes,
-  Plus,
   Play,
-  CheckCircle2,
-  AlertTriangle,
-  Cog,
   Percent,
-  Warehouse,
   Printer,
-  ChevronRight,
 } from "lucide-react"
-import { listBatches, getBatch, createBatchDraft, postBatch, reverseBatch, deleteBatchDraft, listRecipes, createRecipe, createRecipeVersion, setBatchVarianceReason } from "@/app/actions/production"
+import { listBatches, getBatch, postBatch, reverseBatch, deleteBatchDraft, listRecipes, createRecipe, createRecipeVersion } from "@/app/actions/production"
 import { getStockSummary } from "@/app/actions/inventory"
-import { listGodowns, listProducts, listMachines, listPackagingTypes, listParties, createParty, createGodown, createProduct, createMachine } from "@/app/actions/masters"
-import { InlineAdd, PARTY_FIELDS, GODOWN_FIELDS, PRODUCT_FIELDS, MACHINE_FIELDS } from "@/components/print/inline-add"
+import { listGodowns, listProducts, listMachines, listPackagingTypes, listParties } from "@/app/actions/masters"
 import { BatchSheetPrint } from "@/components/print/batch-sheet-print"
 import { PrintButton } from "@/components/print/print-button"
 import { ProductionBatch, Godown, Product, Machine, Recipe } from "@/lib/types/database"
 import { formatWeight, formatDate } from "@/lib/utils"
-import { lineSharePct } from "@/lib/dialog-calcs"
 import {
   AlertBanner,
   ConfirmDialog,
   EmptyState,
   FilterBanner,
   ReversalDialog,
-  SubmitSpinner,
   getUrlFilter,
-  isPositive,
   isTodayISO,
 } from "@/components/erp-ui"
 import { ProductionSkeleton } from "@/components/route-skeletons"
+import { ProductionBatchDialog } from "@/components/production-batch-dialog"
+import { ProductionVarianceDialog } from "@/components/production-variance-dialog"
 
 export default function ProductionPage() {
   const [batches, setBatches] = React.useState<ProductionBatch[]>([])
@@ -62,7 +53,6 @@ export default function ProductionPage() {
   const [isLoading, setIsLoading] = React.useState(true)
   const [formError, setFormError] = React.useState("")
   const [formNotice, setFormNotice] = React.useState("")
-  const [batchFieldErr, setBatchFieldErr] = React.useState("")
   const [recipeFieldErr, setRecipeFieldErr] = React.useState("")
   // Inline error under one field: rendered only when the latest
   // validation failure names that field (banner keeps the message too).
@@ -70,44 +60,15 @@ export default function ProductionPage() {
     current === key && formError ? (
       <p className="mt-1 text-[11px] font-medium text-red-600 dark:text-red-400">{formError}</p>
     ) : null
-  const [isPending, setIsPending] = React.useState(false)
-  const [showPostConfirm, setShowPostConfirm] = React.useState(false)
-  const [draftBatch, setDraftBatch] = React.useState<ProductionBatch | null>(null)
   const [reversalTarget, setReversalTarget] = React.useState<ProductionBatch | null>(null)
   const [isReversing, setIsReversing] = React.useState(false)
   const [deleteTarget, setDeleteTarget] = React.useState<ProductionBatch | null>(null)
   const [isDeleting, setIsDeleting] = React.useState(false)
   const [isPostingDraft, setIsPostingDraft] = React.useState(false)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
-  const postGuard = React.useRef(false)
 
-  // Batch Form State
-  const [machineId, setMachineId] = React.useState("")
-  const [godownId, setGodownId] = React.useState("")
-  const [recipeId, setRecipeId] = React.useState("")
-  const [inputLines, setInputLines] = React.useState<{ key: number; productId: string; qty: number }[]>([{ key: 1, productId: "", qty: 10000 }])
-  const [outputProductId, setOutputProductId] = React.useState("")
-  const [byProductId, setByProductId] = React.useState("")
-  const [outputWeightKg, setOutputWeightKg] = React.useState<number>(9200)
-  const [byProductKg, setByProductKg] = React.useState<number>(550)
-  const [wasteKg, setWasteKg] = React.useState<number>(250)
-  const [packagingTypeId, setPackagingTypeId] = React.useState("")
-  const [bagsConsumed, setBagsConsumed] = React.useState<number>(0)
-  const [packingRatePerBag, setPackingRatePerBag] = React.useState<number>(0)
-  const [damagedBags, setDamagedBags] = React.useState<number>(0)
-  const [batchNotes, setBatchNotes] = React.useState("")
-  // Batch customer / order / operator (shown on the batch sheet) and
-  // the owner pool the availability pre-check scopes to.
-  const [batchCustomerId, setBatchCustomerId] = React.useState("")
-  const [batchOrderRef, setBatchOrderRef] = React.useState("")
-  const [batchOperatorName, setBatchOperatorName] = React.useState("")
-  const [isCustomerOwned, setIsCustomerOwned] = React.useState(false)
-  const [batchOwnerPartyId, setBatchOwnerPartyId] = React.useState("")
-  const [varianceReason, setVarianceReason] = React.useState("")
   // Draft blocked by the tolerance gate: record a reason, then post.
   const [varianceTarget, setVarianceTarget] = React.useState<any | null>(null)
-  const [varianceReasonText, setVarianceReasonText] = React.useState("")
-  const [isPostingWithReason, setIsPostingWithReason] = React.useState(false)
 
   // "Today" for the today-only filter, from client-side effect state (see
   // isTodayISO): never read new Date() during render.
@@ -148,190 +109,6 @@ export default function ProductionPage() {
   // Dashboard drill-down links (?filter=today / posted) apply as the
   // initial filter on mount, matching the other list pages.
   React.useEffect(() => { setDrillFilter(getUrlFilter()) }, [])
-
-  React.useEffect(() => {
-    if (machines.length > 0 && !machineId) setMachineId(machines[0].id)
-    if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
-    const rawSeeds = products.filter((p) => p.category === "raw_seed")
-    const finSeeds = products.filter((p) => p.category === "finished_seed")
-    const byProds = products.filter((p) => p.category === "by_product")
-
-    if (rawSeeds.length > 0 && !inputLines[0]?.productId) {
-      setInputLines((lines) => lines.map((l, i) => (i === 0 ? { ...l, productId: rawSeeds[0].id } : l)))
-    }
-    if (finSeeds.length > 0 && !outputProductId) setOutputProductId(finSeeds[0].id)
-    if (byProds.length > 0 && !byProductId) setByProductId(byProds[0].id)
-  }, [machines, godowns, products, machineId, godownId, inputLines, outputProductId, byProductId])
-
-  const totalInputKg = inputLines.reduce((s, l) => s + (Number(l.qty) || 0), 0)
-  const calculatedYield = totalInputKg > 0 ? Math.round((outputWeightKg / totalInputKg) * 100) : 0
-  // Availability pre-check, scoped by OWNER POOL like the server guard:
-  // a customer-owned batch checks only that owner's pool, a company
-  // batch only the company (NULL-party) pool — never all pools summed.
-  const effectiveOwnerPartyId = isCustomerOwned ? (batchOwnerPartyId || batchCustomerId || null) : null
-  const stockForProduct = (productId: string) => summaryRows
-    .filter((r) => r.product_id === productId && r.godown_id === godownId && (r.party_id ?? null) === effectiveOwnerPartyId)
-    .reduce((a, r) => a + (Number(r.balance_kg) || 0), 0)
-
-  // Picking a recipe pins it to the batch and fills the input lines
-  // from its items, scaled to the current total input (0 until the
-  // user enters quantities). The server records recipe_id + the
-  // version that was active when the draft was created.
-  const handleRecipeSelect = (id: string) => {
-    setRecipeId(id)
-    if (!id) return
-    const recipe = recipes.find((r: any) => r.id === id)
-    if (!recipe) return
-    if (recipe.output_product_id) setOutputProductId(recipe.output_product_id)
-    const items = (recipe.recipe_items ?? []) as { product_id: string; required_ratio_pct: number }[]
-    if (items.length) {
-      setInputLines(items.map((item, i) => ({
-        key: Date.now() + i,
-        productId: item.product_id,
-        qty: totalInputKg > 0 ? Math.round((totalInputKg * Number(item.required_ratio_pct)) / 100) : 0,
-      })))
-    }
-  }
-
-  // Field-level validation shared by Post and Save as draft: returns
-  // the field key + message for the first failure, so the dialog can
-  // show the error under the field as well as in the banner. No rule
-  // changed here — the checks are the ones the form already ran.
-  const validateBatchForm = (): { field: string; message: string } | null => {
-    if (!machineId) return { field: "machine", message: "Select the machine / cleaning plant for this batch." }
-    if (!godownId) return { field: "godown", message: "Select the target godown for this batch." }
-    if (!inputLines.length) return { field: "inputs", message: "Add at least one input line." }
-    const badProduct = inputLines.find((l) => !l.productId)
-    if (badProduct) return { field: `input-product-${badProduct.key}`, message: "Every input line needs a product." }
-    const badQty = inputLines.find((l) => (Number(l.qty) || 0) < 0)
-    if (badQty) return { field: `input-qty-${badQty.key}`, message: "Input quantities cannot be negative." }
-    if (!outputProductId) return { field: "output-product", message: "Select the finished output product." }
-    if (!isPositive(totalInputKg)) return { field: "total-input", message: "Input weight must be greater than zero." }
-    if (outputWeightKg < 0 || byProductKg < 0 || wasteKg < 0) return { field: "output", message: "Output, by-product and waste weights cannot be negative." }
-    if (outputWeightKg + byProductKg + wasteKg > totalInputKg) return { field: "output", message: `Mass balance check failed: output (${outputWeightKg} kg) + by-product (${byProductKg} kg) + waste (${wasteKg} kg) exceeds input (${totalInputKg} kg). Correct the weights before posting.` }
-    if (bagsConsumed < 0 || packingRatePerBag < 0 || damagedBags < 0) return { field: "output", message: "Bags consumed, packing rate and damaged bags cannot be negative." }
-    const aggregated = new Map<string, number>()
-    for (const l of inputLines) aggregated.set(l.productId, (aggregated.get(l.productId) ?? 0) + (Number(l.qty) || 0))
-    for (const [productId, qty] of aggregated) {
-      const available = stockForProduct(productId)
-      if (qty > available) {
-        const name = products.find((x) => x.id === productId)?.name ?? productId
-        const pool = isCustomerOwned ? "for this owner" : "in company stock"
-        return { field: "total-input", message: `Insufficient input stock in this godown ${pool}: ${available} kg of ${name} available, but ${qty} kg requested. Reduce the batch size or choose another godown.` }
-      }
-    }
-    return null
-  }
-
-  // The draft payload both Post (draft-then-post) and Save as draft use.
-  const batchDraftPayload = () => ({
-    recipeId: recipeId || undefined,
-    machineId, godownId, plannedSizeKg: totalInputKg,
-    inputs: inputLines.map((l) => ({ productId: l.productId, actualQtyKg: Number(l.qty) || 0 })),
-    outputProductId, actualOutputKg: outputWeightKg,
-    byproductProductId: byProductId || undefined, byproductKg: byProductKg, wasteKg,
-    packagingTypeId: packagingTypeId || undefined, bagsConsumed, packingRatePerBag, damagedBags,
-    notes: batchNotes || undefined,
-    isCustomerOwned, ownerPartyId: effectiveOwnerPartyId ?? undefined,
-    customerId: batchCustomerId || undefined, orderRef: batchOrderRef || undefined,
-    operatorName: batchOperatorName || undefined, varianceReason: varianceReason || undefined,
-  })
-
-  const handlePostBatch = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isPending) return
-    const problem = validateBatchForm()
-    if (problem) {
-      setBatchFieldErr(problem.field)
-      setFormError(problem.message)
-      return
-    }
-    setBatchFieldErr("")
-    setFormError("")
-    const selectedMachine = machines.find((m) => m.id === machineId)
-    const selectedGodown = godowns.find((g) => g.id === godownId)
-    const batchNo = `BAT-2026-${String(batches.length + 1).padStart(3, "0")}`
-    setDraftBatch({
-      id: `bat-${Date.now()}`,
-      batch_no: batchNo,
-      date: new Date().toISOString(),
-      machine_id: machineId,
-      machine_name: selectedMachine?.name,
-      godown_id: godownId,
-      godown_name: selectedGodown?.name,
-      planned_size_kg: totalInputKg,
-      actual_input_kg: totalInputKg,
-      actual_output_kg: outputWeightKg,
-      byproduct_kg: byProductKg,
-      waste_kg: wasteKg,
-      yield_pct: calculatedYield,
-      status: "draft",
-      notes: batchNotes || undefined,
-      created_at: new Date().toISOString(),
-    })
-    setShowPostConfirm(true)
-  }
-
-  // Save as draft: the workflow already supports drafts (draft rows
-  // post from the list), but the dialog only offered Post — so a
-  // batch could only become a draft by a failed post. This writes the
-  // same draft without posting it.
-  const handleSaveBatchDraft = async () => {
-    if (isPending) return
-    const problem = validateBatchForm()
-    if (problem) {
-      setBatchFieldErr(problem.field)
-      setFormError(problem.message)
-      return
-    }
-    setBatchFieldErr("")
-    setFormError("")
-    setIsPending(true)
-    try {
-      const created = await createBatchDraft(batchDraftPayload())
-      if (!created.success || !(created.data as any)?.id) {
-        setFormError(created.error ?? "Could not save the batch draft.")
-        return
-      }
-      setFormNotice(`${(created.data as any)?.batch_no ?? "Batch"} saved as draft — post it from the list below.`)
-      setIsBatchModalOpen(false)
-      await loadData()
-    } finally {
-      setIsPending(false)
-    }
-  }
-
-  const handleConfirmPost = async () => {
-    if (!draftBatch || postGuard.current) return
-    postGuard.current = true
-    setIsPending(true)
-    try {
-      const created = await createBatchDraft(batchDraftPayload())
-      if (!created.success || !(created.data as any)?.id) {
-        setFormError(created.error ?? "Could not create the batch draft.")
-        return
-      }
-      const posted = await postBatch((created.data as any).id, postToken("batch:post", (created.data as any).id))
-      if (!posted.success) {
-        // The draft stays in the list as Draft, with Post / Delete
-        // actions — it is not lost, and it is not shown as posted.
-        setFormError(posted.error ?? "Could not post the batch. The draft is kept below — post it again or delete it.")
-        await loadData()
-        return
-      }
-      const row: any = posted.data ?? created.data
-      setFormNotice(`${row.batch_no ?? draftBatch.batch_no} posted — ${formatWeight(row.actual_input_kg ?? draftBatch.actual_input_kg)} input deducted, ${formatWeight(row.actual_output_kg ?? draftBatch.actual_output_kg)} output added at ${row.yield_pct ?? draftBatch.yield_pct}% yield.`)
-      setShowPostConfirm(false)
-      setIsBatchModalOpen(false)
-      setDraftBatch(null)
-      await loadData()
-      // Print from the batch's own stored lines, not form state.
-      await handlePrintBatch({ id: row.id ?? (created.data as any).id, batch_no: row.batch_no ?? draftBatch.batch_no })
-    } finally {
-      setIsPending(false)
-      postGuard.current = false
-    }
-  }
 
   const handleCreateRecipe = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -437,7 +214,6 @@ export default function ProductionPage() {
         // Tolerance gate: the draft needs a variance reason first.
         if ((res.error ?? "").includes("variance reason")) {
           setVarianceTarget(batch)
-          setVarianceReasonText("")
           return
         }
         setFormError(res.error ?? "Could not post the batch.")
@@ -448,32 +224,6 @@ export default function ProductionPage() {
       await handlePrintBatch(batch)
     } finally {
       setIsPostingDraft(false)
-    }
-  }
-
-  const handlePostWithVarianceReason = async () => {
-    if (!varianceTarget || isPostingWithReason) return
-    if (!varianceReasonText.trim()) {
-      setFormError("Enter a variance reason before posting this batch.")
-      return
-    }
-    setIsPostingWithReason(true)
-    try {
-      const saved = await setBatchVarianceReason(varianceTarget.id, varianceReasonText.trim())
-      if (!saved.success) {
-        setFormError(saved.error ?? "Could not save the variance reason.")
-        return
-      }
-      const res = await postBatch(varianceTarget.id, postToken("batch:post", varianceTarget.id))
-      if (!res.success) {
-        setFormError(res.error ?? "Could not post the batch.")
-        return
-      }
-      setFormNotice(`${varianceTarget.batch_no} posted.`)
-      setVarianceTarget(null)
-      await loadData()
-    } finally {
-      setIsPostingWithReason(false)
     }
   }
 
@@ -492,6 +242,12 @@ export default function ProductionPage() {
     } finally {
       setIsDeleting(false)
     }
+  }
+
+  // Dialog callbacks: notice banner + register reload.
+  const handleDialogSaved = (notice: string) => {
+    if (notice) setFormNotice(notice)
+    void loadData()
   }
 
   const visibleBatches = drillFilter === "today"
@@ -638,366 +394,6 @@ export default function ProductionPage() {
           </table>
         </div>
       </div>
-
-      {/* Batch Execution Modal */}
-      {isBatchModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
-          <div className="expensive-card w-full max-w-2xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-8 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <div>
-                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                  <Play className="h-4 w-4 text-emerald-500" />
-                  Execute Production / Cleaning Batch
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  Deducts raw input grain and produces clean graded seed & by-products into inventory.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsBatchModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handlePostBatch} className="space-y-4 text-xs">
-              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="machine-cleaning-plant">Machine / Cleaning Plant *</label>
-                  <div className="flex flex-wrap items-start gap-2"><select id="machine-cleaning-plant"
-                    value={machineId}
-                    onChange={(e) => setMachineId(e.target.value)}
-                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                    required
-                  >
-                    {machines.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} ({m.processing_type})
-                      </option>
-                    ))}
-                  </select> <InlineAdd label="Machine" fields={MACHINE_FIELDS} createAction={async (v) => createMachine({ code: v.code, name: v.name, processing_type: v.processing_type })} onCreated={async (id) => { const r = await listMachines(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setMachines(list); } setMachineId(id); }} /></div>
-                  {inlineErr("machine", batchFieldErr)}
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="target-godown">Target Godown *</label>
-                  <div className="flex flex-wrap items-start gap-2"><select id="target-godown"
-                    value={godownId}
-                    onChange={(e) => setGodownId(e.target.value)}
-                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                    required
-                  >
-                    {godowns.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setGodowns(list); } setGodownId(id); }} /></div>
-                  {inlineErr("godown", batchFieldErr)}
-                </div>
-              </div>
-
-              {/* Customer / order / operator: shown on the batch sheet */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="batch-customer">Customer</label>
-                  <div className="flex flex-wrap items-start gap-2"><select id="batch-customer"
-                    value={batchCustomerId}
-                    onChange={(e) => setBatchCustomerId(e.target.value)}
-                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  >
-                    <option value="">No customer — company batch</option>
-                    {parties.map((p: any) => (
-                      <option key={p.id} value={p.id}>{p.name}</option>
-                    ))}
-                  </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setParties(list); } setBatchCustomerId(id); }} /></div>
-                </div>
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="batch-order-ref">Order Ref</label>
-                  <input id="batch-order-ref"
-                    type="text"
-                    value={batchOrderRef}
-                    onChange={(e) => setBatchOrderRef(e.target.value)}
-                    placeholder="Customer order reference"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="batch-operator">Operator</label>
-                  <input id="batch-operator"
-                    type="text"
-                    value={batchOperatorName}
-                    onChange={(e) => setBatchOperatorName(e.target.value)}
-                    placeholder="Operator who runs this batch"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="batch-ownership">Stock Owner Pool</label>
-                  <select id="batch-ownership"
-                    value={isCustomerOwned ? "customer" : "company"}
-                    onChange={(e) => setIsCustomerOwned(e.target.value === "customer")}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  >
-                    <option value="company">Company stock</option>
-                    <option value="customer">Customer-owned stock</option>
-                  </select>
-                </div>
-                {isCustomerOwned && (
-                  <div className="sm:col-span-2">
-                    <label className="block font-medium text-foreground mb-1" htmlFor="batch-owner-party">Owner Party (stock pool)</label>
-                    <div className="flex flex-wrap items-start gap-2"><select id="batch-owner-party"
-                      value={batchOwnerPartyId}
-                      onChange={(e) => setBatchOwnerPartyId(e.target.value)}
-                      className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                    >
-                      <option value="">Use the customer above as owner</option>
-                      {parties.map((p: any) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setParties(list); } setBatchOwnerPartyId(id); }} /></div>
-                  </div>
-                )}
-              </div>
-
-              {/* Recipe (optional): pins recipe + version to the batch */}
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="recipe-optional">Recipe (optional)</label>
-                <select id="recipe-optional"
-                  value={recipeId}
-                  onChange={(e) => handleRecipeSelect(e.target.value)}
-                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                >
-                  <option value="">No recipe — enter inputs by hand</option>
-                  {recipes.map((r: any) => (
-                    <option key={r.id} value={r.id}>
-                      {r.code} v{r.version} — {r.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Input Grain Selection & Stock Checker */}
-              <div className="p-3 rounded-lg bg-muted border border-border space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-foreground uppercase tracking-wider text-[10px]">
-                    Input Grain (Stock Deduction)
-                  </span>
-                  <span className="text-muted-foreground text-[11px]">
-                    Total Input: <strong className="text-foreground">{formatWeight(totalInputKg)}</strong>
-                  </span>
-                </div>
-
-                {inputLines.map((line, idx) => (
-                  <div key={line.key} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`raw-seed-product-${line.key}`}>Raw Seed Product *</label>
-                      <div className="flex flex-wrap items-start gap-2"><select id={`raw-seed-product-${line.key}`}
-                        value={line.productId}
-                        onChange={(e) => setInputLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, productId: e.target.value } : l)))}
-                        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
-                      >
-                        <option value="">Select product</option>
-                        {products
-                          .filter((p) => p.category === "raw_seed" || p.category === "intermediate")
-                          .map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name}
-                            </option>
-                          ))}
-                      </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setInputLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, productId: id } : l))); }} /></div>
-                      {inlineErr(`input-product-${line.key}`, batchFieldErr)}
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`production-input-weight-kg-${line.key}`}>Input Weight (kg) *{line.productId ? ` — in godown: ${formatWeight(stockForProduct(line.productId))}` : ""}</label>
-                      <div className="flex gap-2">
-                        <input id={`production-input-weight-kg-${line.key}`}
-                          type="number"
-                          value={line.qty}
-                          onChange={(e) => setInputLines((lines) => lines.map((l) => (l.key === line.key ? { ...l, qty: Number(e.target.value) } : l)))}
-                          className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
-                          min="0"
-                          required
-                        />
-                        {inputLines.length > 1 && (
-                          <button type="button" onClick={() => setInputLines((lines) => lines.filter((l) => l.key !== line.key))} className="px-2 rounded-md bg-muted text-muted-foreground text-xs font-bold cursor-pointer" title="Remove this input line">✕</button>
-                        )}
-                      </div>
-                      <p className="mt-1 text-[11px] text-muted-foreground">Share of total input: {totalInputKg > 0 ? `${lineSharePct(Number(line.qty) || 0, totalInputKg)}%` : "—"}</p>
-                      {inlineErr(`input-qty-${line.key}`, batchFieldErr)}
-                    </div>
-                  </div>
-                ))}
-                <button type="button" onClick={() => setInputLines((lines) => [...lines, { key: Date.now(), productId: "", qty: 0 }])} className="px-3 py-1.5 rounded-md bg-background border border-border text-foreground text-[11px] font-semibold cursor-pointer">+ Add input line</button>
-              </div>
-
-              {/* Output & By-Product Recovery */}
-              <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20 space-y-3">
-                <span className="font-bold text-foreground uppercase tracking-wider text-[10px] block">
-                  Graded Output & Recovery (Stock Increment)
-                </span>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="finished-output-seed">Finished Output Seed *</label>
-                    <div className="flex flex-wrap items-start gap-2"><select id="finished-output-seed"
-                      value={outputProductId}
-                      onChange={(e) => setOutputProductId(e.target.value)}
-                      className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
-                    >
-                      {products
-                        .filter((p) => p.category === "finished_seed" || p.category === "intermediate")
-                        .map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                    </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setOutputProductId(id); }} /></div>
-                    {inlineErr("output-product", batchFieldErr)}
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="usable-output-kg">Usable Output (kg) *</label>
-                    <input id="usable-output-kg"
-                      type="number"
-                      value={outputWeightKg}
-                      onChange={(e) => setOutputWeightKg(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
-                      min="0"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="by-product-phok-chhilka">By-Product (Phok/Chhilka)</label>
-                    <div className="flex flex-wrap items-start gap-2"><select id="by-product-phok-chhilka"
-                      value={byProductId}
-                      onChange={(e) => setByProductId(e.target.value)}
-                      className="flex-1 min-w-0 px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground"
-                    >
-                      {products
-                        .filter((p) => p.category === "by_product")
-                        .map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                    </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } setByProductId(id); }} /></div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="by-product-weight-kg">By-Product Weight (kg)</label>
-                    <input id="by-product-weight-kg"
-                      type="number"
-                      value={byProductKg}
-                      onChange={(e) => setByProductKg(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
-                      min="0"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor="process-wastage-loss-kg">Process Wastage / Loss (kg)</label>
-                    <input id="process-wastage-loss-kg"
-                      type="number"
-                      value={wasteKg}
-                      onChange={(e) => setWasteKg(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-between p-2 rounded-md bg-background border border-border">
-                    <span className="text-muted-foreground">Calculated Yield:</span>
-                    <strong className="text-base text-teal-600 dark:text-teal-400 font-mono">
-                      {calculatedYield}%
-                    </strong>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-4 text-[11px] text-muted-foreground">
-                <span>Output: <strong className="text-foreground font-mono">{calculatedYield}% of input</strong></span>
-                <span>By-product: <strong className="text-foreground font-mono">{totalInputKg > 0 ? Math.round((byProductKg / totalInputKg) * 100) : 0}% of input</strong></span>
-                <span>Waste: <strong className="text-foreground font-mono">{totalInputKg > 0 ? Math.round((wasteKg / totalInputKg) * 100) : 0}% of input</strong></span>
-              </div>
-              {inlineErr("output", batchFieldErr)}
-              {inlineErr("total-input", batchFieldErr)}
-              {inlineErr("inputs", batchFieldErr)}
-
-              {/* Batch packing moved to the Packing page: pack a
-                  batch's output there instead of inside this form. */}
-              <div className="p-3 rounded-lg bg-muted border border-border space-y-2">
-                <span className="font-bold text-foreground uppercase tracking-wider text-[10px] block">
-                  Packaging (Bardana)
-                </span>
-                <p className="text-xs text-muted-foreground">
-                  Batch packing now lives on the Packing page, with the
-                  batch&apos;s output, bag type, bags, rate and damaged
-                  bags in one place.
-                </p>
-                <Link href="/packing?tab=batch-packing" className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold cursor-pointer">
-                  Pack this batch&apos;s output
-                  <ChevronRight className="h-3 w-3" />
-                </Link>
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="batch-variance-reason">Variance Reason</label>
-                <input id="batch-variance-reason"
-                  type="text"
-                  value={varianceReason}
-                  onChange={(e) => setVarianceReason(e.target.value)}
-                  placeholder="Required before posting when an input variance exceeds the configured tolerance"
-                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                />
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="batch-run-notes">Batch Run Notes</label>
-                <input id="batch-run-notes"
-                  type="text"
-                  value={batchNotes}
-                  onChange={(e) => setBatchNotes(e.target.value)}
-                  placeholder="Notes, moisture result, screen size"
-                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => { setIsBatchModalOpen(false); setBatchFieldErr("") }}
-                  className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveBatchDraft}
-                  disabled={isPending}
-                  className="px-4 py-2 rounded-lg bg-background border border-border text-foreground text-xs font-bold cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  <span>{isPending ? "Saving…" : "Save as draft"}</span>
-                </button>
-                <button
-                  type="submit"
-                  disabled={isPending}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
-                  <span>{isPending ? "Posting…" : "Post Batch Run & Update Ledgers"}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* Printable Batch Run Sheet */}
       {selectedBatchForPrint && (
@@ -1196,15 +592,6 @@ export default function ProductionPage() {
         </form>
       </div>
       <ConfirmDialog
-        open={showPostConfirm}
-        title="Post this production batch?"
-        description={draftBatch ? `${draftBatch.batch_no} will deduct ${formatWeight(draftBatch.actual_input_kg)} of input, add ${formatWeight(draftBatch.actual_output_kg)} of graded output (${draftBatch.yield_pct}% yield) and ${formatWeight(draftBatch.byproduct_kg)} of by-product. A posted batch can only be changed by reversal.` : ""}
-        confirmLabel="Post Batch Run & Update Ledgers"
-        pending={isPending}
-        onConfirm={handleConfirmPost}
-        onCancel={() => { setShowPostConfirm(false); setDraftBatch(null) }}
-      />
-      <ConfirmDialog
         open={!!deleteTarget}
         title="Delete this draft batch?"
         description={deleteTarget ? `${deleteTarget.batch_no} never posted, so deleting it changes no stock. Posted batches cannot be deleted.` : ""}
@@ -1222,34 +609,29 @@ export default function ProductionPage() {
         onConfirm={handleConfirmReversal}
         onCancel={() => setReversalTarget(null)}
       />
-      {/* Variance reason for a draft blocked by the tolerance gate */}
-      {varianceTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4">
-            <h3 className="text-sm font-bold text-foreground">Variance reason required</h3>
-            <p className="text-xs text-muted-foreground">
-              {varianceTarget.batch_no} cannot be posted: an input variance exceeds the configured tolerance. Record the reason, then post again.
-            </p>
-            <div>
-              <label className="block font-medium text-foreground mb-1 text-xs" htmlFor="draft-variance-reason">Variance reason</label>
-              <input id="draft-variance-reason"
-                type="text"
-                value={varianceReasonText}
-                onChange={(e) => setVarianceReasonText(e.target.value)}
-                placeholder="Why the input varied from plan"
-                className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground text-xs"
-              />
-            </div>
-            <div className="flex items-center justify-end gap-3">
-              <button type="button" onClick={() => setVarianceTarget(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>
-              <button type="button" onClick={handlePostWithVarianceReason} disabled={isPostingWithReason} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer disabled:opacity-60">
-                {isPostingWithReason ? <SubmitSpinner /> : null}
-                <span>{isPostingWithReason ? "Posting…" : "Save Reason & Post"}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ProductionBatchDialog
+        open={isBatchModalOpen}
+        onClose={() => setIsBatchModalOpen(false)}
+        godowns={godowns}
+        products={products}
+        machines={machines}
+        recipes={recipes}
+        parties={parties}
+        summaryRows={summaryRows}
+        batchCount={batches.length}
+        setGodowns={setGodowns}
+        setProducts={setProducts}
+        setMachines={setMachines}
+        setParties={setParties}
+        onSaved={handleDialogSaved}
+        onPrinted={handlePrintBatch}
+      />
+      <ProductionVarianceDialog
+        open={varianceTarget !== null}
+        target={varianceTarget}
+        onClose={() => setVarianceTarget(null)}
+        onSaved={handleDialogSaved}
+      />
     </div>
   )
 }
