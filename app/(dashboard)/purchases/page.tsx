@@ -8,25 +8,21 @@ import {
   Plus,
   Building2,
   DollarSign,
-  CheckCircle2,
   Package,
 } from "lucide-react"
-import { listPurchases, createPurchase, postPurchase, reversePurchase, listPurchaseReturns, createPurchaseReturn, postPurchaseReturn, allocatePayment, listCashAccounts } from "@/app/actions/finance"
-import { listParties, listGodowns, listProducts, createParty, createGodown, createProduct } from "@/app/actions/masters"
+import { listPurchases, postPurchase, reversePurchase, listPurchaseReturns, createPurchaseReturn, postPurchaseReturn, allocatePayment, listCashAccounts } from "@/app/actions/finance"
+import { listParties, listGodowns, listProducts } from "@/app/actions/masters"
 import { PurchasePrint } from "@/components/print/purchase-print"
-import { InlineAdd, PARTY_FIELDS, GODOWN_FIELDS, PRODUCT_FIELDS } from "@/components/print/inline-add"
 import { PurchaseVoucher, Party, Godown, Product } from "@/lib/types/database"
 import { formatCurrency, formatWeight, formatDate } from "@/lib/utils"
 import {
   AlertBanner,
-  ConfirmDialog,
   EmptyState,
   FilterBanner,
   ReversalDialog,
-  SubmitSpinner,
   getUrlFilter,
-  isPositive,
 } from "@/components/erp-ui"
+import { PurchaseDialog } from "@/components/purchase-dialog"
 import { PurchasesSkeleton } from "@/components/route-skeletons"
 import { PrintButton } from "@/components/print/print-button"
 
@@ -42,8 +38,6 @@ export default function PurchasesPage() {
   const [formError, setFormError] = React.useState("")
   const [formNotice, setFormNotice] = React.useState("")
   const [isPending, setIsPending] = React.useState(false)
-  const [showConfirm, setShowConfirm] = React.useState(false)
-  const [draftPurchase, setDraftPurchase] = React.useState<PurchaseVoucher | null>(null)
   const [reversalTarget, setReversalTarget] = React.useState<PurchaseVoucher | null>(null)
   const [isReversing, setIsReversing] = React.useState(false)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
@@ -61,19 +55,10 @@ export default function PurchasesPage() {
   const [payPurchaseId, setPayPurchaseId] = React.useState("")
   const [payAmount, setPayAmount] = React.useState<number>(0)
   const [payPending, setPayPending] = React.useState(false)
-  const purchaseGuard = React.useRef(false)
-  const purchaseTokenRef = React.useRef<string | null>(null)
-  const confirmPayTokenRef = React.useRef<string | null>(null)
   const returnTokenRef = React.useRef<string | null>(null)
   const payTokenRef = React.useRef<string | null>(null)
-  const [vendorId, setVendorId] = React.useState("")
-  const [godownId, setGodownId] = React.useState("")
-  const [invoiceRef, setInvoiceRef] = React.useState("")
   // Purchase lines: the form submits N lines (server already accepted
   // items[]); each line is one seed product with its own qty/price.
-  const [lines, setLines] = React.useState([{ key: 1, productId: "", quantity: 10000, unitPrice: 115 }])
-  const [paidAmount, setPaidAmount] = React.useState<number>(500000)
-  const [notes, setNotes] = React.useState("")
   const [page, setPage] = React.useState(1)
   const [printPurchase, setPrintPurchase] = React.useState<PurchaseVoucher | null>(null)
   const [totalPurchases, setTotalPurchases] = React.useState(0)
@@ -115,157 +100,15 @@ export default function PurchasesPage() {
   // Dashboard drill-down links (?filter=payable) apply on mount too.
   React.useEffect(() => { loadData(); setDrillFilter(getUrlFilter()) }, [loadData])
 
+  // Pay-section account default only. The purchase dialog owns its own
+  // payment-account state now (see PurchaseDialog).
   React.useEffect(() => {
     if (cashAccounts.length > 0 && !payCashAccountId) {
       const first = cashAccounts.find((a) => a.account_kind === payAccountKind) ?? cashAccounts[0]
       if (first) { setPayCashAccountId(first.id); setPayAccountKind(first.account_kind) }
     }
-    if (vendors.length > 0 && !vendorId) setVendorId(vendors[0].id)
-    if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
-    if (products.length > 0 && !lines[0]?.productId) {
-      setLines((prev) => prev.map((l, i) => (i === 0 ? { ...l, productId: products[0].id } : l)))
-    }
-  }, [vendors, godowns, products, vendorId, godownId, lines, cashAccounts, payCashAccountId, payAccountKind])
+  }, [cashAccounts, payCashAccountId, payAccountKind])
 
-  const totalAmount = lines.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0), 0)
-  const balanceAmount = totalAmount - paidAmount
-
-  const handleRecordPurchase = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isPending) return
-    // Spec §10: required fields, positive quantity and price on EVERY
-    // line, and payment may not exceed the invoice total — each failure
-    // says what to fix.
-    if (!vendorId) return setFormError("Select the supplier / vendor for this purchase.")
-    if (!godownId) return setFormError("Select the godown receiving this purchase.")
-    if (lines.length === 0) return setFormError("Add at least one purchase line.")
-    for (let i = 0; i < lines.length; i++) {
-      if (!lines[i].productId) return setFormError(`Line ${i + 1}: select the product being purchased.`)
-      if (!isPositive(lines[i].quantity)) return setFormError(`Line ${i + 1}: quantity must be greater than zero.`)
-      if (!isPositive(lines[i].unitPrice)) return setFormError(`Line ${i + 1}: unit price must be greater than zero.`)
-    }
-    if (paidAmount < 0) return setFormError("Paid amount cannot be negative.")
-    if (paidAmount > 0 && !payCashAccountId) return setFormError("Select a cash account for the payment at purchase. Create one on the Daybook page first if none exists.")
-    if (paidAmount > totalAmount) return setFormError(`Paid amount (${formatCurrency(paidAmount)}) exceeds the invoice total (${formatCurrency(totalAmount)}). A payment is allocated to a specific invoice and cannot overpay it.`)
-    setFormError("")
-    const selectedVendor = vendors.find((v) => v.id === vendorId)
-    const selectedGodown = godowns.find((g) => g.id === godownId)
-    const purchaseNo = `PUR-2026-${String(totalPurchases + 1).padStart(3, "0")}`
-    setDraftPurchase({
-      id: `pur-${Date.now()}`,
-      purchase_no: purchaseNo,
-      date: new Date().toISOString(),
-      vendor_id: vendorId,
-      vendor_name: selectedVendor?.name,
-      invoice_ref: invoiceRef || undefined,
-      godown_id: godownId,
-      godown_name: selectedGodown?.name,
-      total_amount: totalAmount,
-      paid_amount: paidAmount,
-      balance_amount: balanceAmount,
-      status: "posted",
-      notes: notes || undefined,
-      items: lines.map((l, i) => ({
-        id: `puri-${Date.now()}-${i}`,
-        purchase_id: `pur-${Date.now()}`,
-        product_id: l.productId,
-        product_name: products.find((p) => p.id === l.productId)?.name,
-        item_type: "seed",
-        quantity: l.quantity,
-        unit: "kg",
-        unit_price: l.unitPrice,
-        line_total: (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0),
-      })),
-      created_at: new Date().toISOString(),
-    })
-    setShowConfirm(true)
-  }
-
-  const handleConfirmPurchase = async () => {
-    if (!draftPurchase || purchaseGuard.current) return
-    purchaseGuard.current = true
-    setIsPending(true)
-    try {
-      const created = await createPurchase({
-        vendorId, invoiceRef: invoiceRef || undefined, godownId: godownId || undefined,
-        notes: notes || undefined, clientToken: submissionToken(purchaseTokenRef, "purchase"),
-        items: lines.map((l) => ({ itemType: "seed" as const, productId: l.productId, quantity: l.quantity, unit: "kg", unitPrice: l.unitPrice })),
-      })
-      if (!created.success || !(created.data as any)?.id) {
-        setFormError(created.error ?? "Could not create the purchase draft.")
-        return
-      }
-      const posted = await postPurchase((created.data as any).id)
-      if (!posted.success) {
-        setFormError(posted.error ?? "Could not post the purchase.")
-        return
-      }
-      let payNote = ""
-      let payOk = false
-      if (paidAmount > 0) {
-        const pay = await allocatePayment({
-          vendorId, cashAccountId: payCashAccountId, account: payAccountKind, amount: paidAmount, settlementKind: "purchase",
-          clientToken: submissionToken(confirmPayTokenRef, "vendorpay"),
-          allocations: [{ targetType: "purchase", targetId: (created.data as any).id, amount: paidAmount }],
-        })
-        payOk = pay.success
-        payNote = pay.success ? ` Paid ${formatCurrency(paidAmount)} allocated to it.` : ` Payment of ${formatCurrency(paidAmount)} could not be allocated: ${pay.error ?? "unknown error"} — pay it later from the Pay section below.`
-      }
-      const row: any = posted.data ?? created.data
-      // The notice reads the post-payment balance: the posted row still
-      // shows the pre-payment balance, so use the draft's balance
-      // (total − paid) once the payment has landed.
-      const balanceAfter = payOk ? draftPurchase.balance_amount : (row.balance_amount ?? draftPurchase.balance_amount)
-      setFormNotice(`${row.purchase_no ?? draftPurchase.purchase_no} posted — remaining balance ${formatCurrency(balanceAfter)} owed to ${draftPurchase.vendor_name || "the vendor"}.${payNote}`)
-      // Print-after-post: offer the existing purchase print document
-      // immediately, with the posted totals (the draft already carries
-      // the vendor, godown, lines and post-payment balance).
-      setPrintPurchase({ ...draftPurchase, purchase_no: row.purchase_no ?? draftPurchase.purchase_no, status: "posted", paid_amount: payOk ? paidAmount : draftPurchase.paid_amount, balance_amount: balanceAfter })
-      setShowConfirm(false)
-      setIsModalOpen(false)
-      resetSubmissionToken(purchaseTokenRef)
-      resetSubmissionToken(confirmPayTokenRef)
-      setDraftPurchase(null)
-      await loadData()
-    } finally {
-      setIsPending(false)
-      purchaseGuard.current = false
-    }
-  }
-
-  // Save-as-draft: createPurchase already writes status "draft", but
-  // the dialog only offered Post. A draft records no payment (paid
-  // starts at 0 on the server); pay it from the Pay section after
-  // posting. Draft validation follows the server's draft rules: a
-  // vendor and a product on every line. Quantities/prices may be zero
-  // in a draft — the post step is what enforces positive values.
-  const handleSaveDraft = async () => {
-    if (isPending) return
-    if (!vendorId) return setFormError("Select the supplier / vendor before saving a draft.")
-    if (lines.length === 0) return setFormError("Add at least one purchase line before saving a draft.")
-    for (let i = 0; i < lines.length; i++) {
-      if (!lines[i].productId) return setFormError(`Line ${i + 1}: select the product being purchased before saving a draft.`)
-    }
-    setFormError("")
-    setIsPending(true)
-    try {
-      const created = await createPurchase({
-        vendorId, invoiceRef: invoiceRef || undefined, godownId: godownId || undefined,
-        notes: notes || undefined, clientToken: submissionToken(purchaseTokenRef, "purchase"),
-        items: lines.map((l) => ({ itemType: "seed" as const, productId: l.productId, quantity: l.quantity, unit: "kg", unitPrice: l.unitPrice })),
-      })
-      if (!created.success || !(created.data as any)?.id) {
-        setFormError(created.error ?? "Could not save the purchase draft.")
-        return
-      }
-      setFormNotice(`${(created.data as any).purchase_no ?? "Purchase"} saved as a draft — no payable or payment has been recorded yet. Post it from the draft list below.`)
-      resetSubmissionToken(purchaseTokenRef)
-      setIsModalOpen(false)
-      await loadData()
-    } finally {
-      setIsPending(false)
-    }
-  }
 
   const handlePostDraftPurchase = async (purchaseId: string) => {
     if (draftPostPending) return
@@ -516,209 +359,23 @@ export default function PurchasesPage() {
         </form>
       </div>
 
-      {/* Creation Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-3xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-                <ShoppingCart className="h-4 w-4 text-emerald-500" />
-                Record Vendor Purchase Invoice
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleRecordPurchase} className="space-y-4 text-xs">
-              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="supplier-grower">Supplier / Grower *</label>
-                  <div className="flex flex-wrap items-start gap-2"><select id="supplier-grower"
-                    value={vendorId}
-                    onChange={(e) => setVendorId(e.target.value)}
-                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                    required
-                  >
-                    {vendors.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name}
-                      </option>
-                    ))}
-                  </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "supplier" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) setVendors((r.data as any[]).filter((x) => x.type === "supplier" || x.type === "both")); setVendorId(id); }} /></div>
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="unloading-godown">Unloading Godown *</label>
-                  <div className="flex flex-wrap items-start gap-2"><select id="unloading-godown"
-                    value={godownId}
-                    onChange={(e) => setGodownId(e.target.value)}
-                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                    required
-                  >
-                    {godowns.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) setGodowns(r.data as any[]); setGodownId(id); }} /></div>
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <p className="text-[11px] text-muted-foreground">Purchase lines — add as many products as this invoice covers. The total is the sum of all lines.</p>
-                {lines.map((line, idx) => (
-                  <div key={line.key} className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
-                    <div>
-                      <label className="block font-medium text-foreground mb-1" htmlFor={`purchased-product-${line.key}`}>Purchased Product *</label>
-                      <div className="flex flex-wrap items-start gap-2"><select id={`purchased-product-${line.key}`}
-                        value={line.productId}
-                        onChange={(e) => setLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, productId: e.target.value } : l)))}
-                        className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                      >
-                        <option value="">Select product</option>
-                        {products.map((p) => (
-                          <option key={p.id} value={p.id}>
-                            {p.name}
-                          </option>
-                        ))}
-                      </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) setProducts(r.data as any[]); setLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, productId: id } : l))); }} /></div>
-                    </div>
-                    <div>
-                      <label className="block font-medium text-foreground mb-1" htmlFor={`quantity-kg-${line.key}`}>Quantity (kg) *</label>
-                      <input id={`quantity-kg-${line.key}`}
-                        type="number"
-                        value={line.quantity}
-                        onChange={(e) => setLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, quantity: Number(e.target.value) } : l)))}
-                        min="1"
-                        className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
-                        required
-                      />
-                    </div>
-                    <div className="flex gap-2 items-end">
-                      <div className="flex-1">
-                        <label className="block font-medium text-foreground mb-1" htmlFor={`unit-price-kg-pkr-${line.key}`}>Unit Price / kg (PKR) *</label>
-                        <input id={`unit-price-kg-pkr-${line.key}`}
-                          type="number"
-                          value={line.unitPrice}
-                          onChange={(e) => setLines((prev) => prev.map((l) => (l.key === line.key ? { ...l, unitPrice: Number(e.target.value) } : l)))}
-                          min="1"
-                          className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
-                          required
-                        />
-                      </div>
-                      {lines.length > 1 && (
-                        <button type="button" onClick={() => setLines((prev) => prev.filter((l) => l.key !== line.key))} className="px-2.5 py-2 rounded-lg bg-card border border-border text-red-600 dark:text-red-400 text-xs font-bold cursor-pointer" title={`Remove line ${idx + 1}`}>✕</button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-                {lines.map((line) => (
-                  <p key={`amount-${line.key}`} className="text-[11px] text-muted-foreground">
-                    {products.find((x) => x.id === line.productId)?.name ?? "Line"}: <strong className="text-foreground">{formatCurrency((Number(line.quantity) || 0) * (Number(line.unitPrice) || 0))}</strong>
-                    {" "}({Number(line.quantity) || 0} kg × {formatCurrency(Number(line.unitPrice) || 0)} / kg)
-                  </p>
-                ))}
-                <button type="button" onClick={() => setLines((prev) => [...prev, { key: Date.now(), productId: products[0]?.id ?? "", quantity: 0, unitPrice: 0 }])} className="px-3 py-1.5 rounded-lg bg-card border border-border text-xs font-bold cursor-pointer">+ Add line</button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-lg bg-muted border border-border">
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="vendor-bill-ref-no">Vendor Bill / Ref No</label>
-                  <input id="vendor-bill-ref-no"
-                    type="text"
-                    value={invoiceRef}
-                    onChange={(e) => setInvoiceRef(e.target.value)}
-                    placeholder="e.g. INV-8842"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="advance-paid-pkr">Advance / Paid (PKR)</label>
-                  <input id="advance-paid-pkr"
-                    type="number"
-                    value={paidAmount}
-                    onChange={(e) => setPaidAmount(Number(e.target.value))}
-                    min="0"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
-                  />
-                </div>
-              </div>
-              {paidAmount > 0 && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="block font-medium text-foreground mb-1" htmlFor="payment-account-kind">Payment account kind</label>
-                    <select id="payment-account-kind" value={payAccountKind} onChange={(e) => { const k = e.target.value as "cash" | "bank" | "online"; setPayAccountKind(k); const first = cashAccounts.find((a) => a.account_kind === k); setPayCashAccountId(first ? first.id : "") }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
-                      <option value="cash">Cash</option>
-                      <option value="bank">Bank</option>
-                      <option value="online">Online</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block font-medium text-foreground mb-1" htmlFor="cash-account-for-this-payment">Cash account for this payment *</label>
-                    <select id="cash-account-for-this-payment" value={payCashAccountId} onChange={(e) => setPayCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
-                      <option value="">Select account</option>
-                      {cashAccounts.filter((a) => a.account_kind === payAccountKind).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}
-                    </select>
-                    {cashAccounts.filter((a) => a.account_kind === payAccountKind).length === 0 && (<p className="mt-1 text-[11px] text-muted-foreground">No {payAccountKind} account yet — create one on the Daybook page.</p>)}
-                  </div>
-                </div>
-              )}
-
-              <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 flex justify-between items-center">
-                <div>
-                  <span className="text-muted-foreground block text-[11px]">Total Invoice:</span>
-                  <strong className="text-foreground font-mono">{formatCurrency(totalAmount)}</strong>
-                </div>
-                <div className="text-right">
-                  <span className="text-muted-foreground block text-[11px]">Payable Liability Added:</span>
-                  <strong className="text-amber-500 font-mono text-sm">{formatCurrency(balanceAmount)}</strong>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleSaveDraft()}
-                  disabled={isPending}
-                  className="px-4 py-2 rounded-lg bg-card border border-border text-foreground text-xs font-bold cursor-pointer disabled:opacity-60"
-                >
-                  Save as draft
-                </button>
-                <button
-                  type="submit"
-                  disabled={isPending}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
-                  <span>{isPending ? "Posting…" : "Post Purchase Invoice"}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-      <ConfirmDialog
-        open={showConfirm}
-        title="Post this purchase invoice?"
-        description={draftPurchase ? `${draftPurchase.purchase_no} for ${draftPurchase.vendor_name || "the vendor"}: total ${formatCurrency(draftPurchase.total_amount)}, paid ${formatCurrency(draftPurchase.paid_amount)}, balance ${formatCurrency(draftPurchase.balance_amount)} added to vendor payables.` : ""}
-        confirmLabel="Post Purchase Invoice"
-        pending={isPending}
-        onConfirm={handleConfirmPurchase}
-        onCancel={() => { setShowConfirm(false); setDraftPurchase(null) }}
+      <PurchaseDialog
+        open={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        vendors={vendors}
+        godowns={godowns}
+        products={products}
+        cashAccounts={cashAccounts}
+        totalPurchases={totalPurchases}
+        onPosted={(notice, printPurchase) => {
+          setFormNotice(notice)
+          setPrintPurchase(printPurchase)
+          void loadData()
+        }}
+        onDraftSaved={(notice) => {
+          setFormNotice(notice)
+          void loadData()
+        }}
       />
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Purchase Returns</h2>
