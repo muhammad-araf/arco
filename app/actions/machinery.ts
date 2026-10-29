@@ -18,6 +18,8 @@ import {
   sumJobLines,
   type JobLineInput,
 } from "./production-helpers";
+import { listMachines, listParties, listProducts, listGodowns } from "./masters";
+import { listProcessingTypes } from "./processing-types";
 
 /**
  * Machinery / service-job server actions (spec §7).
@@ -842,6 +844,38 @@ export async function reverseJob(id: string, reason: string, clientToken?: strin
     });
     revalidateMachinery();
     return ok(result);
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+/** Unified init data for /machinery page — replaces 6 client roundtrips with 1 */
+export async function getMachineryInitData(): Promise<ActionResult<{
+  jobs: unknown[];
+  machines: unknown[];
+  parties: unknown[];
+  products: unknown[];
+  godowns: unknown[];
+  processingTypes: string[];
+}>> {
+  try {
+    const [j, m, pa, pr, g, pt] = await Promise.all([
+      listJobs(),
+      listMachines(),
+      listParties(),
+      listProducts(),
+      listGodowns(),
+      listProcessingTypes(),
+    ]);
+    const pTypes = pt.success && Array.isArray(pt.data) ? (pt.data as any[]).map((t) => t.name).filter(Boolean) : [];
+    return ok({
+      jobs: (Array.isArray(j.data) ? j.data : []) as any[],
+      machines: (Array.isArray(m.data) ? m.data : []) as any[],
+      parties: (Array.isArray(pa.data) ? pa.data : []) as any[],
+      products: (Array.isArray(pr.data) ? pr.data : []) as any[],
+      godowns: (Array.isArray(g.data) ? g.data : []) as any[],
+      processingTypes: pTypes,
+    });
   } catch (e) {
     return fail(errMessage(e));
   }

@@ -15,7 +15,7 @@ import {
   CheckCircle2,
   CreditCard,
 } from "lucide-react"
-import { getDaybook, listExpenses, postExpense, reverseExpense, listCashAccounts, postTransfer, listExpenseCategories } from "@/app/actions/finance"
+import { getDaybook, listExpenses, postExpense, reverseExpense, listCashAccounts, postTransfer, listExpenseCategories, getDaybookInitData } from "@/app/actions/finance"
 import { listParties } from "@/app/actions/masters"
 import { ExpenseVoucher } from "@/lib/types/database"
 import { AttachmentLink } from "@/components/attachment-fields"
@@ -78,40 +78,41 @@ export default function DaybookPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [cash, bank, online, all, ex, ca, pa, ec] = await Promise.all([
-        getDaybook({ accountKind: "cash", from: fromDate, to: toDate }),
-        getDaybook({ accountKind: "bank", from: fromDate, to: toDate }),
-        getDaybook({ accountKind: "online", from: fromDate, to: toDate }),
-        getDaybook({ from: fromDate, to: toDate }),
-        listExpenses({ page: expensePage, pageSize: expensePageSize }),
-        listCashAccounts(),
-        listParties(),
-        listExpenseCategories(),
-      ])
-      // getDaybook still feeds the balance cards below; the ledger table
-      // itself lives on the Ledgers Cash tab, so entries are not merged
-      // here any more.
-      const failed = [cash, bank, online, all, ex, ca, pa, ec].find((x) => !x.success)
-      if (failed) setFormError(failed.error ?? "Could not load daybook data.")
-      setCashClosing(Number((cash.data as any)?.closing || 0))
-      setBankClosing(Number((bank.data as any)?.closing || 0))
-      setOnlineClosing(Number((online.data as any)?.closing || 0))
-      // Total cash comes from the all-accounts daybook, not the sum of
-      // the kind cards: only the all-accounts view can honour a cash
-      // opening recorded without an account.
-      setTotalClosing(Number((all.data as any)?.closing || 0))
-      setUnattributedOpening(Number((all.data as any)?.unattributedOpening || 0))
+      const initRes = await getDaybookInitData({
+        from: fromDate,
+        to: toDate,
+        expensePage,
+        expensePageSize,
+      })
+      if (!initRes.success) {
+        setFormError(initRes.error ?? "Could not load daybook data.")
+        return
+      }
+      const data = initRes.data as any
+      const cash = data.cash
+      const bank = data.bank
+      const online = data.online
+      const all = data.all
+      const ex = data.expenses
+      const ca = data.cashAccounts
+      const pa = data.parties
+      const ec = data.expenseCategories
+
+      setCashClosing(Number((cash as any)?.closing || 0))
+      setBankClosing(Number((bank as any)?.closing || 0))
+      setOnlineClosing(Number((online as any)?.closing || 0))
+      setTotalClosing(Number((all as any)?.closing || 0))
+      setUnattributedOpening(Number((all as any)?.unattributedOpening || 0))
       const byId = new Map<string, any>()
-      for (const d of [cash.data, bank.data, online.data] as any[]) {
+      for (const d of [cash, bank, online] as any[]) {
         for (const b of (d?.balances ?? [])) byId.set(b.cashAccountId ?? `kind:${b.accountKind}`, b)
       }
       setAccountBalances([...byId.values()])
-      setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
-      setVendors((Array.isArray(pa.data) ? pa.data : []).filter((x: any) => x.type === "supplier" || x.type === "both"))
-      // Paged shape { rows, total } or the legacy plain array.
-      setExpenses(Array.isArray(ex.data) ? ex.data : ((ex.data as any)?.rows ?? []))
-      setTotalExpenses(Array.isArray(ex.data) ? ex.data.length : Number((ex.data as any)?.total ?? 0))
-      setExpenseCategories(Array.isArray(ec.data) ? ec.data : [])
+      setCashAccounts(Array.isArray(ca) ? ca : [])
+      setVendors((Array.isArray(pa) ? pa : []).filter((x: any) => x.type === "supplier" || x.type === "both"))
+      setExpenses(Array.isArray(ex) ? ex : ((ex as any)?.rows ?? []))
+      setTotalExpenses(Array.isArray(ex) ? ex.length : Number((ex as any)?.total ?? 0))
+      setExpenseCategories(Array.isArray(ec) ? ec : [])
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Could not load daybook data.")
     } finally {

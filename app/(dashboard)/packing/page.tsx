@@ -36,7 +36,7 @@ import {
   Layers,
 } from "lucide-react"
 import { getBardanaLedger } from "@/app/actions/finance"
-import { listPackingRecords, createPackingRecord, listBatches } from "@/app/actions/production"
+import { listPackingRecords, createPackingRecord, listBatches, getPackingInitData } from "@/app/actions/production"
 import { listPackagingTypes, listProducts, listParties, createParty, createProduct, createPackagingType } from "@/app/actions/masters"
 import { PackingRecordPrint } from "@/components/print/packing-record-print"
 import { PrintButton } from "@/components/print/print-button"
@@ -152,22 +152,22 @@ function PackingPageInner() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [pk, pr, ba, rec, pa, pt, bt] = await Promise.all([listPackagingTypes(), listProducts(), getBardanaLedger({}), listPackingRecords(), listParties(), listProcessingTypes(), listBatches()])
-      const failed = [pk, pr, ba, rec].find((x) => !x.success)
-      if (failed) setFormError(failed.error ?? "Could not load packing data.")
-      const packagingList = (Array.isArray(pk.data) ? pk.data : []) as PackagingType[]
-      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+      const initRes = await getPackingInitData()
+      if (!initRes.success) {
+        setFormError(initRes.error ?? "Could not load packing data.")
+        return
+      }
+      const data = initRes.data as any
+      const packagingList = (Array.isArray(data.packaging) ? data.packaging : []) as PackagingType[]
+      const productList = (Array.isArray(data.products) ? data.products : []) as Product[]
       setPackaging(packagingList)
-      setParties(Array.isArray(pa.data) ? pa.data : [])
-      setProcessingTypes(pt.success && Array.isArray(pt.data) ? (pt.data as any[]).map((t) => t.name).filter(Boolean) : [])
+      setParties(Array.isArray(data.parties) ? data.parties : [])
+      setProcessingTypes(Array.isArray(data.processingTypes) ? data.processingTypes : [])
       setProducts(productList.filter((x) => x.category === "finished_seed" || x.category === "intermediate"))
-      const entries = ba.success ? ((ba.data as any)?.entries ?? []) : []
-      setBardanaEntries(entries)
-      setBatches(Array.isArray(bt.data) ? bt.data : [])
-      // History truth: the packing_records table itself, with its real
-      // stored packed kg, charge, damaged count and status — never
-      // rebuilt from batches, never bags x current capacity.
-      setPackingRecords((Array.isArray(rec.data) ? rec.data : []).map((r: any) => ({
+      setBardanaEntries(Array.isArray(data.bardanaEntries) ? data.bardanaEntries : [])
+      setBatches(Array.isArray(data.batches) ? data.batches : [])
+      const rec = Array.isArray(data.records) ? data.records : []
+      setPackingRecords(rec.map((r: any) => ({
         id: r.id,
         packing_no: r.packing_no ?? r.batch_no ?? r.id,
         date: r.date,

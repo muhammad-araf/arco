@@ -10,7 +10,7 @@ import {
   DollarSign,
   Package,
 } from "lucide-react"
-import { listPurchases, postPurchase, reversePurchase, listPurchaseReturns, createPurchaseReturn, postPurchaseReturn, allocatePayment, listCashAccounts } from "@/app/actions/finance"
+import { listPurchases, postPurchase, reversePurchase, listPurchaseReturns, createPurchaseReturn, postPurchaseReturn, allocatePayment, listCashAccounts, getPurchasesInitData } from "@/app/actions/finance"
 import { listParties, listGodowns, listProducts } from "@/app/actions/masters"
 import { PurchasePrint } from "@/components/print/purchase-print"
 import { PurchaseVoucher, Party, Godown, Product } from "@/lib/types/database"
@@ -67,19 +67,22 @@ export default function PurchasesPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [pu, pa, g, pr, re, ca] = await Promise.all([listPurchases({ page, pageSize }), listParties(), listGodowns(), listProducts(), listPurchaseReturns(), listCashAccounts()])
-      const failed = [pu, pa, g, pr, re, ca].find((x) => !x.success)
-      setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
-      if (failed) setFormError(failed.error ?? "Could not load purchase data.")
-      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
-      const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
-      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+      const initRes = await getPurchasesInitData({ page, pageSize })
+      if (!initRes.success) {
+        setFormError(initRes.error ?? "Could not load purchase data.")
+        return
+      }
+      const data = initRes.data as any
+      const partyList = (Array.isArray(data.parties) ? data.parties : []) as Party[]
+      const godownList = (Array.isArray(data.godowns) ? data.godowns : []) as Godown[]
+      const productList = (Array.isArray(data.products) ? data.products : []) as Product[]
+      setCashAccounts(Array.isArray(data.cashAccounts) ? data.cashAccounts : [])
       setVendors(partyList.filter((x) => x.type === "supplier" || x.type === "both"))
       setGodowns(godownList); setProducts(productList)
-      setReturns(Array.isArray(re.data) ? re.data : [])
-      // Paged shape { rows, total } or the legacy plain array.
-      const puRows = Array.isArray(pu.data) ? pu.data : ((pu.data as any)?.rows ?? [])
-      setTotalPurchases(Array.isArray(pu.data) ? pu.data.length : Number((pu.data as any)?.total ?? 0))
+      setReturns(Array.isArray(data.returns) ? data.returns : [])
+      const pu = data.purchases
+      const puRows = Array.isArray(pu) ? pu : ((pu as any)?.rows ?? [])
+      setTotalPurchases(Array.isArray(pu) ? pu.length : Number((pu as any)?.total ?? 0))
       setPurchases((puRows as any[]).map((row: any) => ({
         ...row,
         vendor_name: partyList.find((x) => x.id === row.vendor_id)?.name ?? "Not set",

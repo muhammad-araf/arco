@@ -61,6 +61,14 @@ async function readSettingRow(
   return (data as { value?: unknown }).value ?? null;
 }
 
+let cachedSettingsSnapshot: { data: SettingsSnapshot; expires: number } | null = null;
+let cachedCompanySettings: { data: CompanySettings | null; expires: number } | null = null;
+
+export async function clearSettingsCache(): Promise<void> {
+  cachedSettingsSnapshot = null;
+  cachedCompanySettings = null;
+}
+
 /** Raw value of one app_settings row, or null when absent. Any
  * signed-in operator may read; fail-closed when not signed in. */
 export async function getAppSetting(
@@ -78,11 +86,16 @@ export async function getAppSetting(
 export async function getCompanySettings(): Promise<
   ActionResult<CompanySettings | null>
 > {
+  if (cachedCompanySettings && Date.now() < cachedCompanySettings.expires) {
+    return { success: true, data: cachedCompanySettings.data };
+  }
   const { db, error } = await getDb();
   if (!db) return { success: false, error };
   const gate = await requireSignedIn(db);
   if (!gate.ok) return { success: false, error: gate.error };
-  return { success: true, data: normaliseCompany(await readSettingRow(db, "company")) };
+  const data = normaliseCompany(await readSettingRow(db, "company"));
+  cachedCompanySettings = { data, expires: Date.now() + 600000 }; // 10 minutes cache
+  return { success: true, data };
 }
 
 /** Every setting key, resolved against its default (see
@@ -91,6 +104,9 @@ export async function getCompanySettings(): Promise<
 export async function getSettingsSnapshot(): Promise<
   ActionResult<SettingsSnapshot>
 > {
+  if (cachedSettingsSnapshot && Date.now() < cachedSettingsSnapshot.expires) {
+    return { success: true, data: cachedSettingsSnapshot.data };
+  }
   const { db, error } = await getDb();
   if (!db) return { success: false, error };
   const gate = await requireSignedIn(db);
@@ -103,7 +119,9 @@ export async function getSettingsSnapshot(): Promise<
   for (const row of (data ?? []) as { key: string; value: unknown }[]) {
     rows[row.key] = row.value;
   }
-  return { success: true, data: normaliseSnapshot(rows) };
+  const snapshot = normaliseSnapshot(rows);
+  cachedSettingsSnapshot = { data: snapshot, expires: Date.now() + 600000 }; // 10 minutes cache
+  return { success: true, data: snapshot };
 }
 
 // ---------------- Write path (validation lives in lib/settings-validation) ----------------
@@ -114,6 +132,8 @@ async function writeSetting(
   key: string,
   value: unknown,
 ): Promise<ActionResult> {
+  cachedSettingsSnapshot = null;
+  cachedCompanySettings = null;
   const before = await readSettingRow(db, key);
   const { error } = await db.from("app_settings").upsert(
     {

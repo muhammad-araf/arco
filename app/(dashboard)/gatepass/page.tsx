@@ -10,7 +10,7 @@ import {
   ShieldCheck,
   Download,
 } from "lucide-react"
-import { listGatePasses, getGatePass, postGatePass, reverseGatePass, approveGatePass } from "@/app/actions/gatepass"
+import { listGatePasses, getGatePass, postGatePass, reverseGatePass, approveGatePass, getGatePassInitData } from "@/app/actions/gatepass"
 import { getStockSummary } from "@/app/actions/inventory"
 import { listGodowns, listProducts, listParties, listPackagingTypes } from "@/app/actions/masters"
 import { getCompanySettings, getAppSetting } from "@/app/actions/settings"
@@ -101,17 +101,20 @@ export default function GatePassPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [gp, g, pr, pa, sm, pk, co] = await Promise.all([listGatePasses(), listGodowns(), listProducts(), listParties(), getStockSummary(), listPackagingTypes(), getCompanySettings()])
-      const failed = [gp, g, pr, pa, sm].find((x) => !x.success)
-      if (failed) setFormError(failed.error ?? "Could not load gate pass data.")
-      const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
-      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
-      const packagingList = (Array.isArray(pk.data) ? pk.data : []) as any[]
+      const initRes = await getGatePassInitData()
+      if (!initRes.success) {
+        setFormError(initRes.error ?? "Could not load gate pass data.")
+        return
+      }
+      const data = initRes.data as any
+      const godownList = (Array.isArray(data.godowns) ? data.godowns : []) as Godown[]
+      const productList = (Array.isArray(data.products) ? data.products : []) as Product[]
+      const partyList = (Array.isArray(data.parties) ? data.parties : []) as Party[]
+      const packagingList = (Array.isArray(data.packagingTypes) ? data.packagingTypes : []) as any[]
       setGodowns(godownList); setProducts(productList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both")); setOwners(partyList)
       setPackagingTypes(packagingList)
-      if (co.success && (co.data as any)) {
-        const c = co.data as any
+      if (data.company) {
+        const c = data.company as any
         setCompany({ name: c.name ?? undefined, address: c.address ?? undefined, phone: c.phone ?? undefined, email: c.email ?? undefined, logoUrl: c.logo_url ?? undefined })
       }
       // Approval gate display only: the server re-reads the setting on

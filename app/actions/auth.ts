@@ -95,6 +95,7 @@ interface CachedActor {
   expires: number;
 }
 const actorCache = new Map<string, CachedActor>();
+const actorPending = new Map<string, Promise<Actor | null>>();
 
 export async function clearActorCache(userId?: string): Promise<void> {
   if (userId) actorCache.delete(userId);
@@ -118,76 +119,78 @@ export async function getCurrentActor(
     if (cached && Date.now() < cached.expires) {
       return cached.actor;
     }
+    const pending = actorPending.get(sessionUserId);
+    if (pending) return pending;
   }
 
-  const { data: userData, error: userError } = await db.auth.getUser();
-  const user = userData?.user;
-  if (userError || !user) {
-    if (sessionUserId) actorCache.set(sessionUserId, { actor: null, expires: Date.now() + 5000 });
-    return null;
+  const lookupPromise = (async () => {
+    try {
+      const { data: userData, error: userError } = await db.auth.getUser();
+      const user = userData?.user;
+      if (userError || !user) {
+        if (sessionUserId) actorCache.set(sessionUserId, { actor: null, expires: Date.now() + 10000 });
+        return null;
+      }
+      const { data: profile } = await db
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (!profile) {
+        actorCache.set(user.id, { actor: null, expires: Date.now() + 30000 });
+        return null;
+      }
+
+      const isActive = profile.is_active !== undefined
+        ? profile.is_active !== false
+        : profile.status ? profile.status === "active" : true;
+
+      if (!isActive) {
+        actorCache.set(user.id, { actor: null, expires: Date.now() + 30000 });
+        return null;
+      }
+
+      const rawRole = (profile.role || "").toLowerCase();
+      let role: AppRole;
+      if (rawRole === "owner_admin" || rawRole === "owner" || rawRole === "admin") {
+        role = "owner_admin";
+      } else if (rawRole === "accountant") {
+        role = "accountant";
+      } else if (rawRole === "hr_payroll") {
+        role = "hr_payroll";
+      } else if (rawRole === "storekeeper") {
+        role = "storekeeper";
+      } else if (rawRole === "production_operator") {
+        role = "production_operator";
+      } else if (rawRole === "gate_operator") {
+        role = "gate_operator";
+      } else if (rawRole === "read_only_manager") {
+        role = "read_only_manager";
+      } else {
+        actorCache.set(user.id, { actor: null, expires: Date.now() + 30000 });
+        return null;
+      }
+
+      const displayName = profile.display_name || profile.full_name || user.email;
+      const actor: Actor = {
+        userId: user.id,
+        email: user.email ?? null,
+        role,
+        displayName: displayName ?? null,
+      };
+
+      actorCache.set(user.id, { actor, expires: Date.now() + 300000 }); // 5 minutes cache
+      return actor;
+    } finally {
+      if (sessionUserId) actorPending.delete(sessionUserId);
+    }
+  })();
+
+  if (sessionUserId) {
+    actorPending.set(sessionUserId, lookupPromise);
   }
-  const { data: profile } = await db
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  // FAIL CLOSED: no profiles row means no authorised actor. A
-  // signed-in user without a profile (e.g. a self-registered account
-  // when sign-ups are on) is denied everywhere, never promoted to
-  // owner_admin. Display-only callers (sidebar) already handle null
-  // by showing the session email or a generic label — that fallback
-  // is display only and never authorises anything.
-  if (!profile) {
-    actorCache.set(user.id, { actor: null, expires: Date.now() + 10000 });
-    return null;
-  }
-
-  const isActive = profile.is_active !== undefined
-    ? profile.is_active !== false
-    : profile.status ? profile.status === "active" : true;
-
-  if (!isActive) {
-    actorCache.set(user.id, { actor: null, expires: Date.now() + 10000 });
-    return null;
-  }
-
-  // Map the stored role. Legacy "owner" / "admin" spellings normalise
-  // to owner_admin; anything else unrecognised (including an empty
-  // role) FAILS CLOSED — it is never promoted to owner_admin and
-  // never silently demoted to a readable role either.
-  const rawRole = (profile.role || "").toLowerCase();
-  let role: AppRole;
-  if (rawRole === "owner_admin" || rawRole === "owner" || rawRole === "admin") {
-    role = "owner_admin";
-  } else if (rawRole === "accountant") {
-    role = "accountant";
-  } else if (rawRole === "hr_payroll") {
-    role = "hr_payroll";
-  } else if (rawRole === "storekeeper") {
-    role = "storekeeper";
-  } else if (rawRole === "production_operator") {
-    role = "production_operator";
-  } else if (rawRole === "gate_operator") {
-    role = "gate_operator";
-  } else if (rawRole === "read_only_manager") {
-    role = "read_only_manager";
-  } else {
-    actorCache.set(user.id, { actor: null, expires: Date.now() + 10000 });
-    return null;
-  }
-
-  const displayName = profile.display_name || profile.full_name || user.email;
-
-  const actor: Actor = {
-    userId: user.id,
-    email: user.email ?? null,
-    role,
-    displayName: displayName ?? null,
-  };
-
-  actorCache.set(user.id, { actor, expires: Date.now() + 30000 });
-  return actor;
+  return lookupPromise;
 }
 
 /**

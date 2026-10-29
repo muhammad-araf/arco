@@ -8,7 +8,7 @@ import {
   Plus,
   Printer,
 } from "lucide-react"
-import { listJobs, getJob, postJob, reverseJob, deleteJobDraft } from "@/app/actions/machinery"
+import { listJobs, getJob, postJob, reverseJob, deleteJobDraft, getMachineryInitData } from "@/app/actions/machinery"
 import { listMachines, listParties, listProducts, listGodowns } from "@/app/actions/masters"
 import { listProcessingTypes } from "@/app/actions/processing-types"
 import { MachineryJobPrint } from "@/components/print/machinery-job-print"
@@ -47,18 +47,20 @@ export default function MachineryJobsPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [j, m, pa, pr, g, pt] = await Promise.all([listJobs(), listMachines(), listParties(), listProducts(), listGodowns(), listProcessingTypes()])
-      const failed = [j, m, pa, pr, g].find((x) => !x.success)
-      if (failed) setFormError(failed.error ?? "Could not load machinery data.")
-      // Processing types come from the master table; an empty or
-      // failed result means the form falls back to free text.
-      setProcessingTypes(pt.success && Array.isArray(pt.data) ? (pt.data as any[]).map((t) => t.name).filter(Boolean) : [])
-      const machineList = (Array.isArray(m.data) ? m.data : []) as Machine[]
-      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
-      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
+      const initRes = await getMachineryInitData()
+      if (!initRes.success) {
+        setFormError(initRes.error ?? "Could not load machinery data.")
+        return
+      }
+      const data = initRes.data as any
+      setProcessingTypes(Array.isArray(data.processingTypes) ? data.processingTypes : [])
+      const machineList = (Array.isArray(data.machines) ? data.machines : []) as Machine[]
+      const partyList = (Array.isArray(data.parties) ? data.parties : []) as Party[]
+      const productList = (Array.isArray(data.products) ? data.products : []) as Product[]
       setMachines(machineList); setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both")); setProducts(productList)
-      setGodowns(Array.isArray(g.data) ? g.data : [])
-      setJobs((Array.isArray(j.data) ? j.data : []).map((row: any) => ({
+      setGodowns(Array.isArray(data.godowns) ? data.godowns : [])
+      const jList = Array.isArray(data.jobs) ? data.jobs : []
+      setJobs(jList.map((row: any) => ({
         ...row,
         customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? "Not set",
         machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? "Not set",

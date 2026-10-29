@@ -18,6 +18,9 @@ import {
   gatePassStatusAfterReturn,
   acceptedRestockQuantities,
 } from "@/lib/calc";
+import { listGodowns, listProducts, listParties, listPackagingTypes } from "./masters";
+import { getStockSummary } from "./inventory";
+import { getCompanySettings } from "./settings";
 
 /**
  * Gate pass (dispatch) server actions.
@@ -1030,6 +1033,40 @@ export async function returnGatePass(
     await storeIdempotency(supabase, "gatepass:return", clientToken, "gatepass", id, pass.pass_no, result);
     revalidateGatepass();
     return ok(result);
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+/** Unified init data for /gatepass page — replaces 7 client roundtrips with 1 */
+export async function getGatePassInitData(): Promise<ActionResult<{
+  passes: unknown[];
+  godowns: unknown[];
+  products: unknown[];
+  parties: unknown[];
+  summary: unknown[];
+  packagingTypes: unknown[];
+  company: unknown;
+}>> {
+  try {
+    const [gp, g, pr, pa, sm, pk, co] = await Promise.all([
+      listGatePasses(),
+      listGodowns(),
+      listProducts(),
+      listParties(),
+      getStockSummary(),
+      listPackagingTypes(),
+      getCompanySettings(),
+    ]);
+    return ok({
+      passes: (Array.isArray(gp.data) ? gp.data : []) as any[],
+      godowns: (Array.isArray(g.data) ? g.data : []) as any[],
+      products: (Array.isArray(pr.data) ? pr.data : []) as any[],
+      parties: (Array.isArray(pa.data) ? pa.data : []) as any[],
+      summary: (Array.isArray(sm.data) ? sm.data : []) as any[],
+      packagingTypes: (Array.isArray(pk.data) ? pk.data : []) as any[],
+      company: co.data ?? null,
+    });
   } catch (e) {
     return fail(errMessage(e));
   }

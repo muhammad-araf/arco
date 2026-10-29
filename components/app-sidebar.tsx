@@ -85,6 +85,7 @@ const navSections: NavSection[] = [
     heading: "Manage",
     items: [
       { title: "Employees", href: "/employees", icon: Users2 },
+      { title: "Attendance", href: "/employees?tab=attendance", icon: UserCheck },
       { title: "Reports", href: "/reports", icon: BarChart3 },
       { title: "Import", href: "/migration", icon: UploadCloud },
       { title: "Masters", href: "/masters", icon: Database },

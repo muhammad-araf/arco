@@ -8,6 +8,8 @@ import { logAudit } from "@/lib/audit";
 import { netWeight, roundMoney, roundWeight, stockBalanceFromRows, aggregatePoolQuantities } from "@/lib/calc";
 import { callAtomicStockTransition } from "@/lib/atomic";
 import { normalizeBiltyMode, type BiltyDuplicateMode } from "@/lib/stock-helpers";
+import { listGodowns, listProducts, listParties, listEmployees } from "./masters";
+import { getCompanySettings } from "./settings";
 
 /**
  * Inward (incoming goods) server actions.
@@ -642,6 +644,43 @@ export async function reverseInward(
     });
     revalidateInward();
     return ok(result);
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+/** Single unified load for /inward page — eliminates 6 client roundtrips */
+export async function getInwardInitData(params?: {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  from?: string;
+  to?: string;
+}): Promise<ActionResult<{
+  vouchers: unknown;
+  godowns: unknown[];
+  products: unknown[];
+  parties: unknown[];
+  company: unknown;
+  employees: unknown[];
+}>> {
+  try {
+    const [v, g, pr, pa, co, em] = await Promise.all([
+      listInward(params),
+      listGodowns(),
+      listProducts(),
+      listParties(),
+      getCompanySettings(),
+      listEmployees(),
+    ]);
+    return ok({
+      vouchers: v.data,
+      godowns: (Array.isArray(g.data) ? g.data : []) as any[],
+      products: (Array.isArray(pr.data) ? pr.data : []) as any[],
+      parties: (Array.isArray(pa.data) ? pa.data : []) as any[],
+      company: co.data ?? null,
+      employees: (Array.isArray(em.data) ? em.data : []) as any[],
+    });
   } catch (e) {
     return fail(errMessage(e));
   }

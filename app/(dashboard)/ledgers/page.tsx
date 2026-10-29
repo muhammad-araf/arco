@@ -23,6 +23,7 @@ import {
   listProducts,
   listParties,
   listPackagingTypes,
+  getCommonMasters,
 } from "@/app/actions/masters"
 import { listProductionCostLedger } from "@/app/actions/ledgers"
 import { DaybookPrint } from "@/components/print/daybook-print"
@@ -232,24 +233,20 @@ export default function LedgersPage() {
     }
   }, [from, to])
 
-  // Lookups load once; each tab loads when it opens (and when its
-  // filters or the date range change), not all up front.
+  // Lookups load once via single unified call
   React.useEffect(() => {
-    Promise.all([
-      listGodowns(),
-      listProducts(),
-      listParties(),
-      listPackagingTypes(),
-      listCashAccounts(),
-    ])
-      .then(([g, pr, pa, pk, ca]) => {
-        const failed = [g, pr, pa, pk, ca].find((r) => !r.success)
-        if (failed) setError(failed.error ?? "Could not load lookup data.")
-        setGodowns(Array.isArray(g.data) ? g.data : [])
-        setProducts(Array.isArray(pr.data) ? pr.data : [])
-        setParties(Array.isArray(pa.data) ? pa.data : [])
-        setPackaging(Array.isArray(pk.data) ? pk.data : [])
-        setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
+    getCommonMasters()
+      .then((res) => {
+        if (!res.success) {
+          setError(res.error ?? "Could not load lookup data.")
+          return
+        }
+        const data = (res.data ?? {}) as any
+        setGodowns(Array.isArray(data.godowns) ? data.godowns : [])
+        setProducts(Array.isArray(data.products) ? data.products : [])
+        setParties(Array.isArray(data.parties) ? data.parties : [])
+        setPackaging(Array.isArray(data.packagingTypes) ? data.packagingTypes : [])
+        setCashAccounts(Array.isArray(data.cashAccounts) ? data.cashAccounts : [])
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Could not load lookup data."))
       .finally(() => setIsLoading(false))

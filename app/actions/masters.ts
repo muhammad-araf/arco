@@ -36,13 +36,16 @@ async function db(): Promise<Db> {
   return createClient();
 }
 const mastersCache = new Map<string, { data: unknown; expires: number }>();
+const mastersPending = new Map<string, Promise<ActionResult>>();
 
 export async function clearMastersCache(): Promise<void> {
   mastersCache.clear();
+  mastersPending.clear();
 }
 
 function revalidateMasters(): void {
   mastersCache.clear();
+  mastersPending.clear();
   revalidatePath("/masters");
   revalidatePath("/dashboard");
   revalidatePath("/employees");
@@ -61,16 +64,54 @@ async function listTable(
   if (cached && Date.now() < cached.expires) {
     return ok(cached.data);
   }
+  const pending = mastersPending.get(cacheKey);
+  if (pending) return pending;
+
+  const fetchPromise = (async () => {
+    try {
+      const supabase = await db();
+      const gate = await requireSignedIn(supabase);
+      if (!gate.ok) return fail(gate.error);
+      let query = supabase.from(table).select("*").order(orderBy);
+      if (!includeInactive) query = query.eq("is_active", true);
+      const { data, error } = await query;
+      if (error) return fail(error.message);
+      mastersCache.set(cacheKey, { data, expires: Date.now() + 300000 }); // 5 minutes cache
+      return ok(data);
+    } catch (e) {
+      return fail(errMessage(e));
+    } finally {
+      mastersPending.delete(cacheKey);
+    }
+  })();
+
+  mastersPending.set(cacheKey, fetchPromise);
+  return fetchPromise;
+}
+
+/** Preload all frequently needed master lists in one server call */
+export async function getCommonMasters(): Promise<ActionResult<{
+  godowns: any[];
+  products: any[];
+  parties: any[];
+  packagingTypes: any[];
+  cashAccounts: any[];
+}>> {
   try {
-    const supabase = await db();
-    const gate = await requireSignedIn(supabase);
-    if (!gate.ok) return fail(gate.error);
-    let query = supabase.from(table).select("*").order(orderBy);
-    if (!includeInactive) query = query.eq("is_active", true);
-    const { data, error } = await query;
-    if (error) return fail(error.message);
-    mastersCache.set(cacheKey, { data, expires: Date.now() + 30000 });
-    return ok(data);
+    const [g, pr, pa, pk, ca] = await Promise.all([
+      listTable("godowns", false, "name"),
+      listTable("products", false, "name"),
+      listTable("parties", false, "name"),
+      listTable("packaging_types", false, "name"),
+      listTable("cash_accounts", false, "name"),
+    ]);
+    return ok({
+      godowns: (Array.isArray(g.data) ? g.data : []) as any[],
+      products: (Array.isArray(pr.data) ? pr.data : []) as any[],
+      parties: (Array.isArray(pa.data) ? pa.data : []) as any[],
+      packagingTypes: (Array.isArray(pk.data) ? pk.data : []) as any[],
+      cashAccounts: (Array.isArray(ca.data) ? ca.data : []) as any[],
+    });
   } catch (e) {
     return fail(errMessage(e));
   }

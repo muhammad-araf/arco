@@ -10,7 +10,7 @@ import {
   Percent,
   Printer,
 } from "lucide-react"
-import { listBatches, getBatch, postBatch, reverseBatch, deleteBatchDraft, listRecipes, createRecipe, createRecipeVersion } from "@/app/actions/production"
+import { listBatches, getBatch, postBatch, reverseBatch, deleteBatchDraft, listRecipes, createRecipe, createRecipeVersion, getProductionInitData } from "@/app/actions/production"
 import { getStockSummary } from "@/app/actions/inventory"
 import { listGodowns, listProducts, listMachines, listPackagingTypes, listParties } from "@/app/actions/masters"
 import { BatchSheetPrint } from "@/components/print/batch-sheet-print"
@@ -78,18 +78,22 @@ export default function ProductionPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [b, g, pr, m, r, sm, pk, pa] = await Promise.all([listBatches(), listGodowns(), listProducts(), listMachines(), listRecipes(), getStockSummary(), listPackagingTypes(), listParties()])
-      const failed = [b, g, pr, m, r, sm, pk].find((x) => !x.success)
-      if (failed) setFormError(failed.error ?? "Could not load production data.")
-      const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
-      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-      const machineList = (Array.isArray(m.data) ? m.data : []) as Machine[]
+      const initRes = await getProductionInitData()
+      if (!initRes.success) {
+        setFormError(initRes.error ?? "Could not load production data.")
+        return
+      }
+      const data = initRes.data as any
+      const godownList = (Array.isArray(data.godowns) ? data.godowns : []) as Godown[]
+      const productList = (Array.isArray(data.products) ? data.products : []) as Product[]
+      const machineList = (Array.isArray(data.machines) ? data.machines : []) as Machine[]
       setGodowns(godownList); setProducts(productList); setMachines(machineList)
-      setPackagingTypes(Array.isArray(pk.data) ? pk.data : [])
-      setParties(Array.isArray(pa.data) ? pa.data : [])
-      setRecipes(Array.isArray(r.data) ? r.data : [])
-      setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
-      setBatches((Array.isArray(b.data) ? b.data : []).map((row: any) => ({
+      setPackagingTypes(Array.isArray(data.packagingTypes) ? data.packagingTypes : [])
+      setParties(Array.isArray(data.parties) ? data.parties : [])
+      setRecipes(Array.isArray(data.recipes) ? data.recipes : [])
+      setSummaryRows(Array.isArray(data.summary) ? data.summary : [])
+      const bList = Array.isArray(data.batches) ? data.batches : []
+      setBatches(bList.map((row: any) => ({
         ...row,
         machine_name: machineList.find((x) => x.id === row.machine_id)?.name ?? "Not set",
         godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? "Not set",

@@ -13,7 +13,7 @@ import {
   CreditCard,
   TrendingUp,
 } from "lucide-react"
-import { listReceipts, listInvoices, postReceipt, reverseReceipt, createInvoice, postInvoice, reverseInvoice, listCashAccounts } from "@/app/actions/finance"
+import { listReceipts, listInvoices, postReceipt, reverseReceipt, createInvoice, postInvoice, reverseInvoice, listCashAccounts, getBillingInitData } from "@/app/actions/finance"
 import { amountInWordsPKR, customerBalanceNetOfAdvances } from "@/lib/calc/finance"
 import { listParties, createParty } from "@/app/actions/masters"
 import { InvoicePrint } from "@/components/print/invoice-print"
@@ -68,17 +68,21 @@ export default function BillingPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [re, inv, pa, ca] = await Promise.all([listReceipts({ page: receiptPage, pageSize }), listInvoices({ page: invoicePage, pageSize }), listParties(), listCashAccounts()])
-      const failed = [re, inv, pa, ca].find((x) => !x.success)
-      setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
-      if (failed) setFormError(failed.error ?? "Could not load billing data.")
-      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+      const initRes = await getBillingInitData({ receiptPage, invoicePage, pageSize })
+      if (!initRes.success) {
+        setFormError(initRes.error ?? "Could not load billing data.")
+        return
+      }
+      const data = initRes.data as any
+      const partyList = (Array.isArray(data.parties) ? data.parties : []) as Party[]
+      setCashAccounts(Array.isArray(data.cashAccounts) ? data.cashAccounts : [])
       setCustomers(partyList.filter((x) => x.type === "customer" || x.type === "both"))
-      // Paged shape { rows, total } or the legacy plain array.
-      const invRows = Array.isArray(inv.data) ? inv.data : ((inv.data as any)?.rows ?? [])
-      const reRows = Array.isArray(re.data) ? re.data : ((re.data as any)?.rows ?? [])
-      setTotalInvoices(Array.isArray(inv.data) ? inv.data.length : Number((inv.data as any)?.total ?? 0))
-      setTotalReceipts(Array.isArray(re.data) ? re.data.length : Number((re.data as any)?.total ?? 0))
+      const inv = data.invoices
+      const re = data.receipts
+      const invRows = Array.isArray(inv) ? inv : ((inv as any)?.rows ?? [])
+      const reRows = Array.isArray(re) ? re : ((re as any)?.rows ?? [])
+      setTotalInvoices(Array.isArray(inv) ? inv.length : Number((inv as any)?.total ?? 0))
+      setTotalReceipts(Array.isArray(re) ? re.length : Number((re as any)?.total ?? 0))
       setInvoices(invRows)
       setReceipts((reRows as any[]).map((row: any) => ({
         ...row,

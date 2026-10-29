@@ -8,7 +8,7 @@ import {
   DollarSign,
   UserCheck,
 } from "lucide-react"
-import { markAttendance, correctAttendance, listAttendance, listPayroll, approvePayroll, getUnpaidSalaries, getAttendanceSummary, listAdvances, getPayrollRegister, listPayrollPayments, getPayrollEstimate } from "@/app/actions/payroll"
+import { markAttendance, correctAttendance, listAttendance, listPayroll, approvePayroll, getUnpaidSalaries, getAttendanceSummary, listAdvances, getPayrollRegister, listPayrollPayments, getPayrollEstimate, getEmployeesInitData } from "@/app/actions/payroll"
 import { listEmployees, deactivateEmployee, reactivateEmployee } from "@/app/actions/masters"
 import { listCashAccounts } from "@/app/actions/finance"
 import { Employee, AttendanceStatus } from "@/lib/types/database"
@@ -116,26 +116,28 @@ export default function EmployeesPage() {
     if (!attendanceDate) return
     setIsLoading(true)
     try {
-      const now = new Date()
       const attYear = Number(attendanceDate.slice(0, 4))
       const attMonth = Number(attendanceDate.slice(5, 7))
       const range = monthRange(attYear, attMonth)
-      const [em, att, per, un, all, sum, adv, ca, attMonthPeriods, reg, est] = await Promise.all([
-        listEmployees(), listAttendance({ from: attendanceDate, to: attendanceDate }),
-        listPayroll({ month: now.getMonth() + 1, year: now.getFullYear() }), getUnpaidSalaries(),
-        listPayroll({}), getAttendanceSummary({ from: range.from, to: range.to }),
-        listAdvances(), listCashAccounts(), listPayroll({ month: attMonth, year: attYear }),
-        getPayrollRegister({ month: attMonth, year: attYear }), getPayrollEstimate({ month: attMonth, year: attYear }),
-      ])
-      const failed = [em, att, per, un, all, sum, adv, ca, attMonthPeriods].find((x) => !x.success)
-      if (failed) setFormError(failed.error ?? "Could not load payroll data.")
-      const emps = (Array.isArray(em.data) ? em.data : []) as Employee[]
+      const initRes = await getEmployeesInitData({
+        attendanceDate,
+        attYear,
+        attMonth,
+        rangeFrom: range.from,
+        rangeTo: range.to,
+      })
+      if (!initRes.success) {
+        setFormError(initRes.error ?? "Could not load payroll data.")
+        return
+      }
+      const data = initRes.data as any
+      const emps = (Array.isArray(data.employees) ? data.employees : []) as Employee[]
       setEmployees(emps)
       const initialAtt: { [empId: string]: AttendanceStatus } = {}
       const initialOt: { [empId: string]: number } = {}
       const orig: { [empId: string]: { status: AttendanceStatus; overtime: number } } = {}
       emps.forEach((emp) => { initialAtt[emp.id] = "present"; initialOt[emp.id] = 0 })
-      for (const row of (Array.isArray(att.data) ? att.data : []) as any[]) {
+      for (const row of (Array.isArray(data.attendance) ? data.attendance : []) as any[]) {
         if (row.employee_id && row.status) {
           initialAtt[row.employee_id] = row.status
           initialOt[row.employee_id] = Number(row.overtime_hours || 0)
@@ -145,22 +147,22 @@ export default function EmployeesPage() {
       setAttendanceState(initialAtt)
       setOvertimeState(initialOt)
       setOriginalAtt(orig)
-      setPeriods(Array.isArray(per.data) ? per.data : [])
-      setDrafts((Array.isArray(all.data) ? all.data : []).filter((p: any) => p.status === "draft"))
-      const unData: any = un.data ?? {}
-      setUnpaid(Array.isArray(unData.rows) ? unData.rows : [])
+      setPeriods(Array.isArray(data.payrollCurrentMonth) ? data.payrollCurrentMonth : [])
+      setDrafts((Array.isArray(data.allPayroll) ? data.allPayroll : []).filter((p: any) => p.status === "draft"))
+      const unData: any = data.unpaid ?? {}
+      setUnpaid(Array.isArray(unData.rows) ? unData.rows : (Array.isArray(data.unpaid) ? data.unpaid : []))
       setUnpaidTotal(Number(unData.totalUnpaid || 0))
-      const sumData: any = sum.data ?? {}
-      setSummary(Array.isArray(sumData.employees) ? sumData.employees : [])
-      setAdvances(Array.isArray(adv.data) ? adv.data : [])
-      setCashAccounts(Array.isArray(ca.data) ? ca.data : [])
-      const regData: any = reg.data ?? {}
-      setRegisterRows(Array.isArray(regData.rows) ? regData.rows : [])
+      const sumData: any = data.attendanceSummary ?? {}
+      setSummary(Array.isArray(sumData.employees) ? sumData.employees : (Array.isArray(data.attendanceSummary) ? data.attendanceSummary : []))
+      setAdvances(Array.isArray(data.advances) ? data.advances : [])
+      setCashAccounts(Array.isArray(data.cashAccounts) ? data.cashAccounts : [])
+      const regData: any = data.register ?? {}
+      setRegisterRows(Array.isArray(regData.rows) ? regData.rows : (Array.isArray(data.register) ? data.register : []))
       setRegisterTotals(regData.totals ?? null)
-      if (est.success) { setEstimate(est.data); setEstimateError("") }
-      else { setEstimate(null); setEstimateError(est.error ?? "Payroll estimate unavailable.") }
+      if (data.estimate) { setEstimate(data.estimate); setEstimateError("") }
+      else { setEstimate(null); setEstimateError("Payroll estimate unavailable.") }
       const locked = new Set<string>()
-      for (const p of (Array.isArray(attMonthPeriods.data) ? attMonthPeriods.data : []) as any[]) {
+      for (const p of (Array.isArray(data.attMonthPeriods) ? data.attMonthPeriods : []) as any[]) {
         if (["approved", "partially_paid", "paid"].includes(p.status)) locked.add(p.employee_id)
       }
       setLockedNames(emps.filter((e) => locked.has(e.id)).map((e) => e.full_name))

@@ -30,6 +30,10 @@ import {
   validateMassBalance,
   aggregateQuantities,
 } from "@/lib/calc";
+import { listGodowns, listProducts, listMachines, listPackagingTypes, listParties } from "./masters";
+import { getStockSummary } from "./inventory";
+import { getBardanaLedger } from "./finance";
+import { listProcessingTypes } from "./processing-types";
 
 /**
  * Recipe + production-batch server actions.
@@ -1519,6 +1523,79 @@ export async function createPackingRecord(input: {
     });
     revalidateProduction();
     return ok(record);
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+/** Unified init data for /production page — replaces 8 client roundtrips with 1 */
+export async function getProductionInitData(): Promise<ActionResult<{
+  batches: unknown[];
+  godowns: unknown[];
+  products: unknown[];
+  machines: unknown[];
+  recipes: unknown[];
+  summary: unknown[];
+  packagingTypes: unknown[];
+  parties: unknown[];
+}>> {
+  try {
+    const [b, g, pr, m, r, sm, pk, pa] = await Promise.all([
+      listBatches(),
+      listGodowns(),
+      listProducts(),
+      listMachines(),
+      listRecipes(),
+      getStockSummary(),
+      listPackagingTypes(),
+      listParties(),
+    ]);
+    return ok({
+      batches: (Array.isArray(b.data) ? b.data : []) as any[],
+      godowns: (Array.isArray(g.data) ? g.data : []) as any[],
+      products: (Array.isArray(pr.data) ? pr.data : []) as any[],
+      machines: (Array.isArray(m.data) ? m.data : []) as any[],
+      recipes: (Array.isArray(r.data) ? r.data : []) as any[],
+      summary: (Array.isArray(sm.data) ? sm.data : []) as any[],
+      packagingTypes: (Array.isArray(pk.data) ? pk.data : []) as any[],
+      parties: (Array.isArray(pa.data) ? pa.data : []) as any[],
+    });
+  } catch (e) {
+    return fail(errMessage(e));
+  }
+}
+
+/** Unified init data for /packing page — replaces 7 client roundtrips with 1 */
+export async function getPackingInitData(): Promise<ActionResult<{
+  packaging: unknown[];
+  products: unknown[];
+  bardanaEntries: unknown[];
+  records: unknown[];
+  parties: unknown[];
+  processingTypes: string[];
+  batches: unknown[];
+}>> {
+  try {
+    const [pk, pr, ba, rec, pa, pt, bt] = await Promise.all([
+      listPackagingTypes(),
+      listProducts(),
+      getBardanaLedger({}),
+      listPackingRecords(),
+      listParties(),
+      listProcessingTypes(),
+      listBatches(),
+    ]);
+    const entries = ba.success ? ((ba.data as any)?.entries ?? []) : [];
+    const pTypes = pt.success && Array.isArray(pt.data) ? (pt.data as any[]).map((t) => t.name).filter(Boolean) : [];
+    return ok({
+      packaging: (Array.isArray(pk.data) ? pk.data : []) as any[],
+      products: (Array.isArray(pr.data) ? pr.data : []) as any[],
+      bardanaEntries: entries,
+      records: (Array.isArray(rec.data) ? rec.data : []) as any[],
+      parties: (Array.isArray(pa.data) ? pa.data : []) as any[],
+      processingTypes: pTypes,
+      batches: (Array.isArray(bt.data) ? bt.data : []) as any[],
+    });
   } catch (e) {
     return fail(errMessage(e));
   }

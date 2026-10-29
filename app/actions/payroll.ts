@@ -50,6 +50,7 @@ import {
   computePayroll,
   cashRunningBalance,
 } from "@/lib/calc";
+import { listEmployees, listCashAccounts } from "./masters";
 
 type Db = Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>;
 
@@ -931,4 +932,60 @@ export async function listAdvances(employeeId?: string): Promise<ActionResult> {
   const { data, error: qError } = await q;
   if (qError) return fail(qError.message);
   return { success: true, data };
+}
+
+/** Unified init data for /employees page — replaces 11 client roundtrips with 1 */
+export async function getEmployeesInitData(params: {
+  attendanceDate: string;
+  attYear: number;
+  attMonth: number;
+  rangeFrom: string;
+  rangeTo: string;
+}): Promise<ActionResult<{
+  employees: unknown[];
+  attendance: unknown[];
+  payrollCurrentMonth: unknown[];
+  unpaid: unknown[];
+  allPayroll: unknown[];
+  attendanceSummary: unknown[];
+  advances: unknown[];
+  cashAccounts: unknown[];
+  attMonthPeriods: unknown[];
+  register: unknown[];
+  estimate: unknown;
+}>> {
+  try {
+    const now = new Date();
+    const [em, att, per, un, all, sum, adv, ca, attMonthPeriods, reg, est] = await Promise.all([
+      listEmployees(),
+      listAttendance({ from: params.attendanceDate, to: params.attendanceDate }),
+      listPayroll({ month: now.getMonth() + 1, year: now.getFullYear() }),
+      getUnpaidSalaries(),
+      listPayroll({}),
+      getAttendanceSummary({ from: params.rangeFrom, to: params.rangeTo }),
+      listAdvances(),
+      listCashAccounts(),
+      listPayroll({ month: params.attMonth, year: params.attYear }),
+      getPayrollRegister({ month: params.attMonth, year: params.attYear }),
+      getPayrollEstimate({ month: params.attMonth, year: params.attYear }),
+    ]);
+    return {
+      success: true,
+      data: {
+        employees: (Array.isArray(em.data) ? em.data : []) as any[],
+        attendance: (Array.isArray(att.data) ? att.data : []) as any[],
+        payrollCurrentMonth: (Array.isArray(per.data) ? per.data : []) as any[],
+        unpaid: (Array.isArray(un.data) ? un.data : []) as any[],
+        allPayroll: (Array.isArray(all.data) ? all.data : []) as any[],
+        attendanceSummary: (Array.isArray(sum.data) ? sum.data : []) as any[],
+        advances: (Array.isArray(adv.data) ? adv.data : []) as any[],
+        cashAccounts: (Array.isArray(ca.data) ? ca.data : []) as any[],
+        attMonthPeriods: (Array.isArray(attMonthPeriods.data) ? attMonthPeriods.data : []) as any[],
+        register: (Array.isArray(reg.data) ? reg.data : []) as any[],
+        estimate: est.data ?? null,
+      },
+    };
+  } catch (e) {
+    return fail(errMsg(e));
+  }
 }

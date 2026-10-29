@@ -9,7 +9,7 @@ import {
   Printer,
   FileText,
 } from "lucide-react"
-import { listInward, reverseInward } from "@/app/actions/inward"
+import { listInward, reverseInward, getInwardInitData } from "@/app/actions/inward"
 import { listGodowns, listProducts, listParties, listEmployees } from "@/app/actions/masters"
 import { getCompanySettings } from "@/app/actions/settings"
 import { InwardSlipPrint } from "@/components/print/inward-slip-print"
@@ -65,27 +65,36 @@ export default function InwardPage() {
   const loadInwardPage = async (page: number) => {
     setIsLoading(true)
     try {
-      const [v, g, pr, pa, co, em] = await Promise.all([
-        listInward({ page, pageSize: 50, search: filterRef.current.search || undefined, from: filterRef.current.from || undefined, to: filterRef.current.to || undefined }),
-        listGodowns(), listProducts(), listParties(), getCompanySettings(), listEmployees(),
-      ])
-      if (em.success && Array.isArray(em.data)) setEmployees((em.data as any[]).map((e) => ({ id: e.id, full_name: e.full_name })))
-      const failed = [v, g, pr, pa].find((r) => !r.success)
-      if (failed) setFormError(failed.error ?? "Could not load inward data.")
-      const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
-      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
+      const initRes = await getInwardInitData({
+        page,
+        pageSize: 50,
+        search: filterRef.current.search || undefined,
+        from: filterRef.current.from || undefined,
+        to: filterRef.current.to || undefined,
+      })
+      if (!initRes.success) {
+        setFormError(initRes.error ?? "Could not load inward data.")
+        return
+      }
+      const data = initRes.data as any
+      const godownList = (Array.isArray(data.godowns) ? data.godowns : []) as Godown[]
+      const productList = (Array.isArray(data.products) ? data.products : []) as Product[]
+      const partyList = (Array.isArray(data.parties) ? data.parties : []) as Party[]
+      const employeeList = (Array.isArray(data.employees) ? data.employees : []) as any[]
+
+      setEmployees(employeeList.map((e) => ({ id: e.id, full_name: e.full_name })))
       setGodowns(godownList)
       setProducts(productList)
       setParties(partyList.filter((pt) => pt.type === "supplier" || pt.type === "both" || pt.type === "source"))
       setOwners(partyList)
-      if (co.success && co.data) {
-        const c = co.data as { name?: string | null; address?: string | null; phone?: string | null; email?: string | null; logo_url?: string | null }
+      if (data.company) {
+        const c = data.company as { name?: string | null; address?: string | null; phone?: string | null; email?: string | null; logo_url?: string | null }
         setCompany({ name: c.name ?? undefined, address: c.address ?? undefined, phone: c.phone ?? undefined, email: c.email ?? undefined, logoUrl: c.logo_url ?? undefined })
       }
-      const rows = Array.isArray((v.data as any)?.rows) ? (v.data as any).rows : (Array.isArray(v.data) ? v.data : [])
-      setInwardTotal(Number((v.data as any)?.total) || rows.length)
-      setInwardPage(Number((v.data as any)?.page) || page)
+      const v = data.vouchers
+      const rows = Array.isArray((v as any)?.rows) ? (v as any).rows : (Array.isArray(v) ? v : [])
+      setInwardTotal(Number((v as any)?.total) || rows.length)
+      setInwardPage(Number((v as any)?.page) || page)
       setVouchers(rows.map((row: any) => ({
         ...row,
         party_name: partyList.find((x) => x.id === row.party_id)?.name ?? "Not set",

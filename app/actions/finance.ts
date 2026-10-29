@@ -63,6 +63,7 @@ import {
   computeStockValuation,
   isPackagingConsumptionVoucherType,
 } from "@/lib/calc/finance-valuation";
+import { listGodowns, listProducts, listParties, listCashAccounts } from "./masters";
 
 type Db = Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>;
 
@@ -70,6 +71,9 @@ type Db = Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient
 
 function fail(error: string): ActionResult {
   return { success: false, error };
+}
+function ok(data: unknown): ActionResult {
+  return { success: true, data };
 }
 
 /**
@@ -3061,3 +3065,113 @@ export async function listOpeningBalances(): Promise<ActionResult> {
 
 // Keep AppRole import used for future allow-list extension points.
 export type { AppRole };
+
+/** Unified init data for /purchases page — replaces 6 client roundtrips with 1 */
+export async function getPurchasesInitData(filters: {
+  page?: number;
+  pageSize?: number;
+  vendorId?: string;
+  status?: string;
+  from?: string;
+  to?: string;
+} = {}): Promise<ActionResult<{
+  purchases: unknown;
+  parties: unknown[];
+  godowns: unknown[];
+  products: unknown[];
+  returns: unknown[];
+  cashAccounts: unknown[];
+}>> {
+  try {
+    const [pu, pa, g, pr, re, ca] = await Promise.all([
+      listPurchases(filters),
+      listParties(),
+      listGodowns(),
+      listProducts(),
+      listPurchaseReturns(),
+      listCashAccounts(),
+    ]);
+    return ok({
+      purchases: pu.data,
+      parties: (Array.isArray(pa.data) ? pa.data : []) as any[],
+      godowns: (Array.isArray(g.data) ? g.data : []) as any[],
+      products: (Array.isArray(pr.data) ? pr.data : []) as any[],
+      returns: (Array.isArray(re.data) ? re.data : []) as any[],
+      cashAccounts: (Array.isArray(ca.data) ? ca.data : []) as any[],
+    });
+  } catch (e) {
+    return fail(errMsg(e));
+  }
+}
+
+/** Unified init data for /daybook page — replaces 8 client roundtrips with 1 */
+export async function getDaybookInitData(filters: {
+  from: string;
+  to: string;
+  expensePage?: number;
+  expensePageSize?: number;
+}): Promise<ActionResult<{
+  cash: unknown;
+  bank: unknown;
+  online: unknown;
+  all: unknown;
+  expenses: unknown;
+  cashAccounts: unknown[];
+  parties: unknown[];
+  expenseCategories: unknown[];
+}>> {
+  try {
+    const [cash, bank, online, all, ex, ca, pa, ec] = await Promise.all([
+      getDaybook({ accountKind: "cash", from: filters.from, to: filters.to }),
+      getDaybook({ accountKind: "bank", from: filters.from, to: filters.to }),
+      getDaybook({ accountKind: "online", from: filters.from, to: filters.to }),
+      getDaybook({ from: filters.from, to: filters.to }),
+      listExpenses({ page: filters.expensePage ?? 1, pageSize: filters.expensePageSize ?? 50 }),
+      listCashAccounts(),
+      listParties(),
+      listExpenseCategories(),
+    ]);
+    return ok({
+      cash: cash.data,
+      bank: bank.data,
+      online: online.data,
+      all: all.data,
+      expenses: ex.data,
+      cashAccounts: (Array.isArray(ca.data) ? ca.data : []) as any[],
+      parties: (Array.isArray(pa.data) ? pa.data : []) as any[],
+      expenseCategories: (Array.isArray(ec.data) ? ec.data : []) as any[],
+    });
+  } catch (e) {
+    return fail(errMsg(e));
+  }
+}
+
+/** Unified init data for /billing page — replaces 4 client roundtrips with 1 */
+export async function getBillingInitData(filters: {
+  receiptPage?: number;
+  invoicePage?: number;
+  pageSize?: number;
+} = {}): Promise<ActionResult<{
+  receipts: unknown;
+  invoices: unknown;
+  parties: unknown[];
+  cashAccounts: unknown[];
+}>> {
+  try {
+    const pageSize = filters.pageSize ?? 50;
+    const [re, inv, pa, ca] = await Promise.all([
+      listReceipts({ page: filters.receiptPage ?? 1, pageSize }),
+      listInvoices({ page: filters.invoicePage ?? 1, pageSize }),
+      listParties(),
+      listCashAccounts(),
+    ]);
+    return ok({
+      receipts: re.data,
+      invoices: inv.data,
+      parties: (Array.isArray(pa.data) ? pa.data : []) as any[],
+      cashAccounts: (Array.isArray(ca.data) ? ca.data : []) as any[],
+    });
+  } catch (e) {
+    return fail(errMsg(e));
+  }
+}
