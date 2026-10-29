@@ -35,6 +35,7 @@ export function Modal({
   description,
   children,
   wide,
+  xl,
 }: {
   open: boolean
   onClose: () => void
@@ -42,6 +43,9 @@ export function Modal({
   description?: string
   children: React.ReactNode
   wide?: boolean
+  /** Extra-wide shell (max-w-5xl) for the multi-line voucher forms,
+   *  which were max-w-5xl / max-w-4xl before the shared-kit move. */
+  xl?: boolean
 }) {
   React.useEffect(() => {
     if (!open) return
@@ -55,7 +59,7 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
       <div
-        className={`expensive-card w-full ${wide ? "max-w-2xl" : "max-w-md"} p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto`}
+        className={`expensive-card w-full ${xl ? "max-w-5xl" : wide ? "max-w-2xl" : "max-w-md"} p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
