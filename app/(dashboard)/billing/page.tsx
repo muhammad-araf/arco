@@ -8,13 +8,12 @@ import {
   Plus,
   Building2,
   DollarSign,
-  CheckCircle2,
   FileText,
   Printer,
   CreditCard,
   TrendingUp,
 } from "lucide-react"
-import { listReceipts, listInvoices, createReceipt, postReceipt, reverseReceipt, createInvoice, postInvoice, reverseInvoice, listCashAccounts } from "@/app/actions/finance"
+import { listReceipts, listInvoices, postReceipt, reverseReceipt, createInvoice, postInvoice, reverseInvoice, listCashAccounts } from "@/app/actions/finance"
 import { amountInWordsPKR, customerBalanceNetOfAdvances } from "@/lib/calc/finance"
 import { listParties, createParty } from "@/app/actions/masters"
 import { InvoicePrint } from "@/components/print/invoice-print"
@@ -29,10 +28,9 @@ import {
   EmptyState,
   FilterBanner,
   ReversalDialog,
-  SubmitSpinner,
   getUrlFilter,
-  isPositive,
 } from "@/components/erp-ui"
+import { BillingReceiptDialog } from "@/components/billing-receipt-dialog"
 import { BillingSkeleton } from "@/components/route-skeletons"
 
 export default function BillingPage() {
@@ -41,23 +39,13 @@ export default function BillingPage() {
 
   // Modal
   const [isReceiptModalOpen, setIsReceiptModalOpen] = React.useState(false)
+  const [receiptCustomerPreset, setReceiptCustomerPreset] = React.useState<string | null>(null)
   const [isLoading, setIsLoading] = React.useState(true)
   const [formError, setFormError] = React.useState("")
   const [formNotice, setFormNotice] = React.useState("")
   const [isPending, setIsPending] = React.useState(false)
-  const [showConfirm, setShowConfirm] = React.useState(false)
-  const [draftReceipt, setDraftReceipt] = React.useState<CustomerReceipt | null>(null)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
-  const receiptGuard = React.useRef(false)
-  const receiptTokenRef = React.useRef<string | null>(null)
   const invoiceTokenRef = React.useRef<string | null>(null)
-  const [customerId, setCustomerId] = React.useState("")
-  const [amount, setAmount] = React.useState<number>(100000)
-  const [paymentMethod, setPaymentMethod] = React.useState<"cash" | "bank" | "online">("bank")
-  const [referenceNo, setReferenceNo] = React.useState("")
-  const [purpose, setPurpose] = React.useState("")
-  const [receivedBy, setReceivedBy] = React.useState("")
-  const [notes, setNotes] = React.useState("")
   const [receiptPage, setReceiptPage] = React.useState(1)
   const [invoicePage, setInvoicePage] = React.useState(1)
   const [totalReceipts, setTotalReceipts] = React.useState(0)
@@ -65,9 +53,6 @@ export default function BillingPage() {
   const pageSize = 50
   const [invoices, setInvoices] = React.useState<any[]>([])
   const [cashAccounts, setCashAccounts] = React.useState<any[]>([])
-  const [receiptCashAccountId, setReceiptCashAccountId] = React.useState("")
-  const [allocInvoiceId, setAllocInvoiceId] = React.useState("")
-  const [allocAmount, setAllocAmount] = React.useState<number>(0)
   const [printReceipt, setPrintReceipt] = React.useState<any | null>(null)
   const [printInvoice, setPrintInvoice] = React.useState<any | null>(null)
   const [receiptReverseTarget, setReceiptReverseTarget] = React.useState<any | null>(null)
@@ -112,16 +97,6 @@ export default function BillingPage() {
   // Dashboard drill-down links (?filter=receivable) apply on mount too.
   React.useEffect(() => { loadData(); setDrillFilter(getUrlFilter()) }, [loadData])
 
-  React.useEffect(() => {
-    if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
-  }, [customers, customerId])
-  React.useEffect(() => {
-    if (cashAccounts.length > 0 && !receiptCashAccountId) {
-      const first = cashAccounts.find((a) => a.account_kind === paymentMethod) ?? cashAccounts[0]
-      if (first) setReceiptCashAccountId(first.id)
-    }
-  }, [cashAccounts, receiptCashAccountId, paymentMethod])
-
   // Balance net of unapplied advances: invoice balances already
   // subtract allocated receipts, so only the unapplied remainder of
   // posted receipts is subtracted again. Ignoring it overstated
@@ -137,115 +112,6 @@ export default function BillingPage() {
     return acct ? `${acct.code} — ${acct.name}` : (r.cash_account_id ?? r.account ?? r.payment_method)
   }
   const totalReceivables = customers.reduce((sum, c) => sum + Math.max(0, custBalance(c)), 0)
-  const customerInvoices = invoices.filter((i) => i.customer_id === customerId && i.status === "posted" && Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)) > 0)
-
-  // Receipt validation shared by the Post path and Save-as-draft: the
-  // same missing-field errors, so a draft can never be an empty voucher.
-  // Spec §11.2: a receipt collects an earlier receivable — it must name a
-  // customer, be positive, and may not over-collect that customer's balance.
-  const receiptFormError = (): string | null => {
-    if (!customerId) return "Select the customer paying this receipt."
-    if (!isPositive(amount)) return "Receipt amount must be greater than zero."
-    if (!receiptCashAccountId) return "Select a cash account for this receipt. Create one on the Daybook page first if none exists."
-    const selectedCust = customers.find((c) => c.id === customerId)
-    const bal = selectedCust ? custBalance(selectedCust) : 0
-    if (allocInvoiceId && allocAmount > amount) return `Allocation (${formatCurrency(allocAmount)}) cannot exceed the receipt amount (${formatCurrency(amount)}).`
-    if (allocInvoiceId && allocAmount <= 0) return "An allocation amount must be greater than zero."
-    if (allocInvoiceId) {
-      const target = invoices.find((i) => i.id === allocInvoiceId)
-      const targetBal = target ? Number(target.balance_amount ?? Number(target.total_amount || 0) - Number(target.paid_amount || 0)) : 0
-      if (allocAmount > targetBal) return `Allocation (${formatCurrency(allocAmount)}) exceeds invoice ${target?.invoice_no ?? ""} balance (${formatCurrency(targetBal)}).`
-    }
-    if (!allocInvoiceId && amount > bal && bal > 0) return `Receipt (${formatCurrency(amount)}) exceeds ${selectedCust?.name || "this customer"}'s outstanding balance (${formatCurrency(bal)}). Allocate it to a specific invoice, or record the balance amount or less.`
-    return null
-  }
-
-  const handleRecordReceipt = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isPending) return
-    const validationError = receiptFormError()
-    if (validationError) return setFormError(validationError)
-    setFormError("")
-    const selectedCust = customers.find((c) => c.id === customerId)
-    const receiptNo = `RCT-2026-${String(receipts.length + 1).padStart(3, "0")}`
-    setDraftReceipt({
-      id: `rct-${Date.now()}`,
-      receipt_no: receiptNo,
-      date: new Date().toISOString(),
-      customer_id: customerId,
-      customer_name: selectedCust?.name,
-      amount,
-      payment_method: paymentMethod,
-      reference_no: referenceNo || undefined,
-      is_advance: false,
-      notes: notes || undefined,
-      created_at: new Date().toISOString(),
-    })
-    setShowConfirm(true)
-  }
-
-  const handleConfirmReceipt = async () => {
-    if (!draftReceipt || receiptGuard.current) return
-    receiptGuard.current = true
-    setIsPending(true)
-    try {
-      const created = await createReceipt({
-        customerId, cashAccountId: receiptCashAccountId, account: paymentMethod, amount,
-        referenceNo: referenceNo || undefined, purpose: purpose || undefined,
-        receivedBy: receivedBy || undefined, notes: notes || undefined,
-        clientToken: submissionToken(receiptTokenRef, "receipt"),
-        allocations: allocInvoiceId && allocAmount > 0 ? [{ invoiceId: allocInvoiceId, amount: allocAmount }] : [],
-      })
-      if (!created.success || !(created.data as any)?.id) {
-        setFormError(created.error ?? "Could not create the receipt.")
-        return
-      }
-      const posted = await postReceipt((created.data as any).id)
-      if (!posted.success) {
-        setFormError(posted.error ?? "Could not post the receipt.")
-        return
-      }
-      const row: any = posted.data ?? created.data
-      const selectedCust = customers.find((c) => c.id === customerId)
-      setFormNotice(`${row.receipt_no ?? draftReceipt.receipt_no} posted — ${formatCurrency(amount)} received from ${selectedCust?.name} via ${paymentMethod}. Receivable reduced; cash/bank increased.`)
-      setPrintReceipt({ ...draftReceipt, receipt_no: row.receipt_no ?? draftReceipt.receipt_no, status: "posted", customer_name: selectedCust?.name, purpose: purpose || undefined, received_by: receivedBy || undefined, allocations: allocInvoiceId ? [{ invoice_no: invoices.find((i) => i.id === allocInvoiceId)?.invoice_no, amount: allocAmount }] : [] })
-      setShowConfirm(false)
-      setIsReceiptModalOpen(false)
-      resetSubmissionToken(receiptTokenRef)
-      setDraftReceipt(null)
-      await loadData()
-    } finally {
-      setIsPending(false)
-      receiptGuard.current = false
-    }
-  }
-
-  const handleSaveReceiptDraft = async () => {
-    if (isPending) return
-    const validationError = receiptFormError()
-    if (validationError) return setFormError(validationError)
-    setIsPending(true)
-    try {
-      const created = await createReceipt({
-        customerId, cashAccountId: receiptCashAccountId, account: paymentMethod, amount,
-        referenceNo: referenceNo || undefined, purpose: purpose || undefined,
-        receivedBy: receivedBy || undefined, notes: notes || undefined,
-        clientToken: submissionToken(receiptTokenRef, "receipt"),
-        allocations: allocInvoiceId && allocAmount > 0 ? [{ invoiceId: allocInvoiceId, amount: allocAmount }] : [],
-      })
-      if (!created.success || !(created.data as any)?.id) {
-        setFormError(created.error ?? "Could not save the receipt draft.")
-        return
-      }
-      const row: any = created.data
-      setFormNotice(`${row.receipt_no ?? "Receipt"} saved as draft — post it from the receipts list.`)
-      setIsReceiptModalOpen(false)
-      resetSubmissionToken(receiptTokenRef)
-      await loadData()
-    } finally {
-      setIsPending(false)
-    }
-  }
 
   const handlePostReceiptDraft = async (row: any) => {
     if (isPending) return
@@ -467,7 +333,7 @@ export default function BillingPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            setCustomerId(c.id)
+                            setReceiptCustomerPreset(c.id)
                             setIsReceiptModalOpen(true)
                           }}
                           className="px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 font-semibold text-[11px] cursor-pointer"
@@ -528,162 +394,28 @@ export default function BillingPage() {
         </div>
       </div>
 
-      {/* Receipt Modal */}
-      {isReceiptModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-2xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-                <Receipt className="h-4 w-4 text-emerald-500" />
-                Record Customer Cash/Bank Receipt
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsReceiptModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleRecordReceipt} className="space-y-4 text-xs">
-              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="customer-payer">Customer / Payer *</label>
-                <div className="flex flex-wrap items-start gap-2"><select id="customer-payer" title={customers.find((c) => c.id === customerId)?.name ?? ""}
-                  value={customerId}
-                  onChange={(e) => setCustomerId(e.target.value)}
-                  className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  required
-                >
-                  {customers.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name} (Due: {formatCurrency(custBalance(c))})
-                    </option>
-                  ))}
-                </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) setCustomers((r.data as any[]).filter((x) => x.type === "customer" || x.type === "both")); setCustomerId(id); }} /></div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="amount-received-pkr">Amount Received (PKR) *</label>
-                  <input id="amount-received-pkr"
-                    type="number"
-                    value={amount}
-                    onChange={(e) => setAmount(Number(e.target.value))}
-                    min="1"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="deposit-account">Deposit Account *</label>
-                  <select id="deposit-account" required
-                    value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value as any)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  >
-                    <option value="bank">Bank Account</option>
-                    <option value="cash">Godown Counter Cash</option>
-                    <option value="online">Online Transfer / Raast</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="cash-account">Cash account *</label>
-                <select id="cash-account" title={cashAccounts.find((a) => a.id === receiptCashAccountId) ? `${cashAccounts.find((a) => a.id === receiptCashAccountId)?.code} — ${cashAccounts.find((a) => a.id === receiptCashAccountId)?.name}` : ""} value={receiptCashAccountId} onChange={(e) => setReceiptCashAccountId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required>
-                  <option value="">Select account</option>
-                  {cashAccounts.filter((a) => a.account_kind === paymentMethod).map((a) => (<option key={a.id} value={a.id}>{a.code} — {a.name}</option>))}
-                </select>
-                {cashAccounts.filter((a) => a.account_kind === paymentMethod).length === 0 && (<p className="mt-1 text-[11px] text-muted-foreground">No {paymentMethod} account yet — create one on the Daybook page.</p>)}
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="allocate-to-invoice-explicit-allocation">Allocate to invoice (explicit allocation)</label>
-                <select id="allocate-to-invoice-explicit-allocation" title={invoices.find((i) => i.id === allocInvoiceId)?.invoice_no ?? ""} value={allocInvoiceId} onChange={(e) => { setAllocInvoiceId(e.target.value); const inv = invoices.find((i) => i.id === e.target.value); setAllocAmount(inv ? Number(inv.balance_amount ?? Number(inv.total_amount || 0) - Number(inv.paid_amount || 0)) : 0) }} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
-                  <option value="">Unallocated (advance / on-account)</option>
-                  {customerInvoices.map((i) => (<option key={i.id} value={i.id}>{i.invoice_no} — outstanding {formatCurrency(Number(i.balance_amount ?? Number(i.total_amount || 0) - Number(i.paid_amount || 0)))}</option>))}
-                </select>
-                {allocInvoiceId && (<><input type="number" value={allocAmount} onChange={(e) => setAllocAmount(Number(e.target.value))} min="1" placeholder="Allocation amount" aria-label="Allocation amount" className="mt-2 w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /><p className="mt-1 text-[11px] text-muted-foreground">Allocated {formatCurrency(allocAmount)} of {formatCurrency(amount)} — unallocated remainder {formatCurrency(amount - allocAmount)}.</p></>)}
-                <p className="mt-1 text-[11px] text-muted-foreground">Allocations are recorded on the receipt (invoice_allocations). An unallocated receipt is an on-account collection, not revenue.</p>
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="cheque-bank-reference-no">Cheque / Bank Reference No</label>
-                <input id="cheque-bank-reference-no"
-                  type="text"
-                  value={referenceNo}
-                  onChange={(e) => setReferenceNo(e.target.value)}
-                  placeholder="e.g. CHQ-991204 or Transaction ID"
-                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                />
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="receipt-purpose">Purpose (optional)</label>
-                  <input id="receipt-purpose"
-                    type="text"
-                    value={purpose}
-                    onChange={(e) => setPurpose(e.target.value)}
-                    placeholder="e.g. Grading charges for Batch 001"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="received-by">Received by (optional)</label>
-                  <input id="received-by"
-                    type="text"
-                    value={receivedBy}
-                    onChange={(e) => setReceivedBy(e.target.value)}
-                    placeholder="Name of person who received the money"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="remarks-note">Remarks / Note</label>
-                <input id="remarks-note"
-                  type="text"
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="e.g. Partial clearing of Batch 001 grading charges"
-                  className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsReceiptModalOpen(false)}
-                  className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveReceiptDraft}
-                  disabled={isPending}
-                  className="px-4 py-2 rounded-lg bg-card border border-border text-xs font-semibold cursor-pointer disabled:opacity-60"
-                >
-                  Save as draft
-                </button>
-                <button
-                  type="submit"
-                  disabled={isPending}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
-                  <span>{isPending ? "Posting…" : "Post Receipt to Daybook"}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <BillingReceiptDialog
+        open={isReceiptModalOpen}
+        onClose={() => {
+          setIsReceiptModalOpen(false)
+          setReceiptCustomerPreset(null)
+        }}
+        customers={customers}
+        cashAccounts={cashAccounts}
+        invoices={invoices}
+        recordCount={receipts.length}
+        initialCustomerId={receiptCustomerPreset}
+        customerBalance={custBalance}
+        onPosted={(notice, printReceipt) => {
+          setFormNotice(notice)
+          setPrintReceipt(printReceipt)
+          void loadData()
+        }}
+        onDraftSaved={(notice) => {
+          setFormNotice(notice)
+          void loadData()
+        }}
+      />
       <div className="expensive-card p-5">
         <h2 className="text-sm font-bold text-foreground mb-1">Customer Invoices</h2>
         <p className="text-xs text-muted-foreground mb-4">Invoices count as revenue when posted. Receipts only collect them.</p>
@@ -760,15 +492,6 @@ export default function BillingPage() {
       )}
       <ReversalDialog open={!!receiptReverseTarget} voucherLabel={receiptReverseTarget?.receipt_no ?? ""} pending={receiptReversing} onConfirm={handleReceiptReverse} onCancel={() => setReceiptReverseTarget(null)} />
       <ReversalDialog open={!!invReverseTarget} voucherLabel={invReverseTarget?.invoice_no ?? ""} pending={invReversing} onConfirm={handleInvoiceReverse} onCancel={() => setInvReverseTarget(null)} />
-      <ConfirmDialog
-        open={showConfirm}
-        title="Post this customer receipt?"
-        description={draftReceipt ? `${draftReceipt.receipt_no}: ${formatCurrency(draftReceipt.amount)} from ${draftReceipt.customer_name || "the customer"} via ${draftReceipt.payment_method}. This is a collection, not new revenue.` : ""}
-        confirmLabel="Post Receipt to Daybook"
-        pending={isPending}
-        onConfirm={handleConfirmReceipt}
-        onCancel={() => { setShowConfirm(false); setDraftReceipt(null) }}
-      />
     </div>
   )
 }
