@@ -255,11 +255,6 @@ function downloadBlob(blob: Blob, filename: string) {
   URL.revokeObjectURL(url)
 }
 
-/**
- * Download a report as a real .xlsx workbook (one sheet, named after
- * the report title). Returns false (and alerts, matching the CSV
- * helpers) when there are no columns to build from.
- */
 export async function exportToExcel<T extends Record<string, any>>(
   data: T[],
   filename: string,
@@ -271,32 +266,14 @@ export async function exportToExcel<T extends Record<string, any>>(
     alert("No data available to export.")
     return false
   }
-  const { utils, writeFile } = await import("xlsx")
-  const ws = utils.aoa_to_sheet(sheetRows)
-  const cols = resolveColumns(data, columns)
-  const headerIdx = sheetRows.findIndex((r) => r.length === cols.length && r[0] === cols[0].label)
-  ws["!cols"] = cols.map((c, i) => {
-    let max = String(c.label).length
-    sheetRows.slice(headerIdx + 1).forEach((r) => {
-      const v = r[i]
-      if (v !== undefined && v !== null) max = Math.max(max, String(v).length)
-    })
-    return { wch: Math.min(Math.max(max + 2, 10), 42) }
-  })
-  const wb = utils.book_new()
-  const sheetName = (options?.title ?? "Report").replace(/[\\/:*?"[\]]/g, "").slice(0, 31) || "Report"
-  utils.book_append_sheet(wb, ws, sheetName)
-  writeFile(wb, `${safeExportName(filename)}.xlsx`)
+  const html = `<html><head><meta charset="utf-8"></head><body><table>${sheetRows
+    .map((row) => `<tr>${row.map((cell) => `<td>${String(cell ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;")}</td>`).join("")}</tr>`)
+    .join("")}</table></body></html>`
+  const blob = new Blob([html], { type: "application/vnd.ms-excel;charset=utf-8" })
+  downloadBlob(blob, `${safeExportName(filename)}.xls`)
   return true
 }
 
-/**
- * Download a report as a PDF: title, date range and filter lines, then
- * a flat-styled table (dark header row, light alternate rows, no
- * gradients) with a bold totals row when totals are given. Returns
- * false (and alerts, matching the CSV helpers) when there are no
- * columns to build from.
- */
 export async function exportToPdf<T extends Record<string, any>>(
   data: T[],
   filename: string,
@@ -308,52 +285,29 @@ export async function exportToPdf<T extends Record<string, any>>(
     alert("No data available to export.")
     return false
   }
-  const { jsPDF } = await import("jspdf")
-  const { autoTable } = await import("jspdf-autotable")
-  const doc = new jsPDF({ orientation: cols.length > 6 ? "landscape" : "portrait", unit: "pt", format: "a4" })
-  let y = 40
-  if (options?.title) {
-    doc.setFontSize(14)
-    doc.setFont("helvetica", "bold")
-    doc.text(options.title, 40, y)
-    y += 20
+  const title = options?.title ?? "Report"
+  const dateRange = options?.dateRange ? `<p style="color:#666;font-size:12px;">Date range: ${options.dateRange}</p>` : ""
+  const filters = filterLines(options).map((f) => `<p style="color:#666;font-size:12px;">${f}</p>`).join("")
+  const tableHeaders = cols.map((c) => `<th style="border:1px solid #ddd;padding:8px;background:#18181b;color:#fff;text-align:left;">${c.label}</th>`).join("")
+  const tableRows = (Array.isArray(data) ? data : [])
+    .map((row) => `<tr>${cols.map((c) => `<td style="border:1px solid #ddd;padding:6px;font-size:12px;">${displayValue(cellValue(row, c))}</td>`).join("")}</tr>`)
+    .join("")
+  const totalsRow = options?.totals
+    ? `<tr style="font-weight:bold;background:#f3f4f6;">${cols.map((c, i) => `<td style="border:1px solid #ddd;padding:6px;font-size:12px;">${i === 0 ? (options.totalsLabel ?? "Total") : displayValue(options.totals![c.key])}</td>`).join("")}</tr>`
+    : ""
+
+  const printContent = `<!DOCTYPE html><html><head><title>${title}</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;padding:24px;color:#111;}h1{font-size:20px;margin-bottom:8px;}table{width:100%;border-collapse:collapse;margin-top:16px;}tr:nth-child(even){background-color:#f9fafb;}@media print{body{padding:0;}}</style></head><body><h1>${title}</h1>${dateRange}${filters}<table><thead><tr>${tableHeaders}</tr></thead><tbody>${tableRows}${totalsRow}</tbody></table></body></html>`
+
+  const printWindow = window.open("", "_blank")
+  if (!printWindow) {
+    alert("Pop-up blocked. Please allow pop-ups to print or save PDF.")
+    return false
   }
-  doc.setFontSize(9)
-  doc.setFont("helvetica", "normal")
-  doc.setTextColor(100, 100, 100)
-  if (options?.dateRange) {
-    doc.text(`Date range: ${options.dateRange}`, 40, y)
-    y += 14
-  }
-  filterLines(options).forEach((f) => {
-    doc.text(f, 40, y)
-    y += 14
-  })
-  doc.setTextColor(0, 0, 0)
-  const body = (Array.isArray(data) ? data : []).map((row) =>
-    cols.map((c) => String(displayValue(cellValue(row, c))))
-  )
-  const foot =
-    options?.totals
-      ? [
-          cols.map((c, i) => {
-            if (i === 0) return options.totalsLabel ?? "Total"
-            const v = options.totals![c.key]
-            return String(displayValue(v === undefined ? "" : v))
-          }),
-        ]
-      : []
-  autoTable(doc, {
-    startY: y + 6,
-    head: [cols.map((c) => c.label)],
-    body,
-    foot,
-    theme: "grid",
-    styles: { fontSize: 8, cellPadding: 3, lineColor: [209, 213, 219], lineWidth: 0.5 },
-    headStyles: { fillColor: [31, 41, 55], textColor: [255, 255, 255], fontStyle: "bold" },
-    footStyles: { fillColor: [243, 244, 246], fontStyle: "bold" },
-    alternateRowStyles: { fillColor: [249, 250, 251] },
-  })
-  doc.save(`${safeExportName(filename)}.pdf`)
+  printWindow.document.write(printContent)
+  printWindow.document.close()
+  printWindow.focus()
+  setTimeout(() => {
+    printWindow.print()
+  }, 250)
   return true
 }

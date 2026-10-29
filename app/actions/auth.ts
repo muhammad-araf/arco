@@ -90,13 +90,42 @@ export async function getDb(): Promise<{ db: DbClient | null; error: string }> {
   }
 }
 
+interface CachedActor {
+  actor: Actor | null;
+  expires: number;
+}
+const actorCache = new Map<string, CachedActor>();
+
+export async function clearActorCache(userId?: string): Promise<void> {
+  if (userId) actorCache.delete(userId);
+  else actorCache.clear();
+}
+
 /** Current signed-in user + profile, or null when not signed in. */
 export async function getCurrentActor(
   db: DbClient,
 ): Promise<Actor | null> {
+  let sessionUserId: string | null = null;
+  try {
+    const { data: sessionData } = await db.auth.getSession();
+    sessionUserId = sessionData?.session?.user?.id ?? null;
+  } catch {
+    sessionUserId = null;
+  }
+
+  if (sessionUserId) {
+    const cached = actorCache.get(sessionUserId);
+    if (cached && Date.now() < cached.expires) {
+      return cached.actor;
+    }
+  }
+
   const { data: userData, error: userError } = await db.auth.getUser();
   const user = userData?.user;
-  if (userError || !user) return null;
+  if (userError || !user) {
+    if (sessionUserId) actorCache.set(sessionUserId, { actor: null, expires: Date.now() + 5000 });
+    return null;
+  }
   const { data: profile } = await db
     .from("profiles")
     .select("*")
@@ -109,13 +138,19 @@ export async function getCurrentActor(
   // owner_admin. Display-only callers (sidebar) already handle null
   // by showing the session email or a generic label — that fallback
   // is display only and never authorises anything.
-  if (!profile) return null;
+  if (!profile) {
+    actorCache.set(user.id, { actor: null, expires: Date.now() + 10000 });
+    return null;
+  }
 
   const isActive = profile.is_active !== undefined
     ? profile.is_active !== false
     : profile.status ? profile.status === "active" : true;
 
-  if (!isActive) return null;
+  if (!isActive) {
+    actorCache.set(user.id, { actor: null, expires: Date.now() + 10000 });
+    return null;
+  }
 
   // Map the stored role. Legacy "owner" / "admin" spellings normalise
   // to owner_admin; anything else unrecognised (including an empty
@@ -138,17 +173,21 @@ export async function getCurrentActor(
   } else if (rawRole === "read_only_manager") {
     role = "read_only_manager";
   } else {
+    actorCache.set(user.id, { actor: null, expires: Date.now() + 10000 });
     return null;
   }
 
   const displayName = profile.display_name || profile.full_name || user.email;
 
-  return {
+  const actor: Actor = {
     userId: user.id,
     email: user.email ?? null,
     role,
     displayName: displayName ?? null,
   };
+
+  actorCache.set(user.id, { actor, expires: Date.now() + 30000 });
+  return actor;
 }
 
 /**
@@ -291,6 +330,7 @@ export async function setUserRole(
     .select()
     .single();
   if (uError) return { success: false, error: uError.message };
+  clearActorCache(targetUserId);
   await logAudit(db, {
     action: "permission_change",
     entityType: "profiles",

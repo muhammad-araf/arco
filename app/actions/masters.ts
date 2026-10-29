@@ -35,7 +35,14 @@ function errMessage(e: unknown): string {
 async function db(): Promise<Db> {
   return createClient();
 }
+const mastersCache = new Map<string, { data: unknown; expires: number }>();
+
+export async function clearMastersCache(): Promise<void> {
+  mastersCache.clear();
+}
+
 function revalidateMasters(): void {
+  mastersCache.clear();
   revalidatePath("/masters");
   revalidatePath("/dashboard");
   revalidatePath("/employees");
@@ -49,6 +56,11 @@ async function listTable(
   includeInactive: boolean,
   orderBy: string,
 ): Promise<ActionResult> {
+  const cacheKey = `${table}:${includeInactive}:${orderBy}`;
+  const cached = mastersCache.get(cacheKey);
+  if (cached && Date.now() < cached.expires) {
+    return ok(cached.data);
+  }
   try {
     const supabase = await db();
     const gate = await requireSignedIn(supabase);
@@ -57,6 +69,7 @@ async function listTable(
     if (!includeInactive) query = query.eq("is_active", true);
     const { data, error } = await query;
     if (error) return fail(error.message);
+    mastersCache.set(cacheKey, { data, expires: Date.now() + 30000 });
     return ok(data);
   } catch (e) {
     return fail(errMessage(e));

@@ -17,7 +17,7 @@ import {
   Plus,
   Download,
 } from "lucide-react"
-import { getStockSummary, getStockLedger, getStockAgeing, reverseTransfer, createAdjustment, postAdjustment, reverseAdjustment, listTransfers, listAdjustments } from "@/app/actions/inventory"
+import { getInventoryInitData, getStockSummary, getStockLedger, getStockAgeing, reverseTransfer, createAdjustment, postAdjustment, reverseAdjustment, listTransfers, listAdjustments } from "@/app/actions/inventory"
 import { listGodowns, listProducts, listParties } from "@/app/actions/masters"
 import { StockLedgerEntry, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDateTime } from "@/lib/utils"
@@ -113,40 +113,54 @@ export default function InventoryPage() {
     }
   }, [])
 
+  const loadAgeingData = React.useCallback(async () => {
+    try {
+      const ag = await getStockAgeing()
+      if (ag.success) setAgeing(Array.isArray(ag.data) ? ag.data : [])
+      else setTransferError(ag.error ?? "Could not load stock ageing.")
+    } catch (err) {
+      setTransferError(err instanceof Error ? err.message : "Could not load stock ageing.")
+    }
+  }, [])
+
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const [sm, le, g, pr, pa, tr, ad, ag] = await Promise.all([getStockSummary(), getStockLedger({ page: 1, pageSize: 50 }), listGodowns(), listProducts(), listParties(), listTransfers({ page: 1, pageSize: 50 }), listAdjustments({ page: 1, pageSize: 50 }), getStockAgeing()])
-      const failed = [sm, le, g, pr, pa, tr, ad, ag].find((r) => !r.success)
-      if (failed) setTransferError(failed.error ?? "Could not load inventory data.")
-      const godownList = (Array.isArray(g.data) ? g.data : []) as Godown[]
-      const productList = (Array.isArray(pr.data) ? pr.data : []) as Product[]
-      const partyList = (Array.isArray(pa.data) ? pa.data : []) as Party[]
-      setRawSummary(Array.isArray(sm.data) ? sm.data : [])
+      const res = await getInventoryInitData()
+      if (!res.success) {
+        setTransferError(res.error ?? "Could not load inventory data.")
+        return
+      }
+      const data = (res.data ?? {}) as any
+      const godownList = (Array.isArray(data.godowns) ? data.godowns : []) as Godown[]
+      const productList = (Array.isArray(data.products) ? data.products : []) as Product[]
+      const partyList = (Array.isArray(data.parties) ? data.parties : []) as Party[]
+      setRawSummary(Array.isArray(data.summary) ? data.summary : [])
       setGodowns(godownList)
       setProducts(productList)
       setParties(partyList)
-      setTransfers(Array.isArray((tr.data as any)?.rows) ? (tr.data as any).rows : (Array.isArray(tr.data) ? tr.data : []))
-      setTransferTotal(Number((tr.data as any)?.total) || 0)
-      setTransferPage(1)
-      setAdjustments(Array.isArray((ad.data as any)?.rows) ? (ad.data as any).rows : (Array.isArray(ad.data) ? ad.data : []))
-      setAdjustmentTotal(Number((ad.data as any)?.total) || 0)
-      setAdjustmentPage(1)
-      setAgeing(Array.isArray(ag.data) ? ag.data : [])
-      setLedgerPage(1)
-      applyLedgerPage(le, godownList, productList)
     } catch (err) {
       setTransferError(err instanceof Error ? err.message : "Could not load inventory data.")
     } finally {
       setIsLoading(false)
     }
-  }, [applyLedgerPage])
+  }, [])
 
-  // Mount load: without this the page never leaves its skeleton —
-  // isLoading starts true and only post-action handlers reloaded before.
-  // Dashboard drill-down links (?filter=low) are applied on mount via
-  // the shared getUrlFilter() helper, so they actually filter.
+  // Mount load: without this the page never leaves its skeleton
   React.useEffect(() => { loadData(); setDrillFilter(getUrlFilter()) }, [loadData])
+
+  // Lazy tab loader: fetch sub-registers only when switching to that tab
+  React.useEffect(() => {
+    if (activeTab === "ledger" && ledgerEntries.length === 0) {
+      void loadLedgerPage(1, selectedGodown, godowns, products, lotFilter)
+    } else if (activeTab === "transfers" && transfers.length === 0) {
+      void loadTransfersPage(1)
+    } else if (activeTab === "adjustments" && adjustments.length === 0) {
+      void loadAdjustmentsPage(1)
+    } else if (activeTab === "ageing" && ageing.length === 0) {
+      void loadAgeingData()
+    }
+  }, [activeTab, ledgerEntries.length, transfers.length, adjustments.length, ageing.length, loadLedgerPage, selectedGodown, godowns, products, lotFilter, loadTransfersPage, loadAdjustmentsPage, loadAgeingData])
 
   React.useEffect(() => {
     if (godowns.length > 0 && !countGodown) {
