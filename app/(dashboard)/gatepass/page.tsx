@@ -1,47 +1,36 @@
 "use client"
 
-import { postToken, submissionToken, resetSubmissionToken } from "@/lib/idempotency"
+import { postToken } from "@/lib/idempotency"
 
 import * as React from "react"
 import {
   FileCheck2,
   Plus,
   Printer,
-  CheckCircle2,
-  AlertTriangle,
-  Truck,
-  Building2,
-  User,
-  Phone,
   ShieldCheck,
-  Trash2,
-  Boxes,
   Download,
 } from "lucide-react"
-import { listGatePasses, getGatePass, createGatePassDraft, postGatePass, reverseGatePass, returnGatePass, approveGatePass, rejectGatePass } from "@/app/actions/gatepass"
+import { listGatePasses, getGatePass, postGatePass, reverseGatePass, approveGatePass } from "@/app/actions/gatepass"
 import { getStockSummary } from "@/app/actions/inventory"
-import { listGodowns, listProducts, listParties, listPackagingTypes, createParty, createGodown, createProduct, createPackagingType } from "@/app/actions/masters"
-import { InlineAdd, PARTY_FIELDS, GODOWN_FIELDS, PRODUCT_FIELDS, PACKAGING_FIELDS } from "@/components/print/inline-add"
+import { listGodowns, listProducts, listParties, listPackagingTypes } from "@/app/actions/masters"
 import { getCompanySettings, getAppSetting } from "@/app/actions/settings"
 import { GatePassPrint } from "@/components/print/gate-pass-print"
-import { AttachmentFields } from "@/components/attachment-fields"
 import { PrintButton } from "@/components/print/print-button"
 import { GatePass, GatePassItem, Godown, Product, Party } from "@/lib/types/database"
 import { formatWeight, formatBags, formatDate, formatDateTime } from "@/lib/utils"
-import { kgPerBag } from "@/lib/dialog-calcs"
 import { exportReportToCsv, exportToExcel, exportToPdf } from "@/lib/export-utils"
 import { logExport } from "@/app/actions/audit-log"
 import {
   AlertBanner,
-  ConfirmDialog,
   EmptyState,
   FilterBanner,
   ReversalDialog,
-  SubmitSpinner,
   getUrlFilter,
-  isPositive,
   isTodayISO,
 } from "@/components/erp-ui"
+import { GatePassDialog } from "@/components/gate-pass-dialog"
+import { GatePassReturnDialog } from "@/components/gate-pass-return-dialog"
+import { GatePassRejectDialog } from "@/components/gate-pass-reject-dialog"
 import { GatepassSkeleton } from "@/components/route-skeletons"
 
 /** A gate pass row plus the spec §9 columns (kept local so this page
@@ -79,12 +68,10 @@ export default function GatePassPage() {
   const [company, setCompany] = React.useState<{ name?: string; address?: string; phone?: string; email?: string; logoUrl?: string } | undefined>(undefined)
   const [summaryRows, setSummaryRows] = React.useState<any[]>([])
   const [returnTarget, setReturnTarget] = React.useState<any | null>(null)
-  const [returnPending, setReturnPending] = React.useState(false)
   const [returnLines, setReturnLines] = React.useState<{
     productId: string; productName: string; partyId: string | null; ownerName: string; remainingKg: number; qtyKg: number
     condition: string; restockDecision: "accepted" | "rejected"
   }[]>([])
-  const [returnReason, setReturnReason] = React.useState("")
 
   // Modal / Print State
   const [isModalOpen, setIsModalOpen] = React.useState(false)
@@ -93,45 +80,11 @@ export default function GatePassPage() {
   const [formError, setFormError] = React.useState("")
   const [formNotice, setFormNotice] = React.useState("")
   const [isPending, setIsPending] = React.useState(false)
-  const [showPostConfirm, setShowPostConfirm] = React.useState(false)
-  const [draftPass, setDraftPass] = React.useState<GatePassRow | null>(null)
   const [reversalTarget, setReversalTarget] = React.useState<GatePassRow | null>(null)
   const [rejectTarget, setRejectTarget] = React.useState<GatePassRow | null>(null)
-  const [rejectReason, setRejectReason] = React.useState("")
-  const [isRejecting, setIsRejecting] = React.useState(false)
   const [isApproving, setIsApproving] = React.useState(false)
   const [isReversing, setIsReversing] = React.useState(false)
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
-  const postGuard = React.useRef(false)
-  const returnTokenRef = React.useRef<string | null>(null)
-
-  // Form Fields
-  const [customerId, setCustomerId] = React.useState("")
-  const [godownId, setGodownId] = React.useState("")
-  const [destination, setDestination] = React.useState("")
-  const [receiverName, setReceiverName] = React.useState("")
-  const [receiverContact, setReceiverContact] = React.useState("")
-  const [attachmentUrl, setAttachmentUrl] = React.useState("")
-  const [attachmentNote, setAttachmentNote] = React.useState("")
-  const [dispatchMode, setDispatchMode] = React.useState("")
-  const [vehicleNo, setVehicleNo] = React.useState("")
-  const [driverName, setDriverName] = React.useState("")
-  const [driverPhone, setDriverPhone] = React.useState("")
-  const [transporter, setTransporter] = React.useState("")
-  const [orderRef, setOrderRef] = React.useState("")
-  const [notes, setNotes] = React.useState("")
-
-  // Form Items
-  const [items, setItems] = React.useState<{
-    productId: string
-    bags: number
-    netWeight: number
-    remarks: string
-    ownerId: string
-    packagingTypeId: string
-  }[]>([
-    { productId: "", bags: 0, netWeight: 0, remarks: "", ownerId: "", packagingTypeId: "" },
-  ])
 
   // Register filters (combined with the dashboard drill-down filter).
   const [filterStatus, setFilterStatus] = React.useState("")
@@ -195,150 +148,6 @@ export default function GatePassPage() {
   // register pages (inward, payroll, daybook) already do.
   React.useEffect(() => { setDrillFilter(getUrlFilter()) }, [])
 
-  React.useEffect(() => {
-    if (godowns.length > 0 && !godownId) setGodownId(godowns[0].id)
-    if (customers.length > 0 && !customerId) setCustomerId(customers[0].id)
-    const finishedProds = products.filter((p) => p.category === "finished_seed" || p.category === "by_product")
-    if (finishedProds.length > 0 && items[0].productId === "") {
-      setItems((prev) => [{ ...prev[0], productId: finishedProds[0].id }])
-    }
-  }, [godowns, customers, products, godownId, customerId, items])
-
-  const handleAddItem = () => {
-    setItems((prev) => [
-      ...prev,
-      {
-        productId: products[0]?.id || "",
-        bags: 0,
-        netWeight: 0,
-        remarks: "",
-        ownerId: "",
-        packagingTypeId: "",
-      },
-    ])
-  }
-
-  const handleRemoveItem = (index: number) => {
-    if (items.length <= 1) return
-    setItems((prev) => prev.filter((_, i) => i !== index))
-  }
-
-  const handleItemChange = (index: number, field: string, value: any) => {
-    setItems((prev) =>
-      prev.map((item, i) => (i === index ? { ...item, [field]: value } : item))
-    )
-  }
-
-  const totalBags = items.reduce((sum, i) => sum + (Number(i.bags) || 0), 0)
-  const totalWeight = items.reduce((sum, i) => sum + (Number(i.netWeight) || 0), 0)
-
-  const handleIssueGatePass = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isPending) return
-    // Spec §9.3/§9.5: required fields, positive quantities, and the stock
-    // guard — every failure names the product and the numbers involved.
-    if (!customerId) return setFormError("Select the customer / receiver before issuing a gate pass.")
-    if (!godownId) return setFormError("Select the dispatch godown so stock is deducted from the right place.")
-    if (!vehicleNo.trim()) return setFormError("Vehicle number is required on a gate pass.")
-    if (!driverName.trim()) return setFormError("Driver name is required on a gate pass.")
-    if (!destination.trim()) return setFormError("Destination is required so the pass states where the goods are going.")
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i]
-      if (!item.productId) return setFormError(`Line ${i + 1}: select a product.`)
-      if (!isPositive(Number(item.bags))) return setFormError(`Line ${i + 1}: bags must be greater than zero.`)
-      if (!isPositive(Number(item.netWeight))) return setFormError(`Line ${i + 1}: net weight must be greater than zero.`)
-      const ownerRow = summaryRows.find((r) => r.product_id === item.productId && r.godown_id === godownId && (r.party_id ?? null) === (item.ownerId || null))
-      const available = Number(ownerRow?.balance_kg) || 0
-      if (item.netWeight > available) {
-        const prod = products.find((p) => p.id === item.productId)
-        return setFormError(`Insufficient stock for ${prod?.name || "Product"}: ${available} kg available in this godown, but ${item.netWeight} kg requested. Reduce the quantity or pick another godown.`)
-      }
-    }
-    setFormError("")
-    const selectedCust = customers.find((c) => c.id === customerId)
-    const selectedGodown = godowns.find((g) => g.id === godownId)
-    const gatePassItems: GatePassItem[] = items.map((item, idx) => {
-      const prod = products.find((p) => p.id === item.productId)
-      return {
-        id: `gpi-${Date.now()}-${idx}`,
-        gate_pass_id: `gp-${Date.now()}`,
-        product_id: item.productId,
-        product_name: prod?.name || "Seed",
-        bags_count: Number(item.bags),
-        net_weight_kg: Number(item.netWeight),
-        gross_weight_kg: Number(item.netWeight),
-        remarks: item.remarks,
-      }
-    })
-    // No pass number is shown before posting: the server assigns it.
-    setDraftPass({
-      id: `gp-${Date.now()}`,
-      pass_no: "",
-      date: new Date().toISOString(),
-      customer_id: customerId,
-      customer_name: selectedCust?.name,
-      destination: destination || undefined,
-      receiver_name: receiverName || undefined,
-      receiver_contact: receiverContact || undefined,
-      dispatch_mode: dispatchMode || undefined,
-      godown_id: godownId,
-      godown_name: selectedGodown?.name,
-      vehicle_no: vehicleNo,
-      driver_name: driverName,
-      driver_phone: driverPhone || undefined,
-      transporter: transporter || undefined,
-      order_ref: orderRef || undefined,
-      status: "posted",
-      total_bags: totalBags,
-      total_weight_kg: totalWeight,
-      notes: notes || undefined,
-      items: gatePassItems,
-      created_at: new Date().toISOString(),
-      dispatched_at: new Date().toISOString(),
-    })
-    setShowPostConfirm(true)
-  }
-
-  // Save-as-draft: the workflow already has drafts (createGatePassDraft
-  // writes status "draft" and a rejected pass returns to draft), but the
-  // dialog offered no way to save one. Draft validation follows the
-  // server's draft rules only: customer, godown, vehicle, driver, one
-  // product per line with weight > 0. Destination and the stock guard
-  // are post-time checks, not draft-time ones.
-  const handleSaveDraft = async () => {
-    if (isPending) return
-    if (!customerId) return setFormError("Select the customer / receiver before saving a draft.")
-    if (!godownId) return setFormError("Select the dispatch godown before saving a draft.")
-    if (!vehicleNo.trim()) return setFormError("Vehicle number is required before saving a draft.")
-    if (!driverName.trim()) return setFormError("Driver name is required before saving a draft.")
-    for (let i = 0; i < items.length; i++) {
-      if (!items[i].productId) return setFormError(`Line ${i + 1}: select a product before saving a draft.`)
-      if (!isPositive(Number(items[i].netWeight))) return setFormError(`Line ${i + 1}: net weight must be greater than zero before saving a draft.`)
-    }
-    setFormError("")
-    setIsPending(true)
-    try {
-      const created = await createGatePassDraft({
-        customerId, godownId, vehicleNo: vehicleNo.trim(), driverName: driverName.trim(),
-        driverPhone: driverPhone || undefined, transporter: transporter || undefined,
-        destination: destination.trim() || undefined, orderRef: orderRef || undefined, notes: notes || undefined,
-        receiverName: receiverName.trim() || undefined, receiverContact: receiverContact.trim() || undefined,
-        dispatchMode: dispatchMode || undefined,
-        attachmentUrl: attachmentUrl || undefined, attachmentNote: attachmentNote || undefined,
-        items: items.map((it) => ({ productId: it.productId, bags: Number(it.bags), netWeightKg: Number(it.netWeight), remarks: it.remarks, partyId: it.ownerId || undefined, packagingTypeId: it.packagingTypeId || undefined })),
-      })
-      if (!created.success || !(created.data as any)?.id) {
-        setFormError(created.error ?? "Could not save the gate pass draft.")
-        return
-      }
-      setFormNotice(`${(created.data as any).pass_no ?? "Gate pass"} saved as a draft — nothing has been deducted yet. Post it from the register when ready.`)
-      setIsModalOpen(false)
-      await loadData()
-    } finally {
-      setIsPending(false)
-    }
-  }
-
   // Post a draft pass from the register (e.g. one saved via "Save as
   // draft" or rejected back to draft). Uses the existing post action;
   // a posted pass opens its print document immediately.
@@ -373,61 +182,6 @@ export default function GatePassPage() {
       await loadData()
     } finally {
       setIsPending(false)
-    }
-  }
-
-  const handleConfirmPost = async () => {
-    if (!draftPass || postGuard.current) return
-    postGuard.current = true
-    setIsPending(true)
-    try {
-      const created = await createGatePassDraft({
-        customerId, godownId, vehicleNo: vehicleNo.trim(), driverName: driverName.trim(),
-        driverPhone: driverPhone || undefined, transporter: transporter || undefined,
-        destination: destination.trim() || undefined, orderRef: orderRef || undefined, notes: notes || undefined,
-        receiverName: receiverName.trim() || undefined, receiverContact: receiverContact.trim() || undefined,
-        dispatchMode: dispatchMode || undefined,
-        attachmentUrl: attachmentUrl || undefined, attachmentNote: attachmentNote || undefined,
-        items: items.map((it) => ({ productId: it.productId, bags: Number(it.bags), netWeightKg: Number(it.netWeight), remarks: it.remarks, partyId: it.ownerId || undefined, packagingTypeId: it.packagingTypeId || undefined })),
-      })
-      if (!created.success || !(created.data as any)?.id) {
-        setFormError(created.error ?? "Could not create the gate pass draft.")
-        return
-      }
-      const duplicateWarning = (created.data as any)?.duplicateOrderRefWarning as string | undefined
-      const posted = await postGatePass((created.data as any).id, postToken("gatepass:post", (created.data as any).id))
-      if (!posted.success) {
-        setFormError(posted.error ?? "Could not post the gate pass.")
-        return
-      }
-      const row: any = posted.data ?? created.data
-      if (row.status === "awaiting_approval") {
-        // Approval is on: nothing deducted yet — the pass waits for an
-        // owner_admin approval, which is what deducts stock.
-        setFormNotice(`${row.pass_no} submitted for approval — stock will be deducted when it is approved.${duplicateWarning ? ` ${duplicateWarning}` : ""}`)
-      } else {
-        setFormNotice(`${row.pass_no} dispatched — ${formatWeight(row.total_weight_kg ?? draftPass.total_weight_kg)} deducted from ${draftPass.godown_name || "the godown"}.${duplicateWarning ? ` ${duplicateWarning}` : ""}`)
-      }
-      const fresh = await getGatePass((created.data as any).id)
-      const serverRow: any = fresh.success ? fresh.data : row
-      if (serverRow.status === "posted") {
-        setSelectedPassForPrint({
-          ...serverRow,
-          customer_name: customers.find((x) => x.id === serverRow.customer_id)?.name ?? serverRow.customer_id,
-          godown_name: godowns.find((x) => x.id === serverRow.godown_id)?.name ?? serverRow.godown_id,
-          items: (serverRow.gate_pass_items ?? serverRow.items ?? []).map((it: any) => ({
-            ...it,
-            product_name: products.find((x) => x.id === it.product_id)?.name ?? "Not set",
-          })),
-        })
-      }
-      setShowPostConfirm(false)
-      setIsModalOpen(false)
-      setDraftPass(null)
-      await loadData()
-    } finally {
-      setIsPending(false)
-      postGuard.current = false
     }
   }
 
@@ -471,46 +225,6 @@ export default function GatePassPage() {
     }
     setReturnTarget(gp)
     setReturnLines(lines)
-    setReturnReason("")
-  }
-
-  const handlePartialReturn = async () => {
-    if (!returnTarget || returnPending) return
-    if (!returnReason.trim()) {
-      setFormError("A return reason is required.")
-      return
-    }
-    const entries = returnLines.filter((l) => Number(l.qtyKg) > 0)
-    if (!entries.length) {
-      setFormError("Enter a return quantity greater than zero on at least one line.")
-      return
-    }
-    for (const l of entries) {
-      if (Number(l.qtyKg) > l.remainingKg) {
-        setFormError(`Return for ${l.productName} (${l.ownerName}) exceeds the ${l.remainingKg} kg still returnable.`)
-        return
-      }
-    }
-    setReturnPending(true)
-    try {
-      const res = await returnGatePass(returnTarget.id, {
-        reason: returnReason.trim(),
-        items: entries.map((l) => ({ productId: l.productId, qtyKg: Number(l.qtyKg), partyId: l.partyId, condition: l.condition.trim() || undefined, restockDecision: l.restockDecision })),
-      }, submissionToken(returnTokenRef, "gatepass-return"))
-      if (!res.success) {
-        setFormError(res.error ?? "Could not return the gate pass.")
-        return
-      }
-      const newStatus = (res.data as any)?.status
-      const rejectedKg = entries.filter((l) => l.restockDecision === "rejected").reduce((s, l) => s + (Number(l.qtyKg) || 0), 0)
-      setFormNotice(`${returnTarget.pass_no} ${newStatus === "returned" ? "returned in full" : "partially returned"} — stock restored for the accepted quantities${rejectedKg > 0 ? `; ${rejectedKg} kg rejected and not returned to stock` : ""}.`)
-      resetSubmissionToken(returnTokenRef)
-      setReturnTarget(null)
-      setReturnLines([])
-      await loadData()
-    } finally {
-      setReturnPending(false)
-    }
   }
 
   // Spec §9.3 step 4: approval deducts stock; rejection returns the
@@ -532,28 +246,6 @@ export default function GatePassPage() {
     }
   }
 
-  const handleConfirmReject = async () => {
-    if (!rejectTarget || isRejecting) return
-    if (!rejectReason.trim()) {
-      setFormError("A rejection reason is required.")
-      return
-    }
-    setIsRejecting(true)
-    try {
-      const res = await rejectGatePass(rejectTarget.id, rejectReason.trim(), postToken("gatepass:reject", rejectTarget.id))
-      if (!res.success) {
-        setFormError(res.error ?? "Could not reject the gate pass.")
-        return
-      }
-      setFormNotice(`${rejectTarget.pass_no} rejected back to draft — no stock was deducted for it.`)
-      setRejectTarget(null)
-      setRejectReason("")
-      await loadData()
-    } finally {
-      setIsRejecting(false)
-    }
-  }
-
   // Spec §9.3: cancellation after posting creates a reversal with reason;
   // the pass stays searchable as "reversed" and stock is restored by
   // compensating inward ledger rows. The pass number is never reused.
@@ -572,6 +264,12 @@ export default function GatePassPage() {
     } finally {
       setIsReversing(false)
     }
+  }
+
+  // Dialog callbacks: notice banner + register reload.
+  const handleDialogSaved = (notice: string) => {
+    setFormNotice(notice)
+    void loadData()
   }
 
   const drillPasses = drillFilter === "today"
@@ -810,7 +508,7 @@ export default function GatePassPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => { setRejectTarget(gp); setRejectReason("") }}
+                            onClick={() => setRejectTarget(gp)}
                             className="px-2 py-1 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer"
                             title="Reject back to draft with a reason"
                           >
@@ -868,357 +566,6 @@ export default function GatePassPage() {
         </div>
       </div>
 
-      {/* Gate Pass Creator Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
-          <div className="expensive-card w-full max-w-4xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-8 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <div>
-                <h3 className="text-base font-bold text-foreground flex items-center gap-2">
-                  <ShieldCheck className="h-5 w-5 text-emerald-500" />
-                  Issue Outward Gate Pass
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  Upon authorization, stock is deducted from the godown inventory and an official A4 pass is generated.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-
-            <form onSubmit={handleIssueGatePass} className="space-y-4 text-xs">
-              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="customer-consignee">Customer / Consignee *</label>
-                  <div className="flex flex-wrap items-start gap-2"><select id="customer-consignee" title={customers.find((c) => c.id === customerId)?.name ?? ""}
-                    value={customerId}
-                    onChange={(e) => setCustomerId(e.target.value)}
-                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                    required
-                  >
-                    {customers.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                  </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setCustomers(list.filter((x) => x.type === "customer" || x.type === "both")); } setCustomerId(id); }} /></div>
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="dispatch-godown">Dispatch Godown *</label>
-                  <div className="flex flex-wrap items-start gap-2"><select id="dispatch-godown" title={godowns.find((g) => g.id === godownId)?.name ?? ""}
-                    value={godownId}
-                    onChange={(e) => setGodownId(e.target.value)}
-                    className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                    required
-                  >
-                    {godowns.map((g) => (
-                      <option key={g.id} value={g.id}>
-                        {g.name}
-                      </option>
-                    ))}
-                  </select> <InlineAdd label="Godown" fields={GODOWN_FIELDS} createAction={async (v) => createGodown({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listGodowns(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setGodowns(list); } setGodownId(id); }} /></div>
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="delivery-destination">Delivery Destination *</label>
-                  <input id="delivery-destination"
-                    type="text"
-                    value={destination}
-                    onChange={(e) => setDestination(e.target.value)}
-                    placeholder="e.g. Sahiwal Regional Depot"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="vehicle-truck-no">Vehicle / Truck No *</label>
-                  <input id="vehicle-truck-no"
-                    type="text"
-                    value={vehicleNo}
-                    onChange={(e) => setVehicleNo(e.target.value)}
-                    placeholder="e.g. LES-4419"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono font-bold"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="driver-full-name">Driver Full Name *</label>
-                  <input id="driver-full-name"
-                    type="text"
-                    value={driverName}
-                    onChange={(e) => setDriverName(e.target.value)}
-                    placeholder="Driver name"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="driver-mobile-number">Driver Mobile Number</label>
-                  <input id="driver-mobile-number"
-                    type="text"
-                    value={driverPhone}
-                    onChange={(e) => setDriverPhone(e.target.value)}
-                    placeholder="0300-XXXXXXX"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="receiver-name">Receiver Name</label>
-                  <input id="receiver-name"
-                    type="text"
-                    value={receiverName}
-                    onChange={(e) => setReceiverName(e.target.value)}
-                    placeholder="Person receiving the goods"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="receiver-contact">Receiver Contact</label>
-                  <input id="receiver-contact"
-                    type="text"
-                    value={receiverContact}
-                    onChange={(e) => setReceiverContact(e.target.value)}
-                    placeholder="0300-XXXXXXX"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="dispatch-mode">Dispatch Mode</label>
-                  <select id="dispatch-mode"
-                    value={dispatchMode}
-                    onChange={(e) => setDispatchMode(e.target.value)}
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  >
-                    <option value="">Not specified</option>
-                    <option value="Own Vehicle">Own Vehicle</option>
-                    <option value="Hired Transporter">Hired Transporter</option>
-                    <option value="Courier">Courier</option>
-                    <option value="Self Pickup">Self Pickup</option>
-                  </select>
-                </div>
-
-                <AttachmentFields url={attachmentUrl} note={attachmentNote} onUrlChange={setAttachmentUrl} onNoteChange={setAttachmentNote} idPrefix="gatepass" />
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="transporter-name">Transporter</label>
-                  <input id="transporter-name"
-                    type="text"
-                    value={transporter}
-                    onChange={(e) => setTransporter(e.target.value)}
-                    placeholder="Transport company, if any"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="order-ref">Order Reference</label>
-                  <input id="order-ref"
-                    type="text"
-                    value={orderRef}
-                    onChange={(e) => setOrderRef(e.target.value)}
-                    placeholder="e.g. PO-1234 (a reuse only warns, never blocks)"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="gatepass-notes">Notes</label>
-                  <input id="gatepass-notes"
-                    type="text"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Anything the pass should note"
-                    className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
-                  />
-                </div>
-              </div>
-
-              {/* Items Section */}
-              <div className="space-y-3 pt-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-foreground uppercase tracking-wider">
-                    Authorized Product Line Items
-                  </span>
-                  <button
-                    type="button"
-                    onClick={handleAddItem}
-                    className="text-xs text-primary hover:underline font-semibold flex items-center gap-1 cursor-pointer"
-                  >
-                    <Plus className="h-3 w-3" />
-                    <span>Add Item</span>
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  {items.map((item, idx) => {
-                    const ownerRow = item.productId ? summaryRows.find((r) => r.product_id === item.productId && r.godown_id === godownId && (r.party_id ?? null) === (item.ownerId || null)) : undefined
-                    const available = Number(ownerRow?.balance_kg) || 0
-                    return (
-                      <div
-                        key={idx}
-                        className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-2.5 rounded-lg bg-muted border border-border text-xs items-start"
-                      >
-                        <div className="sm:col-span-2">
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`gatepass-item-product-${idx}`}>
-                            Product * (Available: {formatWeight(available)})
-                          </label>
-                          <div className="flex flex-wrap items-start gap-2"><select id={`gatepass-item-product-${idx}`}
-                            value={item.productId}
-                            onChange={(e) => handleItemChange(idx, "productId", e.target.value)}
-                            className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
-                          >
-                            {products.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.name}
-                              </option>
-                            ))}
-                          </select> <InlineAdd label="Product" fields={PRODUCT_FIELDS} createAction={async (v) => createProduct({ code: v.code, name: v.name, category: v.category || "raw_seed" })} onCreated={async (id) => { const r = await listProducts(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setProducts(list); } handleItemChange(idx, "productId", id); }} /></div>
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`bags-count-${idx}`}>Bags Count *</label>
-                          <input id={`bags-count-${idx}`}
-                            type="number"
-                            value={item.bags}
-                            onChange={(e) => handleItemChange(idx, "bags", Number(e.target.value))}
-                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
-                            min="1"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`net-wt-kg-${idx}`}>Net Wt (kg) *</label>
-                          <input id={`net-wt-kg-${idx}`}
-                            type="number"
-                            value={item.netWeight}
-                            onChange={(e) => handleItemChange(idx, "netWeight", Number(e.target.value))}
-                            className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono"
-                            min="1"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`stock-owner-${idx}`}>Stock owner</label>
-                          <div className="flex flex-wrap items-start gap-2"><select id={`stock-owner-${idx}`}
-                            value={item.ownerId}
-                            onChange={(e) => handleItemChange(idx, "ownerId", e.target.value)}
-                            className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
-                          >
-                            <option value="">Company stock</option>
-                            {owners.map((o) => (
-                              <option key={o.id} value={o.id}>
-                                {o.name}
-                              </option>
-                            ))}
-                          </select> <InlineAdd label="Party" fields={PARTY_FIELDS} createAction={async (v) => createParty({ code: v.code, name: v.name, type: v.type || "customer" })} onCreated={async (id) => { const r = await listParties(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setOwners(list); } handleItemChange(idx, "ownerId", id); }} /></div>
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`bag-type-${idx}`}>Bag type</label>
-                          <div className="flex flex-wrap items-start gap-2"><select id={`bag-type-${idx}`}
-                            value={item.packagingTypeId}
-                            onChange={(e) => handleItemChange(idx, "packagingTypeId", e.target.value)}
-                            className="flex-1 min-w-0 px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
-                          >
-                            <option value="">No specific type</option>
-                            {packagingTypes.map((t: any) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
-                              </option>
-                            ))}
-                          </select> <InlineAdd label="Packaging" fields={PACKAGING_FIELDS} createAction={async (v) => createPackagingType({ code: v.code, name: v.name })} onCreated={async (id) => { const r = await listPackagingTypes(); if (r.success && Array.isArray(r.data)) { const list = r.data as any[]; setPackagingTypes(list); } handleItemChange(idx, "packagingTypeId", id); }} /></div>
-                        </div>
-
-                        <div className="sm:col-span-2 flex items-center gap-2">
-                          <div className="flex-1">
-                            <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`packaging-remarks-${idx}`}>Packaging Remarks</label>
-                            <input id={`packaging-remarks-${idx}`}
-                              type="text"
-                              value={item.remarks}
-                              onChange={(e) => handleItemChange(idx, "remarks", e.target.value)}
-                              placeholder="e.g. 50kg PP Green Bags"
-                              className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground"
-                            />
-                          </div>
-                          {items.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveItem(idx)}
-                              className="mt-3.5 p-1 text-destructive hover:bg-destructive/10 rounded cursor-pointer"
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                        </div>
-                        <div className="sm:col-span-2 text-[11px] text-muted-foreground">
-                          Line {idx + 1}: <strong className="text-foreground">{formatWeight(Number(item.netWeight) || 0)}</strong>
-                          {Number(item.bags) > 0 && (
-                            <> — {kgPerBag(Number(item.netWeight) || 0, Number(item.bags)).toFixed(2)} kg per bag</>
-                          )}
-                          {available > 0 && <> — {formatWeight(available)} available in this godown</>}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {/* Total Banner */}
-              <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-between text-xs">
-                <div>
-                  <span className="text-muted-foreground">Total Bags Cleared: </span>
-                  <strong className="text-foreground font-mono">{formatBags(totalBags)}</strong>
-                </div>
-                <div>
-                  <span className="text-muted-foreground">Total Dispatched Weight: </span>
-                  <strong className="text-blue-600 dark:text-blue-400 font-mono text-sm">
-                    {formatWeight(totalWeight)}
-                  </strong>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleSaveDraft()}
-                  disabled={isPending}
-                  className="px-5 py-2 rounded-lg bg-card border border-border text-foreground text-xs font-bold cursor-pointer disabled:opacity-60"
-                >
-                  Save as draft
-                </button>
-                <button
-                  type="submit"
-                  disabled={isPending}
-                  className="inline-flex items-center gap-1.5 px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                >
-                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
-                  <span>{isPending ? "Authorizing…" : "Authorize & Deduct Stock"}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* Gate pass preview: the SAME GatePassPrint document that prints,
           so preview and paper can never drift apart. Company details
           come from settings (getCompanySettings); when none are
@@ -1270,58 +617,6 @@ export default function GatePassPage() {
           </div>
         </div>
       )}
-      {returnTarget !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
-          <div className="expensive-card w-full max-w-2xl p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-8 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <h3 className="text-sm font-bold text-foreground">Return {returnTarget.pass_no}</h3>
-              <button type="button" onClick={() => setReturnTarget(null)} className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer">✕</button>
-            </div>
-            <p className="text-xs text-muted-foreground">Reduce a quantity for a partial return. The remainder stays returnable, and the pass stays reversible until it is fully returned. Only quantities marked Accepted return to stock — Rejected quantities are recorded but never restocked.</p>
-            <div className="space-y-2 text-xs">
-              {returnLines.map((line, idx) => (
-                <div key={idx} className="grid grid-cols-1 sm:grid-cols-2 gap-2 p-2.5 rounded-lg bg-muted border border-border items-start">
-                  <div><div className="font-bold text-foreground">{line.productName}</div><div className="text-muted-foreground">Owner: {line.ownerName}</div></div>
-                  <div className="text-muted-foreground">Still returnable: <strong className="text-foreground">{line.remainingKg} kg</strong></div>
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`return-qty-kg-${idx}`}>Return qty (kg) *</label>
-                    <input id={`return-qty-kg-${idx}`} type="number" min="0" max={line.remainingKg} value={line.qtyKg} onChange={(e) => setReturnLines((prev) => prev.map((l, i) => (i === idx ? { ...l, qtyKg: Number(e.target.value) } : l)))} className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono" />
-                  </div>
-                  <div className="text-muted-foreground">Left after return: <strong className="text-foreground">{Math.max(0, Math.round((line.remainingKg - (Number(line.qtyKg) || 0)) * 100) / 100)} kg</strong></div>
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`return-condition-${idx}`}>Condition</label>
-                    <input id={`return-condition-${idx}`} type="text" value={line.condition} onChange={(e) => setReturnLines((prev) => prev.map((l, i) => (i === idx ? { ...l, condition: e.target.value } : l)))} placeholder="e.g. good, damaged" className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground" />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] text-muted-foreground mb-0.5" htmlFor={`return-decision-${idx}`}>Restock decision</label>
-                    <select id={`return-decision-${idx}`} value={line.restockDecision} onChange={(e) => setReturnLines((prev) => prev.map((l, i) => (i === idx ? { ...l, restockDecision: e.target.value as "accepted" | "rejected" } : l)))} className="w-full px-2 py-1.5 rounded-md bg-background border border-border text-foreground">
-                      <option value="accepted">Accepted — back to stock</option>
-                      <option value="rejected">Rejected — not restocked</option>
-                    </select>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div>
-              <label className="block font-medium text-foreground mb-1 text-xs" htmlFor="return-reason">Return reason *</label>
-              <input id="return-reason" value={returnReason} onChange={(e) => setReturnReason(e.target.value)} placeholder="Why is this stock coming back?" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground text-xs" required />
-            </div>
-            <div className="flex items-center justify-end gap-3">
-              <button type="button" onClick={() => setReturnTarget(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>
-              <button type="button" onClick={handlePartialReturn} disabled={returnPending} className="px-5 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer disabled:opacity-60">{returnPending ? "Returning…" : "Confirm Return"}</button>
-            </div>
-          </div>
-        </div>
-      )}
-      <ConfirmDialog
-        open={showPostConfirm}
-        title="Authorize this gate pass?"
-        description={draftPass ? (approvalRequired ? `Submitting will send ${draftPass.pass_no || "this pass"} for owner_admin approval — no stock moves until it is approved. A pass number is assigned on submission.` : `Posting will deduct ${formatWeight(draftPass.total_weight_kg)} (${formatBags(draftPass.total_bags)}) from ${draftPass.godown_name || "the dispatch godown"} for vehicle ${draftPass.vehicle_no}. A pass number is assigned on posting. A posted pass can only be changed by reversal.`) : ""}
-        confirmLabel={approvalRequired ? "Submit for Approval" : "Authorize & Deduct Stock"}
-        pending={isPending}
-        onConfirm={handleConfirmPost}
-        onCancel={() => { setShowPostConfirm(false); setDraftPass(null) }}
-      />
       <ReversalDialog
         open={!!reversalTarget}
         voucherLabel={reversalTarget?.pass_no ?? ""}
@@ -1330,25 +625,37 @@ export default function GatePassPage() {
         onConfirm={handleConfirmReversal}
         onCancel={() => setReversalTarget(null)}
       />
-      {rejectTarget !== null && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 overflow-y-auto">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 my-8">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <h3 className="text-sm font-bold text-foreground">Reject {rejectTarget.pass_no}?</h3>
-              <button type="button" onClick={() => setRejectTarget(null)} className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer">✕</button>
-            </div>
-            <p className="text-xs text-muted-foreground">The pass returns to draft with no stock deducted, so it can be corrected and re-submitted. Approval is owner_admin-only on the server.</p>
-            <div>
-              <label className="block font-medium text-foreground mb-1 text-xs" htmlFor="reject-reason">Rejection reason *</label>
-              <input id="reject-reason" value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Why is this pass rejected?" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground text-xs" required />
-            </div>
-            <div className="flex items-center justify-end gap-3">
-              <button type="button" onClick={() => setRejectTarget(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>
-              <button type="button" onClick={() => void handleConfirmReject()} disabled={isRejecting} className="px-5 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold cursor-pointer disabled:opacity-60">{isRejecting ? "Rejecting…" : "Reject to Draft"}</button>
-            </div>
-          </div>
-        </div>
-      )}
+      <GatePassDialog
+        open={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        godowns={godowns}
+        products={products}
+        customers={customers}
+        owners={owners}
+        packagingTypes={packagingTypes}
+        summaryRows={summaryRows}
+        approvalRequired={approvalRequired}
+        setGodowns={setGodowns}
+        setProducts={setProducts}
+        setCustomers={setCustomers}
+        setOwners={setOwners}
+        setPackagingTypes={setPackagingTypes}
+        onSaved={handleDialogSaved}
+        onPrinted={(v) => setSelectedPassForPrint(v)}
+      />
+      <GatePassReturnDialog
+        open={returnTarget !== null}
+        target={returnTarget}
+        initialLines={returnLines}
+        onClose={() => setReturnTarget(null)}
+        onSaved={handleDialogSaved}
+      />
+      <GatePassRejectDialog
+        open={rejectTarget !== null}
+        target={rejectTarget}
+        onClose={() => setRejectTarget(null)}
+        onSaved={handleDialogSaved}
+      />
     </div>
   )
 }
