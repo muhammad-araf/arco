@@ -7,29 +7,31 @@ import {
   Warehouse,
   Package,
   Cog,
-  CheckCircle2,
   Wallet,
   Tag,
   ListChecks,
 } from "lucide-react"
-import { listProducts, listGodowns, listMachines, listPackagingTypes, createProduct, deactivateProduct, reactivateProduct, updateProduct, deactivateGodown, reactivateGodown, createMachine, deactivateMachine, reactivateMachine, updateMachine, createPackagingType, deactivatePackagingType, reactivatePackagingType, updatePackagingType } from "@/app/actions/masters"
-import { listExpenseCategories, createExpenseCategory, deactivateExpenseCategory, reactivateExpenseCategory, updateExpenseCategory, listCashAccounts, createCashAccount, deactivateCashAccount, reactivateCashAccount, updateCashAccount } from "@/app/actions/finance"
-import { listProcessingTypes, createProcessingType, deactivateProcessingType, reactivateProcessingType } from "@/app/actions/processing-types"
+import { listProducts, listGodowns, listMachines, listPackagingTypes, createProduct, deactivateProduct, reactivateProduct, deactivateGodown, reactivateGodown, deactivateMachine, reactivateMachine, deactivatePackagingType, reactivatePackagingType } from "@/app/actions/masters"
+import { listExpenseCategories, deactivateExpenseCategory, reactivateExpenseCategory, listCashAccounts, deactivateCashAccount, reactivateCashAccount } from "@/app/actions/finance"
+import { listProcessingTypes, deactivateProcessingType, reactivateProcessingType } from "@/app/actions/processing-types"
 import { getStockLedger } from "@/app/actions/inventory"
-import { Product, Godown, Machine } from "@/lib/types/database"
+import { Product, Godown, Machine, PackagingType } from "@/lib/types/database"
 import { formatCurrency, formatWeight } from "@/lib/utils"
 import {
   AlertBanner,
   ConfirmDialog,
   EmptyState,
-  SubmitSpinner,
-  isPositive,
 } from "@/components/erp-ui"
 import { MastersSkeleton } from "@/components/route-skeletons"
 import { GodownFormDialog } from "@/components/godown-form-dialog"
+import { ProductFormDialog } from "@/components/product-form-dialog"
+import { MachineFormDialog } from "@/components/machine-form-dialog"
+import { PackagingFormDialog } from "@/components/packaging-form-dialog"
+import { ExpenseCategoryFormDialog, type ExpenseCategoryRow } from "@/components/expense-category-form-dialog"
+import { CashAccountFormDialog, type CashAccountRow } from "@/components/cash-account-form-dialog"
+import { ProcessingTypeFormDialog, type ProcessingTypeRow } from "@/components/processing-type-form-dialog"
 
 type Tab = "products" | "godowns" | "machines" | "packaging" | "expense-categories" | "cash-accounts" | "processing-types"
-type AddKind = "machine" | "packaging" | "expense-category" | "cash-account" | "processing-type"
 
 export default function MastersPage() {
   const [activeTab, setActiveTab] = React.useState<Tab>("products")
@@ -41,7 +43,6 @@ export default function MastersPage() {
   const [cashAccounts, setCashAccounts] = React.useState<any[]>([])
   const [processingTypes, setProcessingTypes] = React.useState<any[]>([])
 
-  const [isNewProdOpen, setIsNewProdOpen] = React.useState(false)
   const [isLoading, setIsLoading] = React.useState(true)
   const [formError, setFormError] = React.useState("")
   const [formNotice, setFormNotice] = React.useState("")
@@ -50,25 +51,18 @@ export default function MastersPage() {
   const [draftProduct, setDraftProduct] = React.useState<Product | null>(null)
   const [toggleTarget, setToggleTarget] = React.useState<Product | null>(null)
   const [referencedIds, setReferencedIds] = React.useState<Set<string>>(new Set())
-  const [masterKind, setMasterKind] = React.useState<AddKind>("machine")
-  const [masterCode, setMasterCode] = React.useState("")
-  const [masterName, setMasterName] = React.useState("")
-  const [masterExtra, setMasterExtra] = React.useState("")
-  const [masterExtra2, setMasterExtra2] = React.useState("")
-  const [masterNum1, setMasterNum1] = React.useState<number>(0)
-  const [masterNum2, setMasterNum2] = React.useState<number>(0)
-  const [masterDesc, setMasterDesc] = React.useState("")
-  const [acctKind, setAcctKind] = React.useState<"cash" | "bank" | "online">("cash")
-  const [masterPending, setMasterPending] = React.useState(false)
   const [deactTarget, setDeactTarget] = React.useState<{ kind: string; id: string; name: string } | null>(null)
-  // Godown add/edit lives in its own dialog now (POS pattern); "new" = creating.
+  // Every kind's add/edit lives in its own dialog now (POS pattern);
+  // "new" = creating, a row = editing, null = closed.
   const [godownForm, setGodownForm] = React.useState<Godown | "new" | null>(null)
+  const [productForm, setProductForm] = React.useState<Product | "new" | null>(null)
+  const [machineForm, setMachineForm] = React.useState<Machine | "new" | null>(null)
+  const [packagingForm, setPackagingForm] = React.useState<PackagingType | "new" | null>(null)
+  const [expenseForm, setExpenseForm] = React.useState<ExpenseCategoryRow | "new" | null>(null)
+  const [cashForm, setCashForm] = React.useState<CashAccountRow | "new" | null>(null)
+  const [processingFormOpen, setProcessingFormOpen] = React.useState(false)
   const [deactPending, setDeactPending] = React.useState(false)
   const productGuard = React.useRef(false)
-  const [prodName, setProdName] = React.useState("")
-  const [prodCategory, setProdCategory] = React.useState<any>("raw_seed")
-  const [prodMinStock, setProdMinStock] = React.useState<number>(2000)
-  const [weightPerBag, setWeightPerBag] = React.useState<number>(50)
 
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
@@ -95,27 +89,12 @@ export default function MastersPage() {
     loadData()
   }, [])
 
-  const handleAddProduct = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (isPending) return
-    // Spec §3.1: name required, positive bag weight, non-negative safety
-    // stock, and no duplicate product name (codes are generated unique).
-    if (!prodName.trim()) return setFormError("Product name is required.")
-    if (!isPositive(weightPerBag)) return setFormError("Standard bag weight must be greater than zero.")
-    if (prodMinStock < 0) return setFormError("Minimum safety stock cannot be negative.")
-    if (products.some((p) => p.name.trim().toLowerCase() === prodName.trim().toLowerCase())) return setFormError(`A product named "${prodName.trim()}" already exists. Pick a different name instead of duplicating the master.`)
+  // Product create keeps its confirmation step: the dialog builds
+  // the draft (validation + generated code live in the dialog) and
+  // this only opens the confirm dialog, as the old form did.
+  const handleCreateDraft = (draft: Product) => {
     setFormError("")
-    setDraftProduct({
-      id: `prod-${Date.now()}`,
-      code: `PRD-${prodName.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "-").slice(0, 12)}-${Date.now().toString().slice(-4)}`,
-      name: prodName.trim(),
-      category: prodCategory,
-      default_unit: "kg",
-      weight_per_bag: weightPerBag,
-      min_stock: prodMinStock,
-      is_active: true,
-      created_at: new Date().toISOString(),
-    })
+    setDraftProduct(draft)
     setShowConfirm(true)
   }
 
@@ -131,49 +110,13 @@ export default function MastersPage() {
       }
       setFormNotice(`Product "${draftProduct.name}" created (${(res.data as any)?.code ?? draftProduct.code}) and available in every product list.`)
       setShowConfirm(false)
-      setIsNewProdOpen(false)
+      setProductForm(null)
       setDraftProduct(null)
-      setProdName("")
       await loadData()
     } finally {
       setIsPending(false)
       productGuard.current = false
     }
-  }
-
-  const resetMasterForm = () => {
-    setMasterCode(""); setMasterName(""); setMasterExtra(""); setMasterExtra2(""); setMasterNum1(0); setMasterNum2(0); setMasterDesc("")
-  }
-
-  const handleCreateMaster = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (masterPending) return
-    // Expense categories and processing types have no code; the rest do.
-    if (masterKind !== "expense-category" && masterKind !== "processing-type" && (!masterCode.trim() || !masterName.trim())) {
-      setFormError("Master code and name are required.")
-      return
-    }
-    if ((masterKind === "expense-category" || masterKind === "processing-type") && !masterName.trim()) {
-      setFormError("Name is required.")
-      return
-    }
-    if (masterNum1 < 0 || masterNum2 < 0) return setFormError("Numbers cannot be negative.")
-    setMasterPending(true)
-    try {
-      let res: any
-      if (masterKind === "machine") res = await createMachine({ code: masterCode.trim(), name: masterName.trim(), processing_type: masterExtra.trim() || "Grading", capacity_kg_per_hour: masterNum1 || undefined, operator_name: masterExtra2.trim() || undefined })
-      else if (masterKind === "packaging") res = await createPackagingType({ code: masterCode.trim(), name: masterName.trim(), capacity_kg: masterNum1 || undefined, cost_per_bag: masterNum2 || undefined })
-      else if (masterKind === "expense-category") res = await createExpenseCategory({ name: masterName.trim(), description: masterDesc.trim() || undefined })
-      else if (masterKind === "cash-account") res = await createCashAccount({ code: masterCode.trim(), name: masterName.trim(), accountKind: acctKind, openingBalance: masterNum1 })
-      else res = await createProcessingType(masterName.trim())
-      if (!res.success) {
-        setFormError(res.error ?? "Could not create the master record.")
-        return
-      }
-      setFormNotice(`"${masterName.trim()}" created.`)
-      resetMasterForm()
-      await loadData()
-    } finally { setMasterPending(false) }
   }
 
   const handleDeactivateMaster = async () => {
@@ -223,34 +166,6 @@ export default function MastersPage() {
     await loadData()
   }
 
-  const [editTarget, setEditTarget] = React.useState<{ kind: string; id: string; name: string; extra: string; extra2: string; num1: number; num2: number; desc: string } | null>(null)
-  const [editPending, setEditPending] = React.useState(false)
-  const openEdit = (kind: string, row: any) => {
-    if (kind === "product") setEditTarget({ kind, id: row.id, name: row.name, extra: row.category, extra2: "", num1: Number(row.weight_per_bag || 0), num2: Number(row.min_stock || 0), desc: "" })
-    else if (kind === "machine") setEditTarget({ kind, id: row.id, name: row.name, extra: row.processing_type, extra2: row.operator_name || "", num1: Number(row.capacity_kg_per_hour || 0), num2: 0, desc: "" })
-    else if (kind === "packaging") setEditTarget({ kind, id: row.id, name: row.name, extra: "", extra2: "", num1: Number(row.capacity_kg || 0), num2: Number(row.cost_per_bag || 0), desc: "" })
-    else if (kind === "expense-category") setEditTarget({ kind, id: row.id, name: row.name, extra: "", extra2: "", num1: 0, num2: 0, desc: row.description || "" })
-    else setEditTarget({ kind, id: row.id, name: row.name, extra: "", extra2: "", num1: Number(row.opening_balance || 0), num2: 0, desc: "" })
-  }
-  const handleSaveEdit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!editTarget || editPending) return
-    if (!editTarget.name.trim()) return setFormError("Name is required.")
-    if (editTarget.num1 < 0 || editTarget.num2 < 0) return setFormError("Numbers cannot be negative.")
-    setEditPending(true)
-    try {
-      let res: any
-      if (editTarget.kind === "product") res = await updateProduct(editTarget.id, { name: editTarget.name.trim(), category: editTarget.extra, weight_per_bag: editTarget.num1, min_stock: editTarget.num2 })
-      else if (editTarget.kind === "machine") res = await updateMachine(editTarget.id, { name: editTarget.name.trim(), processing_type: editTarget.extra, capacity_kg_per_hour: editTarget.num1, operator_name: editTarget.extra2 })
-      else if (editTarget.kind === "packaging") res = await updatePackagingType(editTarget.id, { name: editTarget.name.trim(), capacity_kg: editTarget.num1, cost_per_bag: editTarget.num2 })
-      else if (editTarget.kind === "expense-category") res = await updateExpenseCategory({ id: editTarget.id, name: editTarget.name.trim(), description: editTarget.desc.trim() || null })
-      else res = await updateCashAccount({ id: editTarget.id, name: editTarget.name.trim(), openingBalance: editTarget.num1 })
-      if (!res.success) { setFormError(res.error ?? "Could not update."); return }
-      setFormNotice(`"${editTarget.name.trim()}" updated.`)
-      setEditTarget(null)
-      await loadData()
-    } finally { setEditPending(false) }
-  }
   const handleReactivateOther = async (kind: string, row: any) => {
     let res: any
     if (kind === "godown") res = await reactivateGodown(row.id)
@@ -284,11 +199,28 @@ export default function MastersPage() {
       {active !== false ? activeLabel : "Inactive"}
     </span>
   )
+  const openRowEdit = (kind: string, row: any) => {
+    if (kind === "godown") setGodownForm(row)
+    else if (kind === "machine") setMachineForm(row)
+    else if (kind === "packaging") setPackagingForm(row)
+    else if (kind === "expense-category") setExpenseForm(row)
+    else if (kind === "cash-account") setCashForm(row)
+  }
   const rowActions = (kind: string, row: any, name: string) => (
     <>
-      {kind !== "processing-type" && (<button type="button" onClick={() => { if (kind === "godown") setGodownForm(row); else openEdit(kind, row) }} className="px-2 py-0.5 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Edit</button>)}
+      {kind !== "processing-type" && (<button type="button" onClick={() => openRowEdit(kind, row)} className="px-2 py-0.5 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Edit</button>)}
       {row.is_active !== false ? (<button type="button" onClick={() => setDeactTarget({ kind, id: row.id, name })} className="px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Deactivate</button>) : (<button type="button" onClick={() => handleReactivateOther(kind, row)} className="px-2 py-0.5 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Reactivate</button>)}
     </>
+  )
+  const headerAddButton = (label: string, onClick: () => void) => (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+    >
+      <Plus className="h-4 w-4" />
+      <span>{label}</span>
+    </button>
   )
 
   return (
@@ -303,26 +235,13 @@ export default function MastersPage() {
           </h1>
           <p className="text-xs text-muted-foreground mt-1">Employees live on the Employees page and parties on the Parties page. Deactivation is reversible and never deletes history.</p>
         </div>
-        {activeTab === "products" && (
-          <button
-            type="button"
-            onClick={() => setIsNewProdOpen(true)}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Add New Product</span>
-          </button>
-        )}
-        {activeTab === "godowns" && (
-          <button
-            type="button"
-            onClick={() => setGodownForm("new")}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Add godown</span>
-          </button>
-        )}
+        {activeTab === "products" && headerAddButton("Add New Product", () => setProductForm("new"))}
+        {activeTab === "godowns" && headerAddButton("Add godown", () => setGodownForm("new"))}
+        {activeTab === "machines" && headerAddButton("Add machine", () => setMachineForm("new"))}
+        {activeTab === "packaging" && headerAddButton("Add packaging type", () => setPackagingForm("new"))}
+        {activeTab === "expense-categories" && headerAddButton("Add expense category", () => setExpenseForm("new"))}
+        {activeTab === "cash-accounts" && headerAddButton("Add cash account", () => setCashForm("new"))}
+        {activeTab === "processing-types" && headerAddButton("Add processing type", () => setProcessingFormOpen(true))}
       </div>
 
       {/* Tabs */}
@@ -357,7 +276,7 @@ export default function MastersPage() {
                 {products.length === 0 && (
                   <tr>
                     <td colSpan={8} className="py-4">
-                      <EmptyState title="No products yet" hint="Add your first product." actionLabel="Add New Product" onAction={() => setIsNewProdOpen(true)} />
+                      <EmptyState title="No products yet" hint="Add your first product." actionLabel="Add New Product" onAction={() => setProductForm("new")} />
                     </td>
                   </tr>
                 )}
@@ -371,7 +290,7 @@ export default function MastersPage() {
                     <td className="py-3 text-right font-mono font-bold text-foreground">{formatWeight(p.min_stock || 0)}</td>
                     <td className="py-3 text-center">{statusBadge(p.is_active)}</td>
                     <td className="py-3 text-center">
-                      <button type="button" onClick={() => openEdit("product", p)} className="px-2 py-1 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Edit</button>
+                      <button type="button" onClick={() => setProductForm(p)} className="px-2 py-1 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Edit</button>
                       <button type="button" onClick={() => setToggleTarget(p)} className="px-2 py-1 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer" title={p.is_active ? "Deactivate" : "Reactivate product"}>
                         {p.is_active ? "Deactivate" : "Reactivate"}
                       </button>
@@ -431,7 +350,7 @@ export default function MastersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {machines.length === 0 && (<tr><td colSpan={6} className="py-4 text-muted-foreground">No machines yet — add one below.</td></tr>)}
+                {machines.length === 0 && (<tr><td colSpan={6} className="py-4"><EmptyState title="No machines yet" hint="Add your first machine." actionLabel="Add machine" onAction={() => setMachineForm("new")} /></td></tr>)}
                 {machines.map((m) => (
                   <tr key={m.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-mono font-bold text-muted-foreground">{m.code}</td>
@@ -464,7 +383,7 @@ export default function MastersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {packaging.length === 0 && (<tr><td colSpan={6} className="py-4 text-muted-foreground">No packaging types yet — add one below.</td></tr>)}
+                {packaging.length === 0 && (<tr><td colSpan={6} className="py-4"><EmptyState title="No packaging types yet" hint="Add your first packaging type." actionLabel="Add packaging type" onAction={() => setPackagingForm("new")} /></td></tr>)}
                 {packaging.map((pk: any) => (
                   <tr key={pk.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-mono font-bold text-muted-foreground">{pk.code}</td>
@@ -495,7 +414,7 @@ export default function MastersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {expenseCategories.length === 0 && (<tr><td colSpan={3} className="py-4 text-muted-foreground">No categories yet — add one below.</td></tr>)}
+                {expenseCategories.length === 0 && (<tr><td colSpan={3} className="py-4"><EmptyState title="No categories yet" hint="Add your first category." actionLabel="Add expense category" onAction={() => setExpenseForm("new")} /></td></tr>)}
                 {expenseCategories.map((c: any) => (
                   <tr key={c.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-bold text-foreground">{c.name}</td>
@@ -525,7 +444,7 @@ export default function MastersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {cashAccounts.length === 0 && (<tr><td colSpan={5} className="py-4 text-muted-foreground">No cash accounts yet — add one below.</td></tr>)}
+                {cashAccounts.length === 0 && (<tr><td colSpan={5} className="py-4"><EmptyState title="No cash accounts yet" hint="Add your first cash account." actionLabel="Add cash account" onAction={() => setCashForm("new")} /></td></tr>)}
                 {cashAccounts.map((a: any) => (
                   <tr key={a.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-mono font-bold text-muted-foreground">{a.code}</td>
@@ -546,7 +465,7 @@ export default function MastersPage() {
         <div className="expensive-card p-5">
           <p className="text-xs text-muted-foreground mb-4">When this list is empty, processing type stays a free-text field. Deactivation never deletes a type.</p>
           <div className="text-xs">
-            {processingTypes.length === 0 && <p className="text-muted-foreground">No processing types yet — add one below.</p>}
+            {processingTypes.length === 0 && <EmptyState title="No processing types yet" hint="Add your first processing type." actionLabel="Add processing type" onAction={() => setProcessingFormOpen(true)} />}
             {processingTypes.map((pt: any) => (
               <div key={pt.id} className="flex items-center justify-between py-2 border-b border-border">
                 <span className="font-semibold">{pt.name} {pt.is_active === false ? <span className="text-muted-foreground">— Inactive</span> : ""}</span>
@@ -557,53 +476,6 @@ export default function MastersPage() {
         </div>
       )}
 
-      {/* New Product Modal */}
-      {isNewProdOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <h3 className="text-sm font-bold text-foreground flex items-center gap-2">
-                <Package className="h-4 w-4 text-emerald-500" />
-                Add Product Master
-              </h3>
-              <button type="button" onClick={() => setIsNewProdOpen(false)} className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer">✕</button>
-            </div>
-            <form onSubmit={handleAddProduct} className="space-y-4 text-xs">
-              <AlertBanner tone="error" message={formError} onDismiss={() => setFormError("")} />
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="product-title">Product Title</label>
-                <input id="product-title" type="text" value={prodName} onChange={(e) => setProdName(e.target.value)} placeholder="e.g. Graded Hybrid Corn (DK-6789)" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required />
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="category-2">Category</label>
-                  <select id="category-2" value={prodCategory} onChange={(e) => setProdCategory(e.target.value as any)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground">
-                    <option value="raw_seed">Raw Seed</option>
-                    <option value="finished_seed">Finished Seed</option>
-                    <option value="intermediate">Intermediate / Grading</option>
-                    <option value="by_product">By-Product (Phok/Chhilka)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block font-medium text-foreground mb-1" htmlFor="standard-bag-kg-2">Standard Bag (kg)</label>
-                  <input id="standard-bag-kg-2" type="number" value={weightPerBag} onChange={(e) => setWeightPerBag(Number(e.target.value))} min="1" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" required />
-                </div>
-              </div>
-              <div>
-                <label className="block font-medium text-foreground mb-1" htmlFor="minimum-safety-stock-kg-2">Minimum Safety Stock (kg)</label>
-                <input id="minimum-safety-stock-kg-2" type="number" value={prodMinStock} onChange={(e) => setProdMinStock(Number(e.target.value))} min="0" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" />
-              </div>
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button type="button" onClick={() => setIsNewProdOpen(false)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>
-                <button type="submit" disabled={isPending} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed">
-                  {isPending ? <SubmitSpinner /> : <CheckCircle2 className="h-4 w-4" />}
-                  <span>{isPending ? "Creating…" : "Create Product"}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
       <ConfirmDialog
         open={showConfirm}
         title="Create this product?"
@@ -613,73 +485,6 @@ export default function MastersPage() {
         onConfirm={handleConfirmProduct}
         onCancel={() => { setShowConfirm(false); setDraftProduct(null) }}
       />
-
-      {/* Add a master record (all kinds except products, which use the modal above) */}
-      <div className="expensive-card p-5">
-        <h2 className="text-sm font-bold text-foreground mb-1">Add a master record</h2>
-        <p className="text-xs text-muted-foreground mb-4">Deactivation is reversible from the list above.</p>
-        <form onSubmit={handleCreateMaster} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="kind">Kind *</label><select id="kind" value={masterKind} onChange={(e) => setMasterKind(e.target.value as AddKind)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="machine">Machine</option><option value="packaging">Packaging type</option><option value="expense-category">Expense category</option><option value="cash-account">Cash account</option><option value="processing-type">Processing type</option></select></div>
-          {masterKind !== "expense-category" && masterKind !== "processing-type" && (<div><label className="block font-medium text-foreground mb-1" htmlFor="code">Code *</label><input id="code" value={masterCode} onChange={(e) => setMasterCode(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>)}
-          <div><label className="block font-medium text-foreground mb-1" htmlFor="name-2">Name *</label><input id="name-2" value={masterName} onChange={(e) => setMasterName(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-          
-          {masterKind === "machine" && (<>
-            <div><label className="block font-medium text-foreground mb-1" htmlFor="processing-type">Processing type</label><input id="processing-type" value={masterExtra} onChange={(e) => setMasterExtra(e.target.value)} placeholder="e.g. Grading" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-            <div><label className="block font-medium text-foreground mb-1" htmlFor="throughput">Throughput (kg/hr)</label><input id="throughput" type="number" min="0" value={masterNum1} onChange={(e) => setMasterNum1(Number(e.target.value) || 0)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-            <div><label className="block font-medium text-foreground mb-1" htmlFor="operator">Operator</label><input id="operator" value={masterExtra2} onChange={(e) => setMasterExtra2(e.target.value)} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-          </>)}
-          {masterKind === "packaging" && (<>
-            <div><label className="block font-medium text-foreground mb-1" htmlFor="capacity-kg">Capacity (kg)</label><input id="capacity-kg" type="number" min="0" value={masterNum1} onChange={(e) => setMasterNum1(Number(e.target.value) || 0)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-            <div><label className="block font-medium text-foreground mb-1" htmlFor="cost-per-bag">Cost per bag</label><input id="cost-per-bag" type="number" min="0" value={masterNum2} onChange={(e) => setMasterNum2(Number(e.target.value) || 0)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-          </>)}
-          {masterKind === "expense-category" && (<div className="sm:col-span-2"><label className="block font-medium text-foreground mb-1" htmlFor="description">Description</label><input id="description" value={masterDesc} onChange={(e) => setMasterDesc(e.target.value)} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>)}
-          {masterKind === "cash-account" && (<>
-            <div><label className="block font-medium text-foreground mb-1" htmlFor="kind-2">Kind *</label><select id="kind-2" value={acctKind} onChange={(e) => setAcctKind(e.target.value as "cash" | "bank" | "online")} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="cash">Cash</option><option value="bank">Bank</option><option value="online">Online</option></select></div>
-            <div><label className="block font-medium text-foreground mb-1" htmlFor="opening-balance">Opening balance</label><input id="opening-balance" type="number" min="0" value={masterNum1} onChange={(e) => setMasterNum1(Number(e.target.value) || 0)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-          </>)}
-          <div className="sm:col-span-2 lg:col-span-4 flex justify-end"><button type="submit" disabled={masterPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold cursor-pointer disabled:opacity-60">{masterPending ? "Creating…" : "Create master record"}</button></div>
-        </form>
-      </div>
-
-      {editTarget && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
-          <div className="expensive-card w-full max-w-md p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <h3 className="text-sm font-bold text-foreground">Edit {editTarget.kind}</h3>
-              <button type="button" onClick={() => setEditTarget(null)} className="text-muted-foreground hover:text-foreground text-sm font-bold cursor-pointer">✕</button>
-            </div>
-            <form onSubmit={handleSaveEdit} className="space-y-4 text-xs">
-              <div><label className="block font-medium text-foreground mb-1" htmlFor="name">Name *</label><input id="name" value={editTarget.name} onChange={(e) => setEditTarget({ ...editTarget, name: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" required /></div>
-              {editTarget.kind === "product" && (<>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="category">Category</label><select id="category" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="raw_seed">Raw Seed</option><option value="finished_seed">Finished Seed</option><option value="intermediate">Intermediate / Grading</option><option value="by_product">By-Product</option></select></div>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="standard-bag-kg">Standard bag (kg)</label><input id="standard-bag-kg" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="minimum-safety-stock-kg">Minimum safety stock (kg)</label><input id="minimum-safety-stock-kg" type="number" min="0" value={editTarget.num2} onChange={(e) => setEditTarget({ ...editTarget, num2: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-              </>)}
-              
-              {editTarget.kind === "machine" && (<>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="processing-type">Processing type</label><input id="processing-type" value={editTarget.extra} onChange={(e) => setEditTarget({ ...editTarget, extra: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="throughput-kg-hr">Throughput (kg/hr)</label><input id="throughput-kg-hr" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="operator">Operator</label><input id="operator" value={editTarget.extra2} onChange={(e) => setEditTarget({ ...editTarget, extra2: e.target.value })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-              </>)}
-              {editTarget.kind === "packaging" && (<>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="capacity-kg">Capacity (kg)</label><input id="capacity-kg" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="cost-per-bag">Cost per bag</label><input id="cost-per-bag" type="number" min="0" value={editTarget.num2} onChange={(e) => setEditTarget({ ...editTarget, num2: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-              </>)}
-              {editTarget.kind === "expense-category" && (<>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="description">Description</label><input id="description" value={editTarget.desc} onChange={(e) => setEditTarget({ ...editTarget, desc: e.target.value })} placeholder="Optional" className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground" /></div>
-              </>)}
-              {editTarget.kind === "cash-account" && (<>
-                <div><label className="block font-medium text-foreground mb-1" htmlFor="opening-balance">Opening balance</label><input id="opening-balance" type="number" min="0" value={editTarget.num1} onChange={(e) => setEditTarget({ ...editTarget, num1: Number(e.target.value) || 0 })} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground font-mono" /></div>
-                <p className="text-[11px] text-muted-foreground">Code and kind never change after creation.</p>
-              </>)}
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button type="button" onClick={() => setEditTarget(null)} className="px-4 py-2 rounded-lg bg-muted text-muted-foreground text-xs font-semibold cursor-pointer">Cancel</button>
-                <button type="submit" disabled={editPending} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold cursor-pointer disabled:opacity-60">{editPending ? "Saving…" : "Save changes"}</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
       <ConfirmDialog
         open={deactTarget !== null}
         title={`Deactivate "${deactTarget?.name ?? ""}"?`}
@@ -704,6 +509,47 @@ export default function MastersPage() {
         godown={godownForm === "new" ? null : godownForm}
         godowns={godowns}
         onClose={() => setGodownForm(null)}
+        onSaved={(notice) => { setFormNotice(notice); void loadData() }}
+      />
+      <ProductFormDialog
+        open={productForm !== null}
+        product={productForm === "new" ? null : productForm}
+        products={products}
+        onClose={() => setProductForm(null)}
+        onSaved={(notice) => { setFormNotice(notice); void loadData() }}
+        onCreateDraft={handleCreateDraft}
+      />
+      <MachineFormDialog
+        open={machineForm !== null}
+        machine={machineForm === "new" ? null : machineForm}
+        machines={machines}
+        onClose={() => setMachineForm(null)}
+        onSaved={(notice) => { setFormNotice(notice); void loadData() }}
+      />
+      <PackagingFormDialog
+        open={packagingForm !== null}
+        packagingType={packagingForm === "new" ? null : packagingForm}
+        packagingTypes={packaging}
+        onClose={() => setPackagingForm(null)}
+        onSaved={(notice) => { setFormNotice(notice); void loadData() }}
+      />
+      <ExpenseCategoryFormDialog
+        open={expenseForm !== null}
+        category={expenseForm === "new" ? null : expenseForm}
+        onClose={() => setExpenseForm(null)}
+        onSaved={(notice) => { setFormNotice(notice); void loadData() }}
+      />
+      <CashAccountFormDialog
+        open={cashForm !== null}
+        account={cashForm === "new" ? null : cashForm}
+        accounts={cashAccounts}
+        onClose={() => setCashForm(null)}
+        onSaved={(notice) => { setFormNotice(notice); void loadData() }}
+      />
+      <ProcessingTypeFormDialog
+        open={processingFormOpen}
+        processingTypes={processingTypes}
+        onClose={() => setProcessingFormOpen(false)}
         onSaved={(notice) => { setFormNotice(notice); void loadData() }}
       />
     </div>
