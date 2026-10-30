@@ -63,7 +63,7 @@ import {
   computeStockValuation,
   isPackagingConsumptionVoucherType,
 } from "@/lib/calc/finance-valuation";
-import { listGodowns, listProducts, listParties, listCashAccounts } from "./masters";
+import { listGodowns, listProducts, listParties } from "./masters";
 
 type Db = Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>;
 

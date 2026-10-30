@@ -16,6 +16,7 @@ import {
   Wallet,
   Users2,
   UserCog,
+  UserCheck,
   BarChart3,
   Database,
   ChevronRight,

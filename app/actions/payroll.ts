@@ -50,7 +50,8 @@ import {
   computePayroll,
   cashRunningBalance,
 } from "@/lib/calc";
-import { listEmployees, listCashAccounts } from "./masters";
+import { listEmployees } from "./masters";
+import { listCashAccounts } from "./finance";
 
 type Db = Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>;
 

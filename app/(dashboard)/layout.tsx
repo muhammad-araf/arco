@@ -1,5 +1,6 @@
 import * as React from "react"
 import { redirect } from "next/navigation"
+import { connection } from "next/server"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SessionIdleTimeout } from "@/components/session-idle-timeout"
 import { getSettingsSnapshot } from "@/app/actions/settings"
@@ -19,6 +20,8 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode
 }) {
+  await connection()
+
   // Session guard: no authenticated Supabase session -> /login.
   // Fail closed on any auth lookup error, the same as no session.
   let session = null
