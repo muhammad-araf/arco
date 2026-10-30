@@ -127,8 +127,8 @@ export default function GatePassPage() {
       } catch {
         setApprovalRequired(false)
       }
-      setSummaryRows(Array.isArray(sm.data) ? sm.data : [])
-      setGatePasses((Array.isArray(gp.data) ? gp.data : []).map((row: any) => ({
+      setSummaryRows(Array.isArray(data.summary) ? data.summary : [])
+      setGatePasses((Array.isArray(data.passes) ? data.passes : []).map((row: any) => ({
         ...row,
         customer_name: partyList.find((x) => x.id === row.customer_id)?.name ?? "Not set",
         godown_name: godownList.find((x) => x.id === row.godown_id)?.name ?? "Not set",

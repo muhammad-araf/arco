@@ -21,12 +21,12 @@ import { logAudit } from "@/lib/audit";
  */
 
 type Db = Awaited<ReturnType<typeof createClient>>;
-type ActionResult = { success: boolean; data?: unknown; error?: string };
+type ActionResult<T = unknown> = { success: boolean; data?: T; error?: string };
 
-function ok(data: unknown): ActionResult {
+function ok<T = unknown>(data: T): ActionResult<T> {
   return { success: true, data };
 }
-function fail(error: string): ActionResult {
+function fail(error: string): ActionResult<never> {
   return { success: false, error };
 }
 function errMessage(e: unknown): string {

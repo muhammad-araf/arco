@@ -75,12 +75,12 @@ import { listProcessingTypes } from "./processing-types";
  */
 
 type Db = Awaited<ReturnType<typeof createClient>>;
-type ActionResult = { success: boolean; data?: unknown; error?: string };
+type ActionResult<T = unknown> = { success: boolean; data?: T; error?: string };
 
-function ok(data: unknown): ActionResult {
+function ok<T = unknown>(data: T): ActionResult<T> {
   return { success: true, data };
 }
-function fail(error: string): ActionResult {
+function fail<T = never>(error: string): ActionResult<T> {
   return { success: false, error };
 }
 function errMessage(e: unknown): string {

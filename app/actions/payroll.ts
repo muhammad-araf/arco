@@ -55,7 +55,7 @@ import { listCashAccounts } from "./finance";
 
 type Db = Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>;
 
-function fail(error: string): ActionResult {
+function fail<T = never>(error: string): ActionResult<T> {
   return { success: false, error };
 }
 
