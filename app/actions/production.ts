@@ -277,9 +277,17 @@ export async function listRecipes(includeRetired = false): Promise<ActionResult>
     const supabase = await createClient();
     const gate = await requireSignedIn(supabase);
     if (!gate.ok) return fail(gate.error);
+    // Only the columns the production page and the batch dialog read:
+    // the register table (code, name, version, expected_yield_pct) and
+    // the batch dialog's recipe dropdown + input prefill (id, code,
+    // version, name, output_product_id, recipe_items product/ratio).
+    // Recipes are master data (code × version unique), not a growing
+    // transaction log, so no row limit — the dialog needs the full
+    // active list to offer every recipe. Unused header columns
+    // (notes, packaging_type_id, status, created_at) are not shipped.
     let query = supabase
       .from("recipes")
-      .select("*, recipe_items(*)")
+      .select("id, code, name, version, output_product_id, expected_yield_pct, recipe_items(product_id, required_ratio_pct)")
       .order("code")
       .order("version", { ascending: false });
     if (!includeRetired) query = query.eq("status", "active");
@@ -522,10 +530,16 @@ export async function listBatches(filters?: {
     const supabase = await createClient();
     const gate = await requireSignedIn(supabase);
     if (!gate.ok) return fail(gate.error);
-    let query = supabase
-      .from("production_batches")
-      .select("*, production_batch_inputs(*), production_batch_outputs(*)")
-      .order("date", { ascending: false });
+    // Header columns only — no nested input/output lines. The
+    // register table reads header aggregates (actual_input_kg,
+    // actual_output_kg, byproduct_kg, yield_pct); the packing page
+    // reads header fields only (id, status, batch_no,
+    // output_product_id, actual_output_kg); print re-fetches the
+    // single batch via getBatch. Deliberately NO row limit: the page
+    // filters client-side (today / posted drill-downs over all
+    // batches), so a server cap would silently drop old batches
+    // from those views.
+    let query = supabase.from("production_batches").select("*").order("date", { ascending: false });
     if (filters?.status) query = query.eq("status", filters.status);
     if (filters?.godownId) query = query.eq("godown_id", filters.godownId);
     if (filters?.recipeId) query = query.eq("recipe_id", filters.recipeId);

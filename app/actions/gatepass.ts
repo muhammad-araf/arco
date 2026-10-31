@@ -286,10 +286,18 @@ export async function listGatePasses(filters?: {
     const supabase = await createClient();
     const gate = await requireSignedIn(supabase);
     if (!gate.ok) return fail(gate.error);
-    let query = supabase
-      .from("gate_passes")
-      .select("*, gate_pass_items(*)")
-      .order("date", { ascending: false });
+    // Header columns only — no nested gate_pass_items. The register
+    // table and the CSV/Excel/PDF export read header columns only
+    // (pass_no, totals, receiver, driver, status, …); print and return
+    // both re-fetch the single pass via getGatePass, so the list's
+    // items were shipped on every load and never rendered. Dropping
+    // them removes the per-pass line multiplier without changing any
+    // displayed row or figure. Deliberately NO row limit here: the
+    // page filters client-side (status / customer / vehicle / date
+    // range, plus dashboard drill-downs and export totals over the
+    // visible set), so a server cap would silently drop old passes
+    // from filtered views and export totals.
+    let query = supabase.from("gate_passes").select("*").order("date", { ascending: false });
     if (filters?.status) query = query.eq("status", filters.status);
     if (filters?.customerId) query = query.eq("customer_id", filters.customerId);
     if (filters?.godownId) query = query.eq("godown_id", filters.godownId);

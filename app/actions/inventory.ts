@@ -226,6 +226,15 @@ export async function getStockSummary(): Promise<ActionResult> {
         });
       }
     } else {
+      // Last-resort fallback only: the whole ledger ships to JS to
+      // aggregate. Figures are unchanged, but this is the slow path —
+      // the warning makes the missing live migration visible in logs
+      // instead of failing silently fast. Apply
+      // supabase/migration-stock-summary-rpc.sql at go-live to stop it.
+      console.warn(
+        "[arco] stock_summary RPC unavailable in getStockSummary, falling back to full stock_ledger fetch:",
+        rpc.error?.message ?? "unknown RPC error",
+      );
       const ledger = await supabase
         .from("stock_ledger")
         .select("godown_id, product_id, party_id, inward_qty, outward_qty");
@@ -318,6 +327,13 @@ export async function getInventoryInitData(): Promise<ActionResult> {
         });
       }
     } else {
+      // Last-resort fallback only — same warning as getStockSummary:
+      // figures unchanged, but the full-ledger fetch is the slow path.
+      // Apply supabase/migration-stock-summary-rpc.sql at go-live.
+      console.warn(
+        "[arco] stock_summary RPC unavailable in getInventoryInitData, falling back to full stock_ledger fetch:",
+        rpc.error?.message ?? "unknown RPC error",
+      );
       const ledger = await supabase
         .from("stock_ledger")
         .select("godown_id, product_id, party_id, inward_qty, outward_qty");
