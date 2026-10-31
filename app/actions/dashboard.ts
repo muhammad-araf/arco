@@ -153,10 +153,35 @@ export async function getDashboardData(): Promise<ActionResult> {
         ? db.from("parties").select("id, type, opening_balance, balance_type")
         : Promise.resolve({ data: [], error: null }),
       financeAllowed
-        ? db
-          .from("party_ledger")
-          .select("party_id, running_balance, created_at")
-          .order("created_at", { ascending: true })
+        ? (async () => {
+          // DB-side latest-balance aggregate first (supabase/
+          // migration-speed-party-cash-openings.sql): one row per
+          // party instead of shipping the whole party_ledger. The
+          // RPC's DISTINCT ON (created_at DESC, id DESC) picks the
+          // same row the old ascending-order JS overwrite picked:
+          // the maximum created_at per party (see the migration's
+          // tie caveat for identical-created_at rows, where the old
+          // pick was unspecified). INTERIM FALLBACK: if the
+          // migration was never applied live, the RPC errors and we
+          // fall back to the old full fetch, which produces
+          // identical figures — remove the fallback once the
+          // migration is confirmed applied.
+          const rpc = await db.rpc("party_latest_balances");
+          if (!rpc.error && Array.isArray(rpc.data)) {
+            return {
+              data: (rpc.data as { party_id: string; running_balance: number | null }[]).map((r) => ({
+                party_id: r.party_id,
+                running_balance: r.running_balance,
+                created_at: null,
+              })),
+              error: null,
+            };
+          }
+          return db
+            .from("party_ledger")
+            .select("party_id, running_balance, created_at")
+            .order("created_at", { ascending: true });
+        })()
         : Promise.resolve({ data: [], error: null }),
       financeAllowed
         ? db.from("cash_accounts").select("opening_balance")

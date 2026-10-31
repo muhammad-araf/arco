@@ -2474,14 +2474,42 @@ export async function getDaybook(input: {
       }
     }
     // Prior movements (before `from`) belong in each group's opening.
-    let priorQ = db.from("cash_ledger").select("debit, credit, cash_account_id, account").lt("date", input.from);
-    if (input.accountId) priorQ = priorQ.eq("cash_account_id", input.accountId);
-    else if (input.accountKind) priorQ = priorQ.eq("account", input.accountKind);
-    const { data: prior } = await priorQ;
-    for (const r of prior ?? []) {
-      const row = r as Record<string, unknown>;
-      const g = groupFor(row.cash_account_id ? String(row.cash_account_id) : null, String(row.account));
-      g.opening = roundMoney(g.opening + (Number(row.debit) || 0) - (Number(row.credit) || 0));
+    // DB-side aggregate first (supabase/migration-speed-party-cash-
+    // openings.sql): one grouped sum per (cash_account_id, account)
+    // pair instead of shipping every pre-period row. The pair grain
+    // matters: kind views filter the old scan by the ledger `account`
+    // column while grouping by cash_account_id, so the caller re-
+    // applies exactly those filters below (kind -> account = kind,
+    // accountId -> cash_account_id = id, all -> no filter). The sum
+    // is figure-identical to the per-row loop (debit/credit are
+    // NUMERIC(15,2), so the exact decimal sum rounded to 2dp equals
+    // the old per-row rounded accumulation), and a pair row is
+    // emitted even at net 0, so net-zero groups are still created.
+    // INTERIM FALLBACK: if the migration was never applied live, the
+    // RPC errors and we fall back to the old full scan, which
+    // produces identical figures — the app works either way, just
+    // slower without the migration. Remove the fallback once the
+    // migration is confirmed applied.
+    const rpcPrior = await db.rpc("cash_openings", { p_before: input.from });
+    if (!rpcPrior.error && Array.isArray(rpcPrior.data)) {
+      for (const r of rpcPrior.data as { cash_account_id: string | null; account: string; opening_delta: number }[]) {
+        const acctId = r.cash_account_id ? String(r.cash_account_id) : null;
+        const acct = String(r.account);
+        if (input.accountId && acctId !== input.accountId) continue;
+        if (input.accountKind && acct !== input.accountKind) continue;
+        const g = groupFor(acctId, acct);
+        g.opening = roundMoney(g.opening + (Number(r.opening_delta) || 0));
+      }
+    } else {
+      let priorQ = db.from("cash_ledger").select("debit, credit, cash_account_id, account").lt("date", input.from);
+      if (input.accountId) priorQ = priorQ.eq("cash_account_id", input.accountId);
+      else if (input.accountKind) priorQ = priorQ.eq("account", input.accountKind);
+      const { data: prior } = await priorQ;
+      for (const r of prior ?? []) {
+        const row = r as Record<string, unknown>;
+        const g = groupFor(row.cash_account_id ? String(row.cash_account_id) : null, String(row.account));
+        g.opening = roundMoney(g.opening + (Number(row.debit) || 0) - (Number(row.credit) || 0));
+      }
     }
     let q = db.from("cash_ledger").select("*")
       .gte("date", input.from).lt("date", toExclusive)
