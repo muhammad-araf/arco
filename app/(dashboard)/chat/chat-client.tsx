@@ -7,15 +7,10 @@ import {
   Loader2,
   CheckCircle2,
   Database,
-  Boxes,
-  Users2,
-  Wallet,
-  ScrollText,
   Copy,
   Check,
   Plus,
   Trash2,
-  Brain,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -61,13 +56,7 @@ function ThinkingBlock({ thinking, status }: { thinking?: string; status?: strin
         onClick={() => setOpen(!open)}
         className="w-full px-3 py-2 flex items-center justify-between text-left hover:bg-muted/70 transition-colors text-muted-foreground hover:text-foreground cursor-pointer"
       >
-        <div className="flex items-center gap-2 font-medium">
-          <Brain className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-          <span>{status ? status : 'Thought Process & Database Tools'}</span>
-          {status && (
-            <span className="flex h-1.5 w-1.5 rounded-full bg-amber-500 animate-ping shrink-0" />
-          )}
-        </div>
+        <span className="font-medium">Thought Process</span>
         {thinking && (
           <div className="flex items-center gap-1 text-[11px] text-muted-foreground/80">
             <span>{open ? 'Hide' : 'Show steps'}</span>
@@ -84,33 +73,6 @@ function ThinkingBlock({ thinking, status }: { thinking?: string; status?: strin
     </div>
   )
 }
-
-const STARTER_PROMPTS = [
-  {
-    icon: Wallet,
-    title: 'Daybook & Cash Flow',
-    desc: 'Audit cash-in, expenses, and net daily cash',
-    prompt: 'Show today cash in hand and daybook summary'
-  },
-  {
-    icon: Users2,
-    title: 'Party Balances',
-    desc: 'Customer receivables & vendor payables',
-    prompt: 'Top party balances: kis se kitna lena he aur kis ko kitna dena he?'
-  },
-  {
-    icon: Boxes,
-    title: 'Live Stock Levels',
-    desc: 'Godown inventory & low-stock alerts',
-    prompt: 'Check stock levels in all godowns and low stock alerts'
-  },
-  {
-    icon: ScrollText,
-    title: 'Machinery & Production',
-    desc: 'Processing jobs, batch yields & billing',
-    prompt: 'Summary of unbilled machinery jobs and recent production batches'
-  }
-]
 
 export function ChatClient({ actor }: { actor: { userId: string; email: string | null; role: string; displayName: string } }) {
   const router = useRouter()
@@ -401,19 +363,18 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
       {/* Session History Sidebar — full width on mobile (one panel at a
           time), w-72 beside the panel on desktop. */}
       <div className={`w-full md:w-72 border-r border-border bg-muted/20 flex-col shrink-0 ${mobileView === 'panel' ? 'hidden md:flex' : 'flex'}`}>
-        <div className="p-3 border-b border-border flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Bot className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-            <span className="text-xs font-bold text-foreground">Conversations</span>
-          </div>
+        <div className="p-3 border-b border-border space-y-2.5">
           <button
             type="button"
             onClick={handleNewChat}
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer"
+            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer"
           >
             <Plus className="h-3.5 w-3.5" />
-            <span>New</span>
+            <span>New Chat</span>
           </button>
+          <p className="text-[11px] font-semibold tracking-wide text-muted-foreground">
+            RECENT CHATS ({sessions.length})
+          </p>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
@@ -445,87 +406,35 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
             )
           })}
         </div>
-
-        <div className="p-2.5 border-t border-border bg-card text-[11px] text-muted-foreground flex items-center justify-between gap-2">
-          <span className="truncate min-w-0">{actor.displayName} ({actor.role})</span>
-          <span className="flex h-2 w-2 shrink-0 rounded-full bg-emerald-500" title="Online" />
-        </div>
       </div>
 
       {/* Main Chat Area — hidden on mobile while the list is shown. */}
       <div className={`flex-1 flex-col min-w-0 bg-background ${mobileView === 'list' ? 'hidden md:flex' : 'flex'}`}>
-        {/* Top Header */}
-        <div className="h-12 border-b border-border px-4 flex items-center justify-between gap-2 bg-card">
-          <div className="flex items-center gap-2 min-w-0">
-            <button
-              type="button"
-              onClick={() => setMobileView('list')}
-              aria-label="Back to conversations"
-              className="md:hidden inline-flex items-center gap-0.5 shrink-0 p-1.5 rounded hover:bg-muted text-muted-foreground"
-            >
-              <ChevronLeft className="h-4 w-4" />
-              <span className="text-xs font-medium">Back</span>
-            </button>
-            <div className="h-7 w-7 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0">
-              <Bot className="h-3.5 w-3.5" />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-xs font-bold text-foreground truncate">
-                ARCO AI Command Center
-              </h2>
-              <p className="text-[10px] text-muted-foreground truncate">
-                Real-time database queries & operational finance assistance
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleNewChat}
-              className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-muted hover:bg-muted/80 text-foreground text-xs font-medium border border-border cursor-pointer transition-colors"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>New Chat</span>
-            </button>
-          </div>
+        {/* Mobile Back row — the old header carried the Back button, so
+            this slim md:hidden row keeps that affordance. */}
+        <div className="md:hidden border-b border-border px-3 py-2 bg-card">
+          <button
+            type="button"
+            onClick={() => setMobileView('list')}
+            aria-label="Back to conversations"
+            className="inline-flex items-center gap-0.5 p-1.5 rounded hover:bg-muted text-muted-foreground"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            <span className="text-xs font-medium">Back</span>
+          </button>
         </div>
 
-        {/* Messages Stream */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
+        {/* Messages Stream — centered max-width column. */}
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6">
+          <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col space-y-4">
           {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center max-w-xl mx-auto py-8">
+            <div className="flex flex-1 flex-col items-center justify-center text-center py-8">
               <div className="h-12 w-12 rounded-lg bg-emerald-600/10 text-emerald-600 dark:text-emerald-400 border border-emerald-600/25 flex items-center justify-center mb-3">
                 <Bot className="h-6 w-6" />
               </div>
               <h3 className="text-sm font-bold text-foreground">
                 How can I assist your operations today?
               </h3>
-              <p className="text-xs text-muted-foreground mt-1 max-w-md">
-                Ask anything about cash balances, daybook, inventory stock, customer receivables, machinery jobs, or record daily attendance.
-              </p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mt-6 w-full text-left">
-                {STARTER_PROMPTS.map((sp, idx) => {
-                  const Icon = sp.icon
-                  return (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => handleSubmit(sp.prompt)}
-                      className="p-3 rounded-md border border-border bg-card hover:bg-muted/40 hover:border-emerald-600/40 text-left transition-all cursor-pointer group"
-                    >
-                      <div className="flex items-center gap-2 text-foreground font-semibold text-xs group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
-                        <Icon className="h-3.5 w-3.5 shrink-0" />
-                        <span>{sp.title}</span>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
-                        {sp.desc}
-                      </p>
-                    </button>
-                  )
-                })}
-              </div>
             </div>
           ) : (
             messages.map(m => {
@@ -628,6 +537,7 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
           )}
 
           <div ref={messagesEndRef} />
+          </div>
         </div>
 
         {/* Input Bar */}
@@ -638,7 +548,7 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
               value={input}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder="Ask anything: Daybook summary, party balances, check godown stock, record attendance..."
+              placeholder="Ask anything"
               rows={1}
               disabled={loading}
               className="w-full min-w-0 resize-none border-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none p-2 min-h-[38px] max-h-[160px] leading-relaxed"
@@ -657,7 +567,7 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
             </button>
           </div>
           <p className="text-[10px] text-muted-foreground text-center mt-1.5">
-            Press <kbd className="font-mono bg-muted px-1 py-0.5 rounded border border-border text-[9px]">Enter</kbd> to send, <kbd className="font-mono bg-muted px-1 py-0.5 rounded border border-border text-[9px]">Shift+Enter</kbd> for newline. AI actions execute live against your Supabase database.
+            ARCO AI acts live on your database. Check details before critical changes.
           </p>
         </div>
       </div>
