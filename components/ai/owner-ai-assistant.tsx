@@ -2,8 +2,8 @@
 
 import * as React from 'react'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { 
-  Sparkles, 
   X, 
   ArrowUp, 
   Loader2, 
@@ -77,6 +77,19 @@ const QUICK_PROMPTS = [
 
 export function OwnerAIAssistant() {
   const [open, setOpen] = React.useState(false)
+  // On /chat the full page IS the assistant (its own input bar, send
+  // button and hint text sit at the panel bottom), so the floating
+  // pill has no job there and any fixed bottom-right position would
+  // eventually collide with it — the /chat textarea auto-grows to
+  // 160px, pushing the input zone to ~230px above the viewport
+  // bottom, so no fixed offset can clear it in all states. Hiding
+  // the pill on /chat only (it stays on every other page) is what
+  // guarantees the pill never covers the chat input, send button
+  // or hint text. The drawer itself is untouched: if it was already
+  // open when navigating to /chat it stays open until closed, as
+  // on any other navigation, since this layout does not remount.
+  const pathname = usePathname()
+  const isChatPage = pathname === '/chat' || pathname.startsWith('/chat/')
   const [messages, setMessages] = React.useState<Message[]>([])
   const [input, setInput] = React.useState('')
   const [loading, setLoading] = React.useState(false)
@@ -228,16 +241,30 @@ export function OwnerAIAssistant() {
 
   return (
     <>
-      {/* Floating Pill Trigger */}
-      <div className="fixed bottom-5 right-5 z-40">
+      {/* Floating Pill Trigger — NOT bottom-5: at bottom-5 (20px) the
+          pill sat squarely inside the bottom-anchored control band of
+          every page (the /chat input bar + hint, pagination, footers
+          and submit rows all live within ~110px of the viewport
+          bottom once scrolled to the end, after the main padding).
+          bottom-40 (160px) lifts it clear of that whole band with
+          ~50px to spare, while keeping it a visible entry point on
+          non-chat pages. It still overlays scrollable rows mid-page
+          at some scroll positions — unavoidable for any fixed FAB —
+          but those rows scroll out from under it, unlike fixed
+          bottom controls which cannot. z-40 unchanged: below the
+          mobile sidebar drawer (z-50) and modals (z-[100]), above
+          the sticky header (z-30), which it never meets
+          geometrically (header top, pill lower-right). */}
+      {!isChatPage && (
+      <div className="fixed bottom-40 right-5 z-40">
         <button
           type="button"
           onClick={() => setOpen(true)}
-          className="group flex items-center gap-2.5 px-3.5 py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg hover:shadow-xl transition-all duration-200 cursor-pointer border border-emerald-400/30 font-semibold text-xs"
+          className="group flex items-center gap-2.5 px-3.5 py-2.5 rounded-full bg-emerald-600 hover:bg-emerald-500 text-white shadow-md transition-colors duration-200 cursor-pointer border border-emerald-400/30 font-semibold text-xs"
           title="Open AI Command Assistant"
         >
           <div className="h-5 w-5 rounded-full bg-white/20 flex items-center justify-center shrink-0">
-            <Sparkles className="h-3 w-3 text-amber-300 animate-pulse" />
+            <Bot className="h-3 w-3 text-white" />
           </div>
           <span>ARCO AI</span>
           <span className="hidden sm:inline text-[10px] bg-white/20 px-1.5 py-0.5 rounded-full">
@@ -245,6 +272,7 @@ export function OwnerAIAssistant() {
           </span>
         </button>
       </div>
+      )}
 
       {/* Slide-over Drawer Backdrop & Panel */}
       {open && (
@@ -254,12 +282,12 @@ export function OwnerAIAssistant() {
             onClick={() => setOpen(false)}
           />
 
-          <div className="relative w-full max-w-md bg-card border-l border-border h-full flex flex-col shadow-2xl z-10 animate-in slide-in-from-right duration-200">
+          <div className="relative w-full max-w-md bg-card border-l border-border h-full flex flex-col shadow-md z-10 animate-in slide-in-from-right duration-200">
             {/* Header */}
             <div className="h-14 border-b border-border px-4 flex items-center justify-between bg-muted/30">
               <div className="flex items-center gap-2">
                 <div className="h-7 w-7 rounded bg-emerald-600/15 text-emerald-600 dark:text-emerald-400 border border-emerald-600/30 flex items-center justify-center">
-                  <Sparkles className="h-3.5 w-3.5" />
+                  <Bot className="h-3.5 w-3.5" />
                 </div>
                 <div>
                   <h3 className="text-xs font-bold text-foreground">ARCO AI Assistant</h3>
@@ -327,7 +355,7 @@ export function OwnerAIAssistant() {
                     >
                       {!isUser && (
                         <div className="h-6 w-6 rounded bg-emerald-600/15 text-emerald-600 dark:text-emerald-400 border border-emerald-600/30 flex items-center justify-center shrink-0 mt-0.5">
-                          <Sparkles className="h-3 w-3" />
+                          <Bot className="h-3 w-3" />
                         </div>
                       )}
 
