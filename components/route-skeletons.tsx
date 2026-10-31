@@ -134,8 +134,11 @@ export function MigrationSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
       <TitleRowSkeleton buttons={0} />
+      {/* 3 real tabs confirmed: Data Dictionary, Opening Balances, Import. */}
       <TabBarSkeleton tabs={3} />
-      <TableCardSkeleton rows={8} />
+      {/* Default tab is the Sheet Map: Source Sheet, Excel Column Name,
+          Target Field, Database Entity, Conversion Rule, Status. */}
+      <TableCardSkeleton rows={8} columns={[2, 2, 2, 2, 3, 1]} />
     </div>
   )
 }
