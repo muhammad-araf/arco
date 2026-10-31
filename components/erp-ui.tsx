@@ -76,8 +76,14 @@ export function SubmitSpinner() {
  * color only — no gradients, no blur, no decoration. Compose them in
  * a route's loading.tsx to mirror that route's real layout. */
 
-export function Skel({ className = "bg-muted rounded" }: { className?: string }) {
-  return <div aria-hidden="true" className={`animate-pulse ${className}`} />
+export function Skel({
+  className = "bg-muted rounded",
+  style,
+}: {
+  className?: string
+  style?: React.CSSProperties
+}) {
+  return <div aria-hidden="true" className={`animate-pulse ${className}`} style={style} />
 }
 
 /** Page title row: title block, optional subtitle line, action buttons. */
@@ -89,9 +95,9 @@ export function TitleRowSkeleton({ buttons = 0, subtitle = false }: { buttons?: 
         {subtitle && <Skel className="h-3 w-96 max-w-full bg-muted rounded" />}
       </div>
       {buttons > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {Array.from({ length: buttons }).map((_, i) => (
-            <Skel key={i} className="h-10 w-36 rounded-lg bg-muted" />
+            <Skel key={i} className="h-10 w-36 max-w-full rounded-lg bg-muted" />
           ))}
         </div>
       )}
