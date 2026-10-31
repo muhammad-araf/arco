@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { usePathname } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
   LayoutDashboard,
   Truck,
@@ -31,8 +31,15 @@ import {
   BookOpen,
   Handshake,
   MessageSquare,
+  Plus,
+  Trash2,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import {
+  deleteChatSession,
+  getChatSessions,
+  type ChatSession,
+} from "@/lib/ai/chat-storage"
 import { type AppRole } from "@/app/actions/auth"
 
 const ROLE_LABELS: Record<AppRole, string> = {
@@ -111,7 +118,61 @@ export function AppSidebar({
   role?: AppRole | null
 }) {
   const pathname = usePathname()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  // The query string does not change pathname, so /chat?session=<id>
+  // still matches pathname === "/chat"; the active row comes from the
+  // ?session= param alone, and no row is active on bare /chat.
+  const activeSessionId = searchParams.get("session")
+  const isChatRoute = pathname === "/chat"
   const [isOpenMobile, setIsOpenMobile] = React.useState(false)
+  const [chatSessions, setChatSessions] = React.useState<ChatSession[]>([])
+
+  // Freshness: load on mount and re-read whenever the route or the
+  // ?session= param changes. A separate mount-only listener re-reads
+  // on the 'arco-chats-changed' event that saveChatSession /
+  // deleteChatSession dispatch (the same pattern chat-client uses),
+  // so a save or delete from the chat page updates this list without
+  // a reload. getChatSessions seeds defaults only when the storage
+  // key is absent, so an empty stored list stays empty here.
+  React.useEffect(() => {
+    setChatSessions(getChatSessions())
+  }, [pathname, activeSessionId])
+  React.useEffect(() => {
+    const handleSync = () => {
+      setChatSessions(getChatSessions())
+    }
+    window.addEventListener("arco-chats-changed", handleSync)
+    return () => window.removeEventListener("arco-chats-changed", handleSync)
+  }, [])
+
+  const handleSelectChat = React.useCallback(
+    (id: string) => {
+      router.push(`/chat?session=${id}`)
+      setIsOpenMobile(false)
+    },
+    [router]
+  )
+  const handleNewChat = React.useCallback(() => {
+    router.push("/chat")
+    setIsOpenMobile(false)
+  }, [router])
+  const handleDeleteChat = React.useCallback(
+    (id: string) => {
+      const wasActive = id === activeSessionId
+      deleteChatSession(id)
+      // deleteChatSession already dispatched the sync event, so the
+      // list above re-reads on its own; navigation is decided here
+      // from the freshly re-read remaining sessions.
+      if (!wasActive) return
+      const remaining = getChatSessions()
+      router.push(
+        remaining.length > 0 ? `/chat?session=${remaining[0].id}` : "/chat"
+      )
+      setIsOpenMobile(false)
+    },
+    [activeSessionId, router]
+  )
   // Desktop collapse state, persisted per browser. Read on mount only
   // (not in the initializer) so server and client render the same
   // expanded sidebar and hydration never mismatches; a returning
@@ -271,8 +332,8 @@ export function AppSidebar({
                   const active = isRouteActive(item.href)
                   const Icon = item.icon
                   return (
+                    <React.Fragment key={item.href}>
                     <Link
-                      key={item.href}
                       href={item.href}
                       title={item.title}
                       aria-current={active ? "page" : undefined}
@@ -315,6 +376,73 @@ export function AppSidebar({
                         />
                       )}
                     </Link>
+                    {/* Nested chat block: only under the AI Assistant
+                        entry, and only on /chat. On every other route
+                        nothing extra renders and the entry stays a
+                        plain link. Buttons + router.push (not Links)
+                        so nothing here is prefetched. The whole block
+                        uses the same lg:hidden-when-collapsed pattern
+                        as the labels, so collapsed desktop stays
+                        icons-only; the mobile drawer is below lg, so
+                        it still shows the full block. */}
+                    {item.href === "/chat" && isChatRoute && (
+                      <div
+                        className={cn(
+                          "mt-1 ml-6 space-y-1",
+                          collapsed && "lg:hidden"
+                        )}
+                      >
+                        <button
+                          type="button"
+                          onClick={handleNewChat}
+                          className="flex w-full items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-medium text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+                        >
+                          <Plus className="h-4 w-4 shrink-0 text-primary" />
+                          <span>New Chat</span>
+                        </button>
+                        <div className="px-2.5 pt-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                          RECENT CHATS ({chatSessions.length})
+                        </div>
+                        <div className="space-y-0.5">
+                          {chatSessions.map((session) => {
+                            const isActive = session.id === activeSessionId
+                            return (
+                              <div
+                                key={session.id}
+                                className={cn(
+                                  "group flex items-center justify-between gap-1 px-2.5 py-2 rounded-lg text-xs transition-colors",
+                                  isActive
+                                    ? "bg-primary text-primary-foreground font-semibold"
+                                    : "text-sidebar-foreground hover:bg-sidebar-accent"
+                                )}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectChat(session.id)}
+                                  aria-current={isActive ? "true" : undefined}
+                                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                                >
+                                  <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                                  <span className="truncate">
+                                    {session.title || "Untitled Session"}
+                                  </span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteChat(session.id)}
+                                  title="Delete chat"
+                                  aria-label={`Delete ${session.title || "Untitled Session"}`}
+                                  className="opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:text-red-500 p-0.5 rounded transition-opacity shrink-0"
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </button>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    </React.Fragment>
                   )
                 })}
               </div>
