@@ -7,6 +7,18 @@ interface MarkdownContentProps {
   className?: string
 }
 
+// Only these href shapes may become clickable links. Anything else
+// (javascript:, data:, vbscript:, mailto:, protocol-relative, …) is
+// rendered as plain text so a model-emitted URL can never become an
+// executable link. React's own escaping still covers the label text.
+function safeHref(url: string): string | null {
+  const href = url.trim()
+  if (/^https?:\/\//i.test(href)) return href
+  if (href.startsWith('/') && !href.startsWith('//')) return href
+  if (href.startsWith('#')) return href
+  return null
+}
+
 export function InlineMarkdown({ text }: { text: string }) {
   if (!text) return null
 
@@ -33,7 +45,7 @@ export function InlineMarkdown({ text }: { text: string }) {
     } else if (m.startsWith('[') && m.includes('](') && m.endsWith(')')) {
       const splitIdx = m.indexOf('](')
       const label = m.slice(1, splitIdx)
-      const url = m.slice(splitIdx + 2, -1)
+      const url = safeHref(m.slice(splitIdx + 2, -1))
       parts.push({ type: 'link', val: label, url })
     }
 
@@ -72,6 +84,10 @@ export function InlineMarkdown({ text }: { text: string }) {
           )
         }
         if (p.type === 'link') {
+          if (!p.url) {
+            // Unsafe scheme: show the label as plain text, never as a link.
+            return <span key={i}>{p.val}</span>
+          }
           return (
             <a
               key={i}
@@ -101,8 +117,18 @@ function renderTable(tableLines: string[], key: string | number) {
       .map(cell => cell.trim())
   }
 
+  // The second line is a separator row (|---|---|) in a well-formed table.
+  // If it is not (model omitted it), it is a data row — dropping it via a
+  // blind slice(2) would silently lose figures, so only skip it when it
+  // really is a separator.
+  const isSeparatorRow = (line: string) =>
+    parseRow(line).length > 0 &&
+    parseRow(line).every(cell => /^:?-+:?$/.test(cell))
   const headerCells = parseRow(tableLines[0])
-  const dataLines = tableLines.slice(2)
+  const dataLines =
+    tableLines.length > 1 && isSeparatorRow(tableLines[1])
+      ? tableLines.slice(2)
+      : tableLines.slice(1)
 
   return (
     <div key={key} className="my-3 overflow-x-auto rounded-md border border-border shadow-2xs">
@@ -145,11 +171,27 @@ export function MarkdownContent({ content, className = '' }: MarkdownContentProp
   let tableBuffer: string[] = []
 
   let inList = false
+  let listKind: 'ul' | 'ol' = 'ul'
   let listBuffer: string[] = []
+
+  let inCodeBlock = false
+  let codeBuffer: string[] = []
 
   const flushTable = () => {
     if (tableBuffer.length > 0) {
-      elements.push(renderTable(tableBuffer, `tbl-${elements.length}`))
+      // A lone pipe line is not a table: render it as a paragraph instead
+      // of dropping it (renderTable returns null for < 2 lines).
+      if (tableBuffer.length < 2) {
+        for (const line of tableBuffer) {
+          elements.push(
+            <p key={`tblp-${elements.length}`} className="my-1.5 text-xs leading-relaxed text-foreground/90">
+              <InlineMarkdown text={line} />
+            </p>
+          )
+        }
+      } else {
+        elements.push(renderTable(tableBuffer, `tbl-${elements.length}`))
+      }
       tableBuffer = []
       inTable = false
     }
@@ -157,26 +199,76 @@ export function MarkdownContent({ content, className = '' }: MarkdownContentProp
 
   const flushList = () => {
     if (listBuffer.length > 0) {
+      const Tag = listKind === 'ol' ? 'ol' : 'ul'
+      const listClass =
+        listKind === 'ol'
+          ? 'my-2 space-y-1.5 list-decimal list-inside text-xs leading-relaxed text-foreground/90'
+          : 'my-2 space-y-1.5 list-disc list-inside text-xs leading-relaxed text-foreground/90'
       elements.push(
-        <ul key={`ul-${elements.length}`} className="my-2 space-y-1.5 list-disc list-inside text-xs leading-relaxed text-foreground/90">
+        <Tag key={`${listKind}-${elements.length}`} className={listClass}>
           {listBuffer.map((item, idx) => (
             <li key={idx} className="pl-1">
               <InlineMarkdown text={item} />
             </li>
           ))}
-        </ul>
+        </Tag>
       )
       listBuffer = []
       inList = false
     }
   }
 
+  const flushCodeBlock = () => {
+    if (codeBuffer.length > 0) {
+      elements.push(
+        <pre key={`code-${elements.length}`} className="my-2 overflow-x-auto rounded-md border border-border bg-muted/50 p-3">
+          <code className="font-mono text-[11px] leading-relaxed text-foreground/90 whitespace-pre">
+            {codeBuffer.join('\n')}
+          </code>
+        </pre>
+      )
+    }
+    codeBuffer = []
+    inCodeBlock = false
+  }
+
+  // ATX heading classes, h1 largest … h6 smallest, all plain flat styling.
+  // The h1/h2/h3 class strings are unchanged from before this fix.
+  const headingClass: Record<number, string> = {
+    1: 'text-lg font-bold text-foreground mt-4 mb-2',
+    2: 'text-base font-bold text-foreground mt-4 mb-2 flex items-center gap-2 border-b border-border/60 pb-1',
+    3: 'text-sm font-bold text-foreground mt-3 mb-1.5 flex items-center gap-1.5',
+    4: 'text-xs font-bold text-foreground mt-3 mb-1.5 flex items-center gap-1.5',
+    5: 'text-xs font-semibold text-foreground mt-2.5 mb-1 flex items-center gap-1.5',
+    6: 'text-xs font-semibold text-foreground/80 mt-2 mb-1',
+  }
+
   for (let i = 0; i < lines.length; i++) {
     const rawLine = lines[i]
     const trimmed = rawLine.trim()
 
-    // Table detection
-    if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+    // Fenced code blocks (``` … ```, optional language tag). While inside
+    // one, every line is literal content — no table/list/heading parsing —
+    // so the fence markers themselves never print.
+    if (inCodeBlock) {
+      if (trimmed.startsWith('```')) {
+        flushCodeBlock()
+      } else {
+        codeBuffer.push(rawLine)
+      }
+      continue
+    }
+    if (trimmed.startsWith('```')) {
+      flushTable()
+      flushList()
+      inCodeBlock = true
+      codeBuffer = []
+      continue
+    }
+
+    // Table detection: a row starts with '|' and has at least one more
+    // pipe (trailing pipe not required — the model sometimes omits it).
+    if (trimmed.startsWith('|') && trimmed.slice(1).includes('|')) {
       flushList()
       inTable = true
       tableBuffer.push(trimmed)
@@ -185,43 +277,50 @@ export function MarkdownContent({ content, className = '' }: MarkdownContentProp
       flushTable()
     }
 
-    // List detection
-    if (/^[-*]\s+/.test(trimmed)) {
+    // List detection: unordered (-, *, +) and ordered ("1." / "1)") items.
+    // A kind switch (bullets → numbers or vice versa) flushes first so
+    // each run keeps its own list element.
+    const ulMatch = trimmed.match(/^[-*+]\s+(.*)$/)
+    const olMatch = trimmed.match(/^\d+[.)]\s+(.*)$/)
+    if (ulMatch || olMatch) {
+      const kind = ulMatch ? 'ul' : 'ol'
+      if (inList && listKind !== kind) flushList()
       inList = true
-      listBuffer.push(trimmed.replace(/^[-*]\s+/, ''))
+      listKind = kind
+      listBuffer.push((ulMatch?.[1] ?? olMatch?.[1] ?? '').trim())
       continue
     } else if (inList) {
       flushList()
     }
 
-    // Headings
-    if (trimmed.startsWith('### ')) {
-      elements.push(
-        <h3 key={i} className="text-sm font-bold text-foreground mt-3 mb-1.5 flex items-center gap-1.5">
-          <InlineMarkdown text={trimmed.replace('### ', '')} />
-        </h3>
-      )
+    // Headings: ATX levels 1–6 — 1–6 '#' chars followed by a space.
+    // The old code only handled '# ', '## ', '### ' in that order, and
+    // '#### ' matched none of them (startsWith('### ') needs a space as
+    // the 4th character), so it fell through to a paragraph and printed
+    // the raw '#### ' markers. A closing run of hashes (## Title ##)
+    // is stripped, per ATX rules; a bare '####' line has no text to show.
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.*)$/)
+    if (headingMatch) {
+      const level = headingMatch[1].length
+      const headingText = headingMatch[2].replace(/\s+#+\s*$/, '').trim()
+      if (headingText !== '') {
+        const Tag = `h${level}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'
+        elements.push(
+          <Tag key={i} className={headingClass[level]}>
+            <InlineMarkdown text={headingText} />
+          </Tag>
+        )
+      }
       continue
     }
-    if (trimmed.startsWith('## ')) {
-      elements.push(
-        <h2 key={i} className="text-base font-bold text-foreground mt-4 mb-2 flex items-center gap-2 border-b border-border/60 pb-1">
-          <InlineMarkdown text={trimmed.replace('## ', '')} />
-        </h2>
-      )
-      continue
-    }
-    if (trimmed.startsWith('# ')) {
-      elements.push(
-        <h1 key={i} className="text-lg font-bold text-foreground mt-4 mb-2">
-          <InlineMarkdown text={trimmed.replace('# ', '')} />
-        </h1>
-      )
+    if (/^#{1,6}$/.test(trimmed)) {
       continue
     }
 
-    // Horizontal Rule
-    if (/^---{3,}$/.test(trimmed)) {
+    // Horizontal Rule: ---, ***, or ___ (3+ chars). The old regex
+    // /^---{3,}$/ actually required 5+ dashes (the {3,} applied to the
+    // third dash only), so a standard '---' printed literally.
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
       elements.push(<hr key={i} className="my-3 border-border/60" />)
       continue
     }
@@ -241,6 +340,7 @@ export function MarkdownContent({ content, className = '' }: MarkdownContentProp
 
   flushTable()
   flushList()
+  flushCodeBlock()
 
   return <div className={`space-y-1 text-xs select-text ${className}`}>{elements}</div>
 }
