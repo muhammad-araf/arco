@@ -13,7 +13,8 @@ import {
   type SettingsSnapshot,
   type DocNumberingRow,
 } from "@/lib/settings-validation"
-import { AlertBanner, SubmitSpinner, PageSkeleton } from "@/components/erp-ui"
+import { AlertBanner, SubmitSpinner } from "@/components/erp-ui"
+import { SettingsSkeleton } from "@/components/route-skeletons"
 
 const inputCls =
   "w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"
@@ -175,7 +176,7 @@ export default function SettingsPage() {
     }
   }
 
-  if (isLoading) return <PageSkeleton rows={8} />
+  if (isLoading) return <SettingsSkeleton />
 
   return (
     <div className="space-y-6">
