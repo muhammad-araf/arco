@@ -96,7 +96,7 @@ export function SidebarSkeleton() {
 
       {/* Sidebar Container — same frame classes as AppSidebar's aside,
           closed on mobile (the real sidebar also starts closed). */}
-      <aside className="fixed top-0 bottom-0 left-0 z-50 w-64 bg-sidebar border-r border-sidebar-border flex flex-col transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen lg:shrink-0 -translate-x-full">
+      <aside className="fixed top-0 bottom-0 left-0 z-50 lg:z-auto w-64 bg-sidebar border-r border-sidebar-border flex flex-col transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen lg:shrink-0 -translate-x-full">
         {/* Brand Header */}
         <div className="h-16 px-4 border-b border-sidebar-border flex items-center gap-3">
           <Skel className="h-9 w-9 rounded-md bg-muted" />

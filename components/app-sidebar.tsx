@@ -189,9 +189,18 @@ export function AppSidebar({
       )}
 
       {/* Sidebar Container */}
+      {/* NOTE: z-50 is mobile-only. On desktop this aside is a flex
+          item of the layout row, and z-index on a flex item creates
+          its own stacking context — so a desktop z-50 here would
+          outrank the whole main-content column (z-10), capping every
+          modal inside it below the sidebar no matter how high the
+          modal's own z-index is. That was the real modal-clipping
+          bug (raising overlays to z-[100] alone could not fix it).
+          lg:z-auto keeps the drawer above content on mobile, where
+          the aside is fixed, without creating a desktop context. */}
       <aside
         className={cn(
-          "fixed top-0 bottom-0 left-0 z-50 w-64 bg-sidebar border-r border-sidebar-border flex flex-col transition-[width,transform] duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen lg:shrink-0",
+          "fixed top-0 bottom-0 left-0 z-50 lg:z-auto w-64 bg-sidebar border-r border-sidebar-border flex flex-col transition-[width,transform] duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen lg:shrink-0",
           collapsed ? "lg:w-16" : "lg:w-64",
           isOpenMobile ? "translate-x-0" : "-translate-x-full"
         )}
