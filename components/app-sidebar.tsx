@@ -20,6 +20,8 @@ import {
   BarChart3,
   Database,
   ChevronRight,
+  PanelLeftClose,
+  PanelLeftOpen,
   Sprout,
   Menu,
   X,
@@ -108,6 +110,30 @@ export function AppSidebar({
 }) {
   const pathname = usePathname()
   const [isOpenMobile, setIsOpenMobile] = React.useState(false)
+  // Desktop collapse state, persisted per browser. Read on mount only
+  // (not in the initializer) so server and client render the same
+  // expanded sidebar and hydration never mismatches; a returning
+  // collapsed user sees one brief expanded frame, then it collapses.
+  const [collapsed, setCollapsed] = React.useState(false)
+  React.useEffect(() => {
+    try {
+      if (window.localStorage.getItem("arco-sidebar-collapsed") === "1") {
+        setCollapsed(true)
+      }
+    } catch {
+      // Private mode etc: sidebar just stays expanded.
+    }
+  }, [])
+  const toggleCollapsed = React.useCallback(() => {
+    setCollapsed((prev) => {
+      try {
+        window.localStorage.setItem("arco-sidebar-collapsed", prev ? "0" : "1")
+      } catch {
+        // Ignore storage failures; the toggle still works for the session.
+      }
+      return !prev
+    })
+  }, [])
   // Identity comes from the server layout (same fallbacks the old
   // client-side getMyProfile call produced), so the name and role render
   // with the shell instead of popping in after a round trip.
@@ -165,16 +191,25 @@ export function AppSidebar({
       {/* Sidebar Container */}
       <aside
         className={cn(
-          "fixed top-0 bottom-0 left-0 z-50 w-64 bg-sidebar border-r border-sidebar-border flex flex-col transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen lg:shrink-0",
+          "fixed top-0 bottom-0 left-0 z-50 w-64 bg-sidebar border-r border-sidebar-border flex flex-col transition-[width,transform] duration-300 ease-in-out lg:translate-x-0 lg:static lg:h-screen lg:shrink-0",
+          collapsed ? "lg:w-16" : "lg:w-64",
           isOpenMobile ? "translate-x-0" : "-translate-x-full"
         )}
       >
-        {/* Brand Header */}
-        <div className="h-16 px-4 border-b border-sidebar-border flex items-center justify-between">
+        {/* Brand Header + desktop collapse toggle. The toggle is
+            desktop-only (hidden below lg): on mobile the drawer is
+            opened/closed with the hamburger bar instead. When
+            collapsed, only the toggle shows, centered. */}
+        <div
+          className={cn(
+            "h-16 px-4 border-b border-sidebar-border flex items-center",
+            collapsed ? "justify-center lg:px-0" : "justify-between"
+          )}
+        >
           <Link
             href="/dashboard"
             onClick={() => setIsOpenMobile(false)}
-            className="flex items-center gap-3 group"
+            className={cn("flex items-center gap-3 group", collapsed && "lg:hidden")}
           >
             <div className="h-9 w-9 rounded-md bg-primary text-white flex items-center justify-center">
               <Sprout className="h-5 w-5" />
@@ -188,13 +223,36 @@ export function AppSidebar({
               </span>
             </div>
           </Link>
+          <button
+            type="button"
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="hidden lg:inline-flex p-2 rounded-lg border border-border bg-muted text-foreground hover:bg-sidebar-accent shrink-0"
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="h-4 w-4" />
+            ) : (
+              <PanelLeftClose className="h-4 w-4" />
+            )}
+          </button>
         </div>
 
         {/* Navigation Items */}
-        <div className="flex-1 overflow-y-auto px-3 py-4 space-y-6 scrollbar-thin">
+        <div
+          className={cn(
+            "flex-1 overflow-y-auto py-4 space-y-6 scrollbar-thin",
+            collapsed ? "px-2" : "px-3"
+          )}
+        >
           {navSections.map((section) => (
             <div key={section.heading} className="space-y-1">
-              <div className="px-2 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              <div
+                className={cn(
+                  "px-2 pb-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground",
+                  collapsed && "lg:hidden"
+                )}
+              >
                 {section.heading}
               </div>
               <div className="space-y-0.5">
@@ -205,10 +263,12 @@ export function AppSidebar({
                     <Link
                       key={item.href}
                       href={item.href}
+                      title={item.title}
                       aria-current={active ? "page" : undefined}
                       onClick={() => setIsOpenMobile(false)}
                       className={cn(
-                        "flex items-center justify-between px-2.5 py-2 rounded-lg text-xs font-medium transition-colors group relative",
+                        "flex items-center px-2.5 py-2 rounded-lg text-xs font-medium transition-colors group relative",
+                        collapsed ? "lg:justify-center lg:px-0" : "justify-between",
                         active
                           ? "bg-primary text-primary-foreground font-semibold"
                           : "text-sidebar-foreground hover:text-sidebar-foreground hover:bg-sidebar-accent"
@@ -221,15 +281,27 @@ export function AppSidebar({
                             active ? "text-primary-foreground" : "text-primary"
                           )}
                         />
-                        <span className="truncate">{item.title}</span>
+                        <span className={cn("truncate", collapsed && "lg:hidden")}>
+                          {item.title}
+                        </span>
                       </div>
                       {item.badge && (
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-muted text-primary">
+                        <span
+                          className={cn(
+                            "text-[10px] font-mono px-1.5 py-0.5 rounded-md bg-muted text-primary",
+                            collapsed && "lg:hidden"
+                          )}
+                        >
                           {item.badge}
                         </span>
                       )}
                       {active && (
-                        <ChevronRight className="h-3.5 w-3.5 text-primary-foreground shrink-0" />
+                        <ChevronRight
+                          className={cn(
+                            "h-3.5 w-3.5 text-primary-foreground shrink-0",
+                            collapsed && "lg:hidden"
+                          )}
+                        />
                       )}
                     </Link>
                   )
@@ -240,13 +312,18 @@ export function AppSidebar({
         </div>
 
         {/* Sidebar Footer with Single-Role Operator Profile */}
-        <div className="p-3 border-t border-sidebar-border bg-sidebar-accent">
-          <div className="flex items-center justify-between gap-2 p-2 rounded-lg bg-card border border-border">
+        <div className={cn("border-t border-sidebar-border bg-sidebar-accent", collapsed ? "p-2" : "p-3")}>
+          <div
+            className={cn(
+              "flex items-center gap-2 p-2 rounded-lg bg-card border border-border",
+              collapsed ? "lg:justify-center" : "justify-between"
+            )}
+          >
             <div className="flex items-center gap-2 min-w-0">
               <div className="h-7 w-7 rounded-lg bg-emerald-100 dark:bg-emerald-900 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-300 dark:border-emerald-700">
                 <ShieldCheck className="h-4 w-4" />
               </div>
-              <div className="min-w-0">
+              <div className={cn("min-w-0", collapsed && "lg:hidden")}>
                 <div className="text-xs font-semibold text-foreground truncate">{actorLabel}</div>
                 <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">{actorRole}</div>
               </div>
