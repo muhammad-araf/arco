@@ -120,8 +120,54 @@ export function StatCardsSkeleton({ count = 3, cols = "sm:grid-cols-3" }: { coun
   )
 }
 
-/** Table card: card title block, column-header row, data rows. */
-export function TableCardSkeleton({ rows = 8, title = true }: { rows?: number; title?: boolean }) {
+/** Table card: card title block, column-header row, data rows.
+ *  Pass `columns` as flex weights per column (e.g. [2, 1, 1, 1]) and the
+ *  header and every row mirror the real table's column structure
+ *  instead of one full-width bar. Cell widths vary by row/column index
+ *  only — never random — so server and client render the same blocks.
+ *  Columns shrink (min-w-0) rather than scrolling, so the card never
+ *  overflows a 360px phone. Without `columns` the old full-width rows
+ *  are kept, so existing callers look exactly as before. */
+export function TableCardSkeleton({
+  rows = 8,
+  title = true,
+  columns,
+}: {
+  rows?: number
+  title?: boolean
+  columns?: number[]
+}) {
+  if (columns && columns.length > 0) {
+    const cellWidths = ["w-full", "w-5/6", "w-2/3"]
+    return (
+      <div className="expensive-card p-5 space-y-4">
+        {title && (
+          <div className="flex items-center justify-between gap-3">
+            <Skel className="h-4 w-36 max-w-full bg-muted rounded" />
+            <Skel className="h-3 w-20 shrink-0 bg-muted rounded" />
+          </div>
+        )}
+        <div className="flex gap-3 border-b border-border pb-3">
+          {columns.map((w, j) => (
+            <div key={j} className="min-w-0" style={{ flex: `${w} 1 0%` }}>
+              <Skel className="h-3 w-full bg-muted rounded" />
+            </div>
+          ))}
+        </div>
+        <div className="space-y-3">
+          {Array.from({ length: rows }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3">
+              {columns.map((w, j) => (
+                <div key={j} className="min-w-0" style={{ flex: `${w} 1 0%` }}>
+                  <Skel className={`h-4 bg-muted rounded ${cellWidths[(i + j) % cellWidths.length]}`} />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="expensive-card p-5 space-y-4">
       {title && (
@@ -145,6 +191,43 @@ export function TableCardSkeleton({ rows = 8, title = true }: { rows?: number; t
   )
 }
 
+/** Label/value detail rows (ledger and report sections): a label block
+ *  on the left and a value block on the right, widths varied by index
+ *  only. With `card={false}` it renders just the rows, so it can sit
+ *  inside a wider card such as a two-column report section. */
+export function DetailRowsSkeleton({
+  rows = 4,
+  title = true,
+  card = true,
+}: {
+  rows?: number
+  title?: boolean
+  card?: boolean
+}) {
+  const labelWidths = ["w-24", "w-32", "w-20"]
+  const valueWidths = ["w-20", "w-16", "w-24"]
+  const inner = (
+    <>
+      {title && (
+        <div className="flex items-center justify-between border-b border-border pb-2">
+          <Skel className="h-3 w-32 max-w-full bg-muted rounded" />
+          <Skel className="h-3 w-20 shrink-0 bg-muted rounded" />
+        </div>
+      )}
+      <div className="space-y-2">
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} className="flex items-center justify-between gap-4">
+            <Skel className={`h-3 bg-muted rounded ${labelWidths[i % labelWidths.length]}`} />
+            <Skel className={`h-3 shrink-0 bg-muted rounded ${valueWidths[i % valueWidths.length]}`} />
+          </div>
+        ))}
+      </div>
+    </>
+  )
+  if (!card) return <div className="space-y-3">{inner}</div>
+  return <div className="expensive-card p-5 space-y-3">{inner}</div>
+}
+
 /** Stacked list card (receipt feed, movement rows): bordered row blocks. */
 export function ListCardSkeleton({ rows = 5, title = true }: { rows?: number; title?: boolean }) {
   return (
@@ -152,11 +235,11 @@ export function ListCardSkeleton({ rows = 5, title = true }: { rows?: number; ti
       {title && <Skel className="h-4 w-28 bg-muted rounded" />}
       {Array.from({ length: rows }).map((_, i) => (
         <div key={i} className="rounded-lg border border-border p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <Skel className="h-3 w-24 bg-muted rounded" />
-            <Skel className="h-3 w-16 bg-muted rounded" />
+          <div className="flex items-center justify-between gap-3">
+            <Skel className="h-3 w-24 max-w-full bg-muted rounded" />
+            <Skel className="h-3 w-16 shrink-0 bg-muted rounded" />
           </div>
-          <Skel className="h-3 w-3/4 bg-muted rounded" />
+          <Skel className={`h-3 bg-muted rounded ${["w-3/4", "w-1/2", "w-2/3"][i % 3]}`} />
         </div>
       ))}
     </div>
