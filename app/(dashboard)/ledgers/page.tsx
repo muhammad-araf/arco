@@ -103,6 +103,26 @@ const StockLedgerRow = React.memo(function StockLedgerRow(props: {
   )
 })
 
+// Windowed-table pager, inlined here (not a shared component, so no other
+// page is touched). It pages only over rows already fetched in memory:
+// totals, exports and print documents still use the full arrays, never
+// this window. Shown only when a table exceeds WINDOW_SIZE rows, so small
+// tables render exactly as before with no new controls.
+const WINDOW_SIZE = 100
+function WindowPager(props: { page: number; totalPages: number; from: number; to: number; total: number; onPage: (p: number) => void }) {
+  const { page, totalPages, from, to, total, onPage } = props
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground print:hidden">
+      <span>Showing {from}–{to} of {total} rows</span>
+      <span className="flex gap-2">
+        <button type="button" disabled={page <= 1} onClick={() => onPage(page - 1)} className={ghostBtnCls}>Previous</button>
+        <span className="font-mono self-center">Page {page} of {totalPages}</span>
+        <button type="button" disabled={page >= totalPages} onClick={() => onPage(page + 1)} className={ghostBtnCls}>Next</button>
+      </span>
+    </div>
+  )
+}
+
 export default function LedgersPage() {
   const [activeTab, setActiveTab] = React.useState<Tab>("stock")
   const [error, setError] = React.useState("")
@@ -349,6 +369,37 @@ export default function LedgersPage() {
     ),
     [parties, stmtKind],
   )
+
+  // DOM windows over the already-fetched entry arrays. The stock tab is
+  // NOT windowed here: it is already server-paginated at 50 rows/page.
+  // Party/cash/bardana/cost entries arrive as one unbounded array and
+  // were rendered in full, so each gets a 100-row screen window. Totals
+  // (stmt charges/settlements, daybook receipts/payments, bardana
+  // opening/closing, shownCostTotal), exports and print documents all
+  // still map the full arrays, never these slices. Each window resets
+  // when its source array changes, so a new statement/load never strands
+  // the view on an empty later page. Row keys (entry ids) are unchanged,
+  // so paging does not remount rows within a page.
+  const [partyPage, setPartyPage] = React.useState(1)
+  const [cashPage, setCashPage] = React.useState(1)
+  const [bardanaPage, setBardanaPage] = React.useState(1)
+  const [costPage, setCostPage] = React.useState(1)
+  const partyEntries = React.useMemo(() => stmt?.entries ?? [], [stmt])
+  const cashEntries = React.useMemo(() => daybook?.entries ?? [], [daybook])
+  const bardanaEntries = React.useMemo(() => bardana?.entries ?? [], [bardana])
+  React.useEffect(() => { setPartyPage(1) }, [partyEntries])
+  React.useEffect(() => { setCashPage(1) }, [cashEntries])
+  React.useEffect(() => { setBardanaPage(1) }, [bardanaEntries])
+  React.useEffect(() => { setCostPage(1) }, [shownCostRows])
+  const windowFor = (rows: any[], page: number) => {
+    const totalPages = Math.max(1, Math.ceil(rows.length / WINDOW_SIZE))
+    const clamped = Math.min(page, totalPages)
+    return { totalPages, clamped, window: rows.slice((clamped - 1) * WINDOW_SIZE, clamped * WINDOW_SIZE) }
+  }
+  const partyWin = React.useMemo(() => windowFor(partyEntries, partyPage), [partyEntries, partyPage])
+  const cashWin = React.useMemo(() => windowFor(cashEntries, cashPage), [cashEntries, cashPage])
+  const bardanaWin = React.useMemo(() => windowFor(bardanaEntries, bardanaPage), [bardanaEntries, bardanaPage])
+  const costWin = React.useMemo(() => windowFor(shownCostRows, costPage), [shownCostRows, costPage])
 
   if (isLoading) return <LedgersSkeleton />
 
@@ -633,7 +684,7 @@ export default function LedgersPage() {
                     <th className={`${thCls} text-right`}>Debit</th><th className={`${thCls} text-right`}>Credit</th><th className={`${thCls} text-right`}>Balance</th>
                   </tr></thead>
                   <tbody className="divide-y divide-border">
-                    {(stmt.entries ?? []).map((e: any) => (
+                    {partyWin.window.map((e: any) => (
                       <tr key={e.id}>
                         <td className="py-2">{e.date?.slice(0, 10)}</td>
                         <td className="py-2 font-mono">{e.voucher_no}</td>
@@ -646,6 +697,7 @@ export default function LedgersPage() {
                   </tbody>
                 </table>
               </div>
+              {partyEntries.length > WINDOW_SIZE && (<WindowPager page={partyWin.clamped} totalPages={partyWin.totalPages} from={(partyWin.clamped - 1) * WINDOW_SIZE + 1} to={(partyWin.clamped - 1) * WINDOW_SIZE + partyWin.window.length} total={partyEntries.length} onPage={setPartyPage} />)}
             </div>
           )}
         </div>
@@ -758,7 +810,7 @@ export default function LedgersPage() {
                       {(daybook.entries ?? []).length === 0 && (
                         <tr><td colSpan={8} className="py-4 text-muted-foreground">No cash entries in this range.</td></tr>
                       )}
-                      {(daybook.entries ?? []).map((r: any) => (
+                      {cashWin.window.map((r: any) => (
                         <tr key={r.id}>
                           <td className="py-2">{r.date?.slice(0, 10)}</td>
                           <td className="py-2 font-mono font-bold">{r.voucher_no}</td>
@@ -773,6 +825,7 @@ export default function LedgersPage() {
                     </tbody>
                   </table>
                 </div>
+                {cashEntries.length > WINDOW_SIZE && (<WindowPager page={cashWin.clamped} totalPages={cashWin.totalPages} from={(cashWin.clamped - 1) * WINDOW_SIZE + 1} to={(cashWin.clamped - 1) * WINDOW_SIZE + cashWin.window.length} total={cashEntries.length} onPage={setCashPage} />)}
                 <p className="text-xs text-muted-foreground mt-3">
                   The balance column is per account, not one merged chain. Transfers are included in the entries.
                 </p>
@@ -856,7 +909,7 @@ export default function LedgersPage() {
                     {(bardana.entries ?? []).length === 0 && (
                       <tr><td colSpan={8} className="py-4 text-muted-foreground">No bardana entries in this range.</td></tr>
                     )}
-                    {(bardana.entries ?? []).map((r: any) => (
+                    {bardanaWin.window.map((r: any) => (
                       <tr key={r.id}>
                         <td className="py-2">{r.date?.slice(0, 10)}</td>
                         <td className="py-2 font-mono font-bold">{r.voucher_no}</td>
@@ -871,6 +924,7 @@ export default function LedgersPage() {
                   </tbody>
                 </table>
               </div>
+              {bardanaEntries.length > WINDOW_SIZE && (<WindowPager page={bardanaWin.clamped} totalPages={bardanaWin.totalPages} from={(bardanaWin.clamped - 1) * WINDOW_SIZE + 1} to={(bardanaWin.clamped - 1) * WINDOW_SIZE + bardanaWin.window.length} total={bardanaEntries.length} onPage={setBardanaPage} />)}
             </div>
           )}
         </div>
@@ -941,7 +995,7 @@ export default function LedgersPage() {
                   <th className={`${thCls} text-right`}>Amount</th><th className={thCls}>Basis</th>
                 </tr></thead>
                 <tbody className="divide-y divide-border">
-                  {shownCostRows.map((r: any) => (
+                  {costWin.window.map((r: any) => (
                     <tr key={r.id}>
                       <td className="py-2">{r.recorded_at?.slice(0, 10)}</td>
                       <td className="py-2 font-bold">{r.cost_type}</td>
@@ -954,6 +1008,7 @@ export default function LedgersPage() {
                   ))}
                 </tbody>
               </table>
+              {shownCostRows.length > WINDOW_SIZE && (<WindowPager page={costWin.clamped} totalPages={costWin.totalPages} from={(costWin.clamped - 1) * WINDOW_SIZE + 1} to={(costWin.clamped - 1) * WINDOW_SIZE + costWin.window.length} total={shownCostRows.length} onPage={setCostPage} />)}
               <p className="text-xs text-muted-foreground mt-3">
                 Total amount shown: {formatCurrency(shownCostTotal)}
               </p>

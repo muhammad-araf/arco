@@ -46,6 +46,26 @@ const StockMovementRow = React.memo(function StockMovementRow(props: {
   return (<tr><td className="py-2 font-sans">{godown}</td><td className="py-2 font-sans font-semibold">{product}</td><td className="py-2 font-sans">{owner}</td><td className="py-2 text-right">{formatWeight(opening)}</td><td className="py-2 text-right">{formatWeight(inward)}</td><td className="py-2 text-right">{formatWeight(consumed)}</td><td className="py-2 text-right">{formatWeight(produced)}</td><td className="py-2 text-right">{formatWeight(dispatched)}</td><td className="py-2 text-right">{formatWeight(adjusted)}</td><td className="py-2 text-right font-bold">{formatWeight(closing)}</td></tr>)
 })
 
+// Windowed-table pager, inlined here (not a shared component, so no other
+// page is touched). It pages only over rows already fetched and filtered
+// in memory: totals and exports still use the full filtered array, never
+// this window. Shown only when a table exceeds WINDOW_SIZE rows, so small
+// tables render exactly as before with no new controls.
+const WINDOW_SIZE = 100
+function WindowPager(props: { page: number; totalPages: number; from: number; to: number; total: number; onPage: (p: number) => void }) {
+  const { page, totalPages, from, to, total, onPage } = props
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground print:hidden">
+      <span>Showing {from}–{to} of {total} rows</span>
+      <span className="flex gap-2">
+        <button type="button" disabled={page <= 1} onClick={() => onPage(page - 1)} className="px-3 py-1.5 rounded-lg bg-card border border-border text-xs font-bold cursor-pointer disabled:opacity-50">Previous</button>
+        <span className="font-mono self-center">Page {page} of {totalPages}</span>
+        <button type="button" disabled={page >= totalPages} onClick={() => onPage(page + 1)} className="px-3 py-1.5 rounded-lg bg-card border border-border text-xs font-bold cursor-pointer disabled:opacity-50">Next</button>
+      </span>
+    </div>
+  )
+}
+
 export default function ReportsPage() {
   const [selectedReport, setSelectedReport] = React.useState<"pnl" | "stock" | "valuation">("pnl")
   const [reportError, setReportError] = React.useState("")
@@ -360,6 +380,23 @@ export default function ReportsPage() {
     () => movFiltered.reduce((a: any, m: any) => ({ opening: a.opening + m.opening, inward: a.inward + m.inward, consumed: a.consumed + m.consumed, produced: a.produced + m.produced, dispatched: a.dispatched + m.dispatched, adjusted: a.adjusted + m.adjusted, closing: a.closing + m.closing }), { opening: 0, inward: 0, consumed: 0, produced: 0, dispatched: 0, adjusted: 0, closing: 0 }),
     [movFiltered],
   )
+  // DOM window over the full filtered movement rows. Fetched data,
+  // filters, totals (movTotals above) and the export (getCurrentReportExport
+  // maps movFiltered, not this slice) are all untouched — only the rows
+  // rendered on screen are windowed, at most WINDOW_SIZE at a time. The
+  // window resets whenever the filtered set changes, so a filter change
+  // never strands the view on an empty later page. The pool key
+  // (godown|product|owner) is unique by construction (pools live in a Map
+  // keyed on it), so windowed rows keep stable keys and the memoized row
+  // component is not remounted by paging within a page.
+  const [movPage, setMovPage] = React.useState(1)
+  React.useEffect(() => { setMovPage(1) }, [movFiltered])
+  const movTotalPages = Math.max(1, Math.ceil(movFiltered.length / WINDOW_SIZE))
+  const movPageClamped = Math.min(movPage, movTotalPages)
+  const movWindow = React.useMemo(
+    () => movFiltered.slice((movPageClamped - 1) * WINDOW_SIZE, movPageClamped * WINDOW_SIZE),
+    [movFiltered, movPageClamped],
+  )
   // Shared by the CSV / Excel / PDF buttons below: one definition of the
   // current tab's rows, columns, title, range and totals (spec §16), so
   // all three formats of the same report always agree.
@@ -586,12 +623,25 @@ export default function ReportsPage() {
                 <select value={movOwner} onChange={(e) => setMovOwner(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">All owners</option><option value="">Company stock</option>{parties.map((x: any) => (<option key={x.id} value={x.id}>{x.name}</option>))}</select>
               </div>
               {movLoading ? <p className="text-xs text-muted-foreground">Loading movement…</p> : (
-              <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[880px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Godown</th><th className="pb-3">Product</th><th className="pb-3">Owner</th><th className="pb-3 text-right">Opening</th><th className="pb-3 text-right">Inward</th><th className="pb-3 text-right">Consumed</th><th className="pb-3 text-right">Produced</th><th className="pb-3 text-right">Dispatched</th><th className="pb-3 text-right">Adjusted</th><th className="pb-3 text-right">Closing</th></tr></thead>
+              <div>
+              <div className="overflow-x-auto print:hidden"><table className="w-full text-left text-xs min-w-[880px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Godown</th><th className="pb-3">Product</th><th className="pb-3">Owner</th><th className="pb-3 text-right">Opening</th><th className="pb-3 text-right">Inward</th><th className="pb-3 text-right">Consumed</th><th className="pb-3 text-right">Produced</th><th className="pb-3 text-right">Dispatched</th><th className="pb-3 text-right">Adjusted</th><th className="pb-3 text-right">Closing</th></tr></thead>
                 <tbody className="divide-y divide-border font-mono">
                   {movFiltered.length === 0 && <tr><td colSpan={10} className="py-4 text-muted-foreground font-sans">No movement rows for these filters.</td></tr>}
-                  {movFiltered.map((m: any, i: number) => (<StockMovementRow key={i} godown={godownName(m.godown_id)} product={productName(m.product_id)} owner={m.party_id ? partyName(m.party_id) : "Company"} opening={m.opening} inward={m.inward} consumed={m.consumed} produced={m.produced} dispatched={m.dispatched} adjusted={m.adjusted} closing={m.closing} />))}
+                  {movWindow.map((m: any) => (<StockMovementRow key={`${m.godown_id}|${m.product_id}|${m.party_id ?? ""}`} godown={godownName(m.godown_id)} product={productName(m.product_id)} owner={m.party_id ? partyName(m.party_id) : "Company"} opening={m.opening} inward={m.inward} consumed={m.consumed} produced={m.produced} dispatched={m.dispatched} adjusted={m.adjusted} closing={m.closing} />))}
                   {movFiltered.length > 0 && (<tr className="border-t-2 border-border font-bold"><td className="py-2 font-sans" colSpan={3}>Totals</td><td className="py-2 text-right">{formatWeight(movTotals.opening)}</td><td className="py-2 text-right">{formatWeight(movTotals.inward)}</td><td className="py-2 text-right">{formatWeight(movTotals.consumed)}</td><td className="py-2 text-right">{formatWeight(movTotals.produced)}</td><td className="py-2 text-right">{formatWeight(movTotals.dispatched)}</td><td className="py-2 text-right">{formatWeight(movTotals.adjusted)}</td><td className="py-2 text-right">{formatWeight(movTotals.closing)}</td></tr>)}
-                </tbody></table></div>)}
+                </tbody></table></div>
+              {movFiltered.length > WINDOW_SIZE && (<WindowPager page={movPageClamped} totalPages={movTotalPages} from={(movPageClamped - 1) * WINDOW_SIZE + 1} to={(movPageClamped - 1) * WINDOW_SIZE + movWindow.length} total={movFiltered.length} onPage={setMovPage} />)}
+              {/* Print keeps the full movement table: the screen table above
+              is print:hidden, and this copy (display:none on screen, so it
+              costs no screen layout/paint) prints every filtered row plus
+              the full-data totals, exactly as window.print() printed before
+              windowing. It is not an export — exports still use movFiltered. */}
+              <div className="hidden print:block overflow-x-auto"><table className="w-full text-left text-xs min-w-[880px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Godown</th><th className="pb-3">Product</th><th className="pb-3">Owner</th><th className="pb-3 text-right">Opening</th><th className="pb-3 text-right">Inward</th><th className="pb-3 text-right">Consumed</th><th className="pb-3 text-right">Produced</th><th className="pb-3 text-right">Dispatched</th><th className="pb-3 text-right">Adjusted</th><th className="pb-3 text-right">Closing</th></tr></thead>
+                <tbody className="divide-y divide-border font-mono">
+                  {movFiltered.map((m: any) => (<StockMovementRow key={`print-${m.godown_id}|${m.product_id}|${m.party_id ?? ""}`} godown={godownName(m.godown_id)} product={productName(m.product_id)} owner={m.party_id ? partyName(m.party_id) : "Company"} opening={m.opening} inward={m.inward} consumed={m.consumed} produced={m.produced} dispatched={m.dispatched} adjusted={m.adjusted} closing={m.closing} />))}
+                  {movFiltered.length > 0 && (<tr className="border-t-2 border-border font-bold"><td className="py-2 font-sans" colSpan={3}>Totals</td><td className="py-2 text-right">{formatWeight(movTotals.opening)}</td><td className="py-2 text-right">{formatWeight(movTotals.inward)}</td><td className="py-2 text-right">{formatWeight(movTotals.consumed)}</td><td className="py-2 text-right">{formatWeight(movTotals.produced)}</td><td className="py-2 text-right">{formatWeight(movTotals.dispatched)}</td><td className="py-2 text-right">{formatWeight(movTotals.adjusted)}</td><td className="py-2 text-right">{formatWeight(movTotals.closing)}</td></tr>)}
+                </tbody></table></div>
+              </div>)}
               <p className="text-[11px] text-muted-foreground mt-3">Opening = opening balances + ledger net before the period. Adjusted includes adjustment vouchers and transfer net (a transfer moves stock between godowns, so it nets within a pool). Computed from stock_ledger + openings; the current-stock view above is the closing balance.</p>
             </div>
           )}
