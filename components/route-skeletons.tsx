@@ -119,9 +119,13 @@ export function MachinerySkeleton() {
 export function MastersSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
-      <TitleRowSkeleton buttons={1} />
-      <TabBarSkeleton tabs={4} />
-      <TableCardSkeleton rows={8} title={false} />
+      <TitleRowSkeleton buttons={1} subtitle />
+      {/* 7 real tabs: Products, Godowns, Machinery Plants, Packaging
+          types, Expense categories, Cash accounts, Processing types. */}
+      <TabBarSkeleton tabs={7} />
+      {/* Default tab is Products: Code, Product Name, Category, Unit,
+          Standard Bag Wt, Safety Stock, Status, Actions. */}
+      <TableCardSkeleton rows={8} title={false} columns={[1, 3, 2, 1, 2, 2, 1, 2]} />
     </div>
   )
 }
