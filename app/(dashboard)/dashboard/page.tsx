@@ -1,105 +1,189 @@
-"use client"
-
-import * as React from "react"
+import { Suspense, cache } from "react"
 import Link from "next/link"
 import {
-  Truck, Boxes, FileCheck2, Wallet, TrendingUp, AlertTriangle, ArrowUpRight, ArrowDownRight,
-  Plus, Building2, Clock, CheckCircle2, Package,
+  Boxes, FileCheck2, Wallet, Plus, Clock,
 } from "lucide-react"
-import { getDashboardData } from "@/app/actions/dashboard"
-import { formatCurrency, formatWeight, formatBags } from "@/lib/utils"
-import { AlertBanner } from "@/components/erp-ui"
-import { DashboardSkeleton } from "@/components/route-skeletons"
+import { getDashboardFast, getDashboardCash, getDashboardSlow } from "@/app/actions/dashboard"
+import { Skel, TableCardSkeleton, ListCardSkeleton } from "@/components/erp-ui"
+import {
+  TodayCards, CashCard, MoneyCard, StockCard, MovementsCard, GodownCard,
+  LowStockBanner, DismissibleError,
+} from "./dashboard-islands"
+
+/**
+ * Server component (Settings pattern): the page shell — title row and
+ * quick-action links — paints immediately with zero data trips, and
+ * each section streams in behind its own Suspense boundary as its
+ * server action resolves. Nothing here changes what the dashboard
+ * shows, only when parts of it paint:
+ * - fast sections (today cards, money card) wait only on the single
+ *   dashboard_today_payload RPC + payroll query;
+ * - the cash card waits only on the daybook (old path, unchanged);
+ * - the stock / movements / godown sections wait only on the stock
+ *   summary + ledger (old path, unchanged).
+ *
+ * Per-request dedup: the three loaders below are React cache()ed, so
+ * sections that need the same payload (e.g. fast data for the today
+ * cards, the money card and the godown list) share ONE action call
+ * per render instead of re-issuing it.
+ *
+ * Error granularity improves deliberately: the old client page
+ * blanked the whole dashboard on any fetch failure. Now a failed
+ * section shows its error banner (same message text and mapping as
+ * before) with that section's empty state, while the other sections
+ * still paint. The cash card's daybook failure is still NOT an error
+ * (it falls back to opening balances, as before).
+ *
+ * No prefetching is added anywhere here: the quick-action links are
+ * plain Link components with no prefetch prop, exactly as before.
+ */
 
 type Row = Record<string, any>
-const num = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : 0)
+type Data = Record<string, any> | undefined
+
+const loadFast = cache(async () => getDashboardFast())
+const loadCash = cache(async () => getDashboardCash())
+const loadSlow = cache(async () => getDashboardSlow())
+
+const rowsOf = (d: Data, key: string): Row[] => {
+  const v = d?.[key]
+  return Array.isArray(v) ? (v as Row[]) : []
+}
+const numOrNull = (d: Data, key: string): number | null => {
+  const v = d?.[key]
+  if (v === null || v === undefined) return null
+  return Number.isFinite(Number(v)) ? Number(v) : 0
+}
+const strOrNull = (d: Data, key: string): string | null => {
+  const v = d?.[key]
+  return typeof v === "string" ? v : null
+}
+
+// --- Section fallbacks: layout-matched skeletons, flat solid blocks ---
+
+function StatCardFallback() {
+  return (
+    <div className="expensive-card p-4 space-y-3">
+      <Skel className="h-3 w-24 bg-muted rounded" />
+      <Skel className="h-7 w-32 bg-muted rounded" />
+      <Skel className="h-3 w-20 bg-muted rounded" />
+    </div>
+  )
+}
+
+function MoneyFallback() {
+  return (
+    <div className="expensive-card p-5 space-y-3">
+      <Skel className="h-4 w-28 bg-muted rounded" />
+      <Skel className="h-16 w-full rounded-lg bg-muted" />
+      <Skel className="h-16 w-full rounded-lg bg-muted" />
+      <Skel className="h-10 w-full rounded-lg bg-muted" />
+    </div>
+  )
+}
+
+function GodownFallback() {
+  return (
+    <div className="expensive-card p-5 space-y-4">
+      <Skel className="h-4 w-28 bg-muted rounded" />
+      {[0, 1].map((i) => (
+        <div key={i} className="space-y-1.5">
+          <div className="flex items-center justify-between gap-3">
+            <Skel className="h-3 w-24 bg-muted rounded" />
+            <Skel className="h-3 w-16 shrink-0 bg-muted rounded" />
+          </div>
+          <Skel className="h-2 w-full rounded bg-muted" />
+          <div className="flex items-center justify-between gap-3">
+            <Skel className="h-3 w-20 bg-muted rounded" />
+            <Skel className="h-3 w-16 shrink-0 bg-muted rounded" />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// --- Async section components (each awaits only its own slice) ---
+
+async function FastErrorSection() {
+  const fast = await loadFast()
+  if (fast.success) return null
+  return <DismissibleError error={fast.error ?? "Could not load dashboard data."} />
+}
+
+async function TodaySection() {
+  const fast = await loadFast()
+  const d = (fast.success ? fast.data : undefined) as Data
+  return (
+    <TodayCards
+      inward={rowsOf(d, "inwardToday")}
+      batches={rowsOf(d, "batchesToday")}
+      passes={rowsOf(d, "passesToday")}
+      latestPassNo={strOrNull(d, "latestPassNo")}
+    />
+  )
+}
+
+async function CashSection() {
+  const [fast, cash] = await Promise.all([loadFast(), loadCash()])
+  const fd = (fast.success ? fast.data : undefined) as Data
+  const cd = (cash.success ? cash.data : undefined) as Data
+  return (
+    <CashCard
+      cashOpening={numOrNull(fd, "cashOpening")}
+      cashPosition={numOrNull(cd, "cashPosition")}
+      cashByAccount={rowsOf(cd, "cashByAccount")}
+      cashSource={strOrNull(cd, "cashSource")}
+      error={cash.success ? "" : (cash.error ?? "Could not load dashboard data.")}
+    />
+  )
+}
+
+async function SlowErrorLowStockSection() {
+  const slow = await loadSlow()
+  if (!slow.success) {
+    return <DismissibleError error={slow.error ?? "Could not load dashboard data."} />
+  }
+  const d = slow.data as Data
+  const summary = rowsOf(d, "summary")
+  const lowCount = summary.filter((r) => r.below_min_stock).length
+  return <LowStockBanner lowCount={lowCount} />
+}
+
+async function StockSection() {
+  const slow = await loadSlow()
+  const d = (slow.success ? slow.data : undefined) as Data
+  return <StockCard summary={rowsOf(d, "summary")} />
+}
+
+async function MovementsSection() {
+  const slow = await loadSlow()
+  const d = (slow.success ? slow.data : undefined) as Data
+  return <MovementsCard ledger={rowsOf(d, "ledger")} />
+}
+
+async function MoneySection() {
+  const fast = await loadFast()
+  const d = (fast.success ? fast.data : undefined) as Data
+  return (
+    <MoneyCard
+      receivables={numOrNull(d, "receivables")}
+      payables={numOrNull(d, "payables")}
+      payrollDue={numOrNull(d, "payrollDue")}
+    />
+  )
+}
+
+async function GodownSection() {
+  const [fast, slow] = await Promise.all([loadFast(), loadSlow()])
+  const fd = (fast.success ? fast.data : undefined) as Data
+  const sd = (slow.success ? slow.data : undefined) as Data
+  return <GodownCard godowns={rowsOf(fd, "godowns")} summary={rowsOf(sd, "summary")} />
+}
+
+// --- Page shell (paints immediately, zero data trips) ---
 
 export default function DashboardPage() {
-  const [loading, setLoading] = React.useState(true)
-  const [error, setError] = React.useState("")
-  const [summary, setSummary] = React.useState<Row[]>([])
-  const [ledger, setLedger] = React.useState<Row[]>([])
-  const [godowns, setGodowns] = React.useState<Row[]>([])
-  const [inward, setInward] = React.useState<Row[]>([])
-  const [batches, setBatches] = React.useState<Row[]>([])
-  const [passes, setPasses] = React.useState<Row[]>([])
-  // Financial totals are null for roles outside Owner/Admin +
-  // Accountant (see getDashboardData): null renders as "—", never 0,
-  // so a restricted role is never shown a misleading zero balance.
-  const [receivables, setReceivables] = React.useState<number | null>(null)
-  const [payables, setPayables] = React.useState<number | null>(null)
-  const [cashOpening, setCashOpening] = React.useState<number | null>(null)
-  const [cashPosition, setCashPosition] = React.useState<number | null>(null)
-  const [cashByAccount, setCashByAccount] = React.useState<Row[]>([])
-  const [cashSource, setCashSource] = React.useState<string | null>(null)
-  const [payrollDue, setPayrollDue] = React.useState<number | null>(null)
-  const [latestPassNo, setLatestPassNo] = React.useState<string | null>(null)
-  // "Today" is client state, set in an effect (TodayBadge pattern): reading
-  // new Date() during render makes this route un-prerenderable under
-  // cacheComponents (blocking-prerender-current-time). The page skeleton
-  // covers first paint, so the value is set before content renders.
-  const [todayStr, setTodayStr] = React.useState<string | null>(null)
-  React.useEffect(() => { setTodayStr(new Date().toISOString().slice(0, 10)) }, [])
-  const isToday = (d: string) => todayStr !== null && String(d ?? "").slice(0, 10) === todayStr
-
-  const load = React.useCallback(async () => {
-    setLoading(true)
-    setError("")
-    try {
-      // One aggregate call (was: nine separate actions, nine auth checks,
-      // five full-table fetches with nested line items). All downstream
-      // math below is unchanged.
-      const d = await getDashboardData()
-      if (!d.success) {
-        setError(d.error ?? "Could not load dashboard data.")
-        return
-      }
-      const data = (d.data ?? {}) as Record<string, any>
-      setSummary(Array.isArray(data.summary) ? data.summary : [])
-      setLedger(Array.isArray(data.ledger) ? data.ledger : [])
-      setInward(Array.isArray(data.inwardToday) ? data.inwardToday : [])
-      setBatches(Array.isArray(data.batchesToday) ? data.batchesToday : [])
-      setPasses(Array.isArray(data.passesToday) ? data.passesToday : [])
-      setGodowns(Array.isArray(data.godowns) ? data.godowns : [])
-      setReceivables(data.receivables === null || data.receivables === undefined ? null : num(data.receivables))
-      setPayables(data.payables === null || data.payables === undefined ? null : num(data.payables))
-      setCashOpening(data.cashOpening === null || data.cashOpening === undefined ? null : num(data.cashOpening))
-      setCashPosition(data.cashPosition === null || data.cashPosition === undefined ? null : num(data.cashPosition))
-      setCashByAccount(Array.isArray(data.cashByAccount) ? data.cashByAccount : [])
-      setCashSource(data.cashSource ?? null)
-      setPayrollDue(data.payrollDue === null || data.payrollDue === undefined ? null : num(data.payrollDue))
-      setLatestPassNo(data.latestPassNo ?? null)
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  React.useEffect(() => { load() }, [load])
-  if (loading) return <DashboardSkeleton />
-
-  const postedToday = (rows: Row[]) => rows.filter((r) => r.status === "posted" && isToday(r.date))
-  const todayInward = postedToday(inward)
-  const todayBatches = postedToday(batches)
-  const todayPasses = postedToday(passes)
-  const todayInwardKg = todayInward.reduce((a, r) => a + num(r.total_net_weight_kg), 0)
-  const todayInwardBags = todayInward.reduce((a, r) => a + num(r.total_bags), 0)
-  const todayOutputKg = todayBatches.reduce((a, r) => a + num(r.actual_output_kg), 0)
-  const yieldAvg = todayBatches.length ? todayBatches.reduce((a, r) => a + num(r.yield_pct), 0) / todayBatches.length : 0
-  const byproductToday = todayBatches.reduce((a, r) => a + num(r.byproduct_kg), 0)
-  const wastageToday = todayBatches.reduce((a, r) => a + num(r.waste_kg), 0)
-  const todayOutKg = todayPasses.reduce((a, r) => a + num(r.total_weight_kg), 0)
-  const lowCount = summary.filter((r) => r.below_min_stock).length
-  const byProduct = new Map<string, { name: string; total: number; low: boolean }>()
-  for (const r of summary) {
-    const cur = byProduct.get(r.product_id) ?? { name: r.product_name, total: 0, low: false }
-    cur.total += num(r.balance_kg)
-    cur.low = cur.low || !!r.below_min_stock
-    byProduct.set(r.product_id, cur)
-  }
-  const productRows = [...byProduct.values()]
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -118,103 +202,36 @@ export default function DashboardPage() {
           <Link href="/employees?tab=attendance" className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-card hover:bg-muted text-foreground border border-border text-xs font-semibold"><Clock className="h-3.5 w-3.5 text-emerald-500" />Attendance</Link>
         </div>
       </div>
-      {error && <AlertBanner tone="error" message={/not configured|Authentication required/i.test(error) ? "Supabase is not set up, or sign-in is required. See SETUP.md." : error} onDismiss={() => setError("")} />}
+      <Suspense fallback={null}>
+        <FastErrorSection />
+      </Suspense>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="expensive-card p-4 flex flex-col justify-between">
-          <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Today&apos;s Inward</span><div className="h-8 w-8 rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 flex items-center justify-center"><Truck className="h-4 w-4" /></div></div>
-          <div className="my-3"><div className="text-2xl font-black text-foreground">{formatWeight(todayInwardKg)}</div><div className="text-xs text-muted-foreground mt-1 font-medium"><span className="text-emerald-600 dark:text-emerald-400 font-semibold">{formatBags(todayInwardBags)}</span> received today</div></div>
-          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>Arrivals today: {todayInward.length} voucher{todayInward.length === 1 ? "" : "s"}</span><Link href="/inward?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">View <ArrowUpRight className="h-3 w-3" /></Link></div>
-        </div>
-        <div className="expensive-card p-4 flex flex-col justify-between">
-          <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Processing Output</span><div className="h-8 w-8 rounded-lg bg-teal-500/15 text-teal-600 dark:text-teal-400 flex items-center justify-center"><Boxes className="h-4 w-4" /></div></div>
-          <div className="my-3"><div className="text-2xl font-black text-foreground">{formatWeight(todayOutputKg)}</div><div className="text-xs text-muted-foreground mt-1 font-medium"><span className="text-teal-600 dark:text-teal-400 font-bold">{yieldAvg.toFixed(1)}% Efficiency</span> Graded seed yield</div></div>
-          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>By-products: {formatWeight(byproductToday)} &bull; Wastage: {formatWeight(wastageToday)}</span><Link href="/production?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">Batches <ArrowUpRight className="h-3 w-3" /></Link></div>
-        </div>
-        <div className="expensive-card p-4 flex flex-col justify-between">
-          <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Dispatched</span><div className="h-8 w-8 rounded-lg bg-blue-500/15 text-blue-600 dark:text-blue-400 flex items-center justify-center"><FileCheck2 className="h-4 w-4" /></div></div>
-          <div className="my-3"><div className="text-2xl font-black text-foreground">{formatWeight(todayOutKg)}</div><div className="text-xs text-muted-foreground mt-1 font-medium"><span className="text-blue-600 dark:text-blue-400 font-semibold">{todayPasses.length} gate pass{todayPasses.length === 1 ? "" : "es"}</span> today</div></div>
-          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>Latest pass: {latestPassNo ?? "—"}</span><Link href="/gatepass?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">View <ArrowUpRight className="h-3 w-3" /></Link></div>
-        </div>
-        <div className="expensive-card p-4 flex flex-col justify-between">
-          <div className="flex items-center justify-between"><span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cash</span><div className="h-8 w-8 rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400 flex items-center justify-center"><Wallet className="h-4 w-4" /></div></div>
-          <div className="my-3"><div className="text-2xl font-black text-foreground">{cashPosition !== null ? formatCurrency(cashPosition) : cashOpening === null ? "—" : formatCurrency(cashOpening)}</div><div className="text-xs text-muted-foreground mt-1 font-medium">{cashOpening === null && cashPosition === null ? "Restricted to Owner/Admin and Accountant" : cashSource === "daybook" ? "Live cash position (daybook)" : "Opening balances (daybook unavailable)"}</div>
-            {cashByAccount.length > 0 && (
-              <div className="mt-2 space-y-0.5">
-                {cashByAccount.map((a: Row) => (
-                  <div key={a.cashAccountId ?? a.code ?? a.name} className="flex items-center justify-between text-[11px] text-muted-foreground"><span>{a.code ? `${a.code} — ${a.name}` : a.name}</span><span className="font-mono font-semibold text-foreground">{formatCurrency(num(a.closing))}</span></div>
-                ))}
-              </div>
-            )}
-          </div>
-          <div className="pt-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground"><span>See live balances on the Daybook page</span><Link href="/daybook?filter=today" className="text-primary hover:underline font-semibold flex items-center gap-0.5">Daybook <ArrowUpRight className="h-3 w-3" /></Link></div>
-        </div>
+        <Suspense fallback={<><StatCardFallback /><StatCardFallback /><StatCardFallback /></>}>
+          <TodaySection />
+        </Suspense>
+        <Suspense fallback={<StatCardFallback />}>
+          <CashSection />
+        </Suspense>
       </div>
-      {lowCount > 0 && (
-        <Link href="/inventory?filter=low" className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-xs font-medium text-amber-700 dark:text-amber-400 hover:bg-amber-500/15 transition-colors">
-          <AlertTriangle className="h-4 w-4 shrink-0" /><span><strong>{lowCount} product{lowCount === 1 ? "" : "s"} at or below minimum stock.</strong></span><span className="ml-auto font-semibold flex items-center gap-0.5">View low stock <ArrowUpRight className="h-3.5 w-3.5" /></span>
-        </Link>
-      )}
+      <Suspense fallback={null}>
+        <SlowErrorLowStockSection />
+      </Suspense>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          <div className="expensive-card p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div><h2 className="text-sm font-bold text-foreground flex items-center gap-2"><Package className="h-4 w-4 text-emerald-500" />Stock by Product</h2></div>
-              <Link href="/inventory" className="text-xs text-primary hover:underline font-semibold flex items-center gap-1">Full ledger <ArrowUpRight className="h-3.5 w-3.5" /></Link>
-            </div>
-            <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[560px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2.5">Product / Grade</th><th className="pb-2.5 text-right">Available Weight</th><th className="pb-2.5 text-center">Status</th></tr></thead>
-              <tbody className="divide-y divide-border">
-                {productRows.length === 0 && <tr><td colSpan={3} className="py-8 text-center text-muted-foreground">No stock yet. Post an inward voucher.</td></tr>}
-                {productRows.map((item) => (
-                  <tr key={item.name} className="hover:bg-muted transition-colors">
-                    <td className="py-2.5 font-medium text-foreground">{item.name}</td>
-                    <td className="py-2.5 text-right font-bold text-foreground">{formatWeight(item.total)}</td>
-                    <td className="py-2.5 text-center">{item.low ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-semibold border border-amber-500/20"><AlertTriangle className="h-3 w-3" />Low Stock</span> : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-semibold border border-emerald-500/20"><CheckCircle2 className="h-3 w-3" />Normal</span>}</td>
-                  </tr>
-                ))}
-              </tbody></table></div>
-          </div>
-          <div className="expensive-card p-5">
-            <div className="mb-4"><h2 className="text-sm font-bold text-foreground flex items-center gap-2"><Clock className="h-4 w-4 text-emerald-500" />Recent Movements</h2></div>
-            <div className="space-y-3">
-              {ledger.length === 0 && <p className="text-xs text-muted-foreground py-4 text-center">No movements yet. Post an inward voucher.</p>}
-              {ledger.map((entry: Row) => {
-                const isInward = num(entry.inward_qty) > 0
-                return (
-                  <div key={entry.id} className="flex items-center justify-between p-3 rounded-lg bg-card border border-border text-xs">
-                    <div className="flex items-center gap-3"><div className={`h-8 w-8 rounded-lg flex items-center justify-center font-bold ${isInward ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-blue-500/15 text-blue-600 dark:text-blue-400"}`}>{isInward ? <ArrowDownRight className="h-4 w-4" /> : <ArrowUpRight className="h-4 w-4" />}</div>
-                      <div><div className="font-semibold text-foreground flex items-center gap-2"><span>{entry.product_name || entry.voucher_no}</span><span className="text-[10px] px-1.5 py-0.2 rounded bg-muted text-muted-foreground uppercase font-mono">{String(entry.voucher_type ?? "").replace("_", " ")}</span></div><div className="text-[11px] text-muted-foreground">{entry.godown_name} &bull; {entry.notes}</div></div></div>
-                    <div className="text-right"><div className={`font-black ${isInward ? "text-emerald-600 dark:text-emerald-400" : "text-blue-600 dark:text-blue-400"}`}>{isInward ? `+${formatWeight(num(entry.inward_qty))}` : `-${formatWeight(num(entry.outward_qty))}`}</div><div className="text-[10px] text-muted-foreground font-mono">Bal: {formatWeight(num(entry.running_balance))}</div></div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+          <Suspense fallback={<TableCardSkeleton rows={6} columns={[3, 2, 1]} />}>
+            <StockSection />
+          </Suspense>
+          <Suspense fallback={<ListCardSkeleton rows={4} />}>
+            <MovementsSection />
+          </Suspense>
         </div>
         <div className="space-y-6">
-          <div className="expensive-card p-5">
-            <h2 className="text-sm font-bold text-foreground mb-1 flex items-center gap-2"><TrendingUp className="h-4 w-4 text-emerald-500" />Money Owed</h2>
-            <div className="space-y-3.5">
-              <div className="p-3 rounded-lg bg-emerald-500/5 border border-emerald-500/20"><div className="text-xs text-muted-foreground font-medium">Customer Receivables</div><div className="text-xl font-black text-emerald-600 dark:text-emerald-400 mt-1">{receivables === null ? "—" : formatCurrency(receivables)}</div></div>
-              <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/20"><div className="text-xs text-muted-foreground font-medium">Vendor Payables</div><div className="text-xl font-black text-amber-600 dark:text-amber-400 mt-1">{payables === null ? "—" : formatCurrency(payables)}</div></div>
-            </div>
-            <Link href="/employees?tab=payroll&filter=unpaid" className="mt-3 flex items-center justify-between p-3 rounded-lg bg-card border border-border hover:bg-muted transition-colors"><span className="text-xs text-muted-foreground font-medium">Payroll due</span><span className="text-xs font-bold text-foreground flex items-center gap-1">{payrollDue === null ? "Open payroll" : formatCurrency(payrollDue)} <ArrowUpRight className="h-3.5 w-3.5 text-primary" /></span></Link>
-            <div className="mt-4 pt-3 border-t border-border flex items-center justify-between text-xs"><Link href="/billing?filter=receivable" className="text-primary hover:underline font-semibold">Customer Invoices</Link><Link href="/purchases?filter=payable" className="text-primary hover:underline font-semibold">Vendor Bills</Link></div>
-          </div>
-          <div className="expensive-card p-5">
-            <h2 className="text-sm font-bold text-foreground mb-1 flex items-center gap-2"><Building2 className="h-4 w-4 text-emerald-500" />Godown Space</h2>
-            <div className="space-y-4">
-              {godowns.map((g) => {
-                const stored = summary.filter((r) => r.godown_id === g.id).reduce((a, r) => a + num(r.balance_kg), 0)
-                const capacityKg = g.capacity_metric_tons ? num(g.capacity_metric_tons) * 1000 : 0
-                const percent = capacityKg > 0 ? Math.min(100, Math.round((stored / capacityKg) * 100)) : 0
-                return (
-                  <div key={g.id} className="space-y-1.5"><div className="flex items-center justify-between text-xs"><span className="font-semibold text-foreground">{g.name}</span><span className="text-muted-foreground font-mono">{capacityKg > 0 ? `${percent}% Occupied` : "Capacity not set"}</span></div>
-                    <div className="h-2 w-full rounded-md bg-muted overflow-hidden"><div className="h-full bg-emerald-600 rounded-md" style={{ width: `${percent}%` }} /></div>
-                    <div className="flex justify-between text-[10px] text-muted-foreground"><span>{formatWeight(stored)} stored</span><span>Cap: {g.capacity_metric_tons ? `${g.capacity_metric_tons} MT` : "Not set"}</span></div></div>
-                )
-              })}
-            </div>
-          </div>
+          <Suspense fallback={<MoneyFallback />}>
+            <MoneySection />
+          </Suspense>
+          <Suspense fallback={<GodownFallback />}>
+            <GodownSection />
+          </Suspense>
         </div>
       </div>
     </div>
