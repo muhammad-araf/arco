@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import {
   ArrowUp,
   Loader2,
@@ -9,21 +9,15 @@ import {
   Database,
   Copy,
   Check,
-  Plus,
-  Trash2,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
-  MessageSquare,
   Bot
 } from 'lucide-react'
 import { 
-  getChatSessions, 
+  getChatSessions,
   getChatSession, 
   saveChatSession, 
-  deleteChatSession, 
-  createNewSession, 
-  type ChatSession 
+  createNewSession
 } from '@/lib/ai/chat-storage'
 import { MarkdownContent } from '@/components/ai/markdown-content'
 
@@ -75,55 +69,54 @@ function ThinkingBlock({ thinking, status }: { thinking?: string; status?: strin
 }
 
 export function ChatClient({ actor }: { actor: { userId: string; email: string | null; role: string; displayName: string } }) {
-  const router = useRouter()
   const searchParams = useSearchParams()
   const sessionId = searchParams.get('session')
 
-  const [sessions, setSessions] = React.useState<ChatSession[]>([])
   const [activeSessionId, setActiveSessionId] = React.useState<string | null>(sessionId)
   const [messages, setMessages] = React.useState<Message[]>([])
   const [input, setInput] = React.useState('')
   const [loading, setLoading] = React.useState(false)
   const [copiedId, setCopiedId] = React.useState<string | null>(null)
-  // Mobile only: one panel at a time — the conversation list OR the chat
-  // panel. Desktop always shows both side by side (md:flex below), so
-  // this state never hides anything at md and up.
-  const [mobileView, setMobileView] = React.useState<'list' | 'panel'>('list')
 
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
+  // Guards the first-session auto-select below so it runs on initial
+  // mount only. Without this, navigating back to bare /chat (sidebar
+  // New Chat, or deleting the last session) would bounce the user
+  // back into the first session instead of staying an empty new chat.
+  const initialMountRef = React.useRef(false)
 
-  // Load sessions on mount
+  // Load the ?session= session, or — on initial mount only — the first
+  // session when there is no ?session= param. The conversation list
+  // itself lives in the global sidebar now, so this page is a single
+  // column and no longer keeps its own session list.
   React.useEffect(() => {
-    const list = getChatSessions()
-    setSessions(list)
-
     if (sessionId) {
+      initialMountRef.current = true
       const active = getChatSession(sessionId)
       if (active) {
         setMessages(active.messages as Message[])
         setActiveSessionId(active.id)
-        setMobileView('panel')
-        return
       }
+      return
     }
 
-    if (list.length > 0 && !sessionId) {
-      const first = list[0]
-      setActiveSessionId(first.id)
-      setMessages(first.messages as Message[])
-      setMobileView('panel')
+    if (!initialMountRef.current) {
+      initialMountRef.current = true
+      const list = getChatSessions()
+      if (list.length > 0) {
+        const first = list[0]
+        setActiveSessionId(first.id)
+        setMessages(first.messages as Message[])
+      }
+      return
     }
+
+    // Later navigation to bare /chat: stay an empty new chat.
+    setActiveSessionId(null)
+    setMessages([])
+    setInput('')
   }, [sessionId])
-
-  // Sync event listener for multi-tab
-  React.useEffect(() => {
-    const handleSync = () => {
-      setSessions(getChatSessions())
-    }
-    window.addEventListener('arco-chats-changed', handleSync)
-    return () => window.removeEventListener('arco-chats-changed', handleSync)
-  }, [])
 
   // Auto scroll
   React.useEffect(() => {
@@ -136,40 +129,6 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
       textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 160)}px`
-    }
-  }
-
-  const handleSelectSession = (id: string) => {
-    const session = getChatSession(id)
-    if (session) {
-      setActiveSessionId(session.id)
-      setMessages(session.messages as Message[])
-      // Mobile: selecting a conversation shows its panel.
-      setMobileView('panel')
-      router.push(`/chat?session=${id}`)
-    }
-  }
-
-  const handleNewChat = () => {
-    setActiveSessionId(null)
-    setMessages([])
-    setInput('')
-    // Mobile: a new chat opens the (empty) panel, not the list.
-    setMobileView('panel')
-    router.push('/chat')
-  }
-
-  const handleDeleteSession = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation()
-    deleteChatSession(id)
-    const updated = getChatSessions()
-    setSessions(updated)
-    if (activeSessionId === id) {
-      if (updated.length > 0) {
-        handleSelectSession(updated[0].id)
-      } else {
-        handleNewChat()
-      }
     }
   }
 
@@ -217,7 +176,6 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
       currSessionId = created.id
       setActiveSessionId(currSessionId)
       saveChatSession(created)
-      setSessions(getChatSessions())
       window.history.replaceState(null, '', `/chat?session=${currSessionId}`)
     }
 
@@ -335,7 +293,6 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
           messages: completedConversation,
           updatedAt: new Date().toISOString()
         })
-        setSessions(getChatSessions())
       }
     } catch (err: any) {
       console.error('Chat error:', err)
@@ -359,71 +316,12 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
   }
 
   return (
-    <div className="h-[calc(100vh-6.5rem)] flex rounded-md border border-border bg-card shadow-xs overflow-hidden">
-      {/* Session History Sidebar — full width on mobile (one panel at a
-          time), w-72 beside the panel on desktop. */}
-      <div className={`w-full md:w-72 border-r border-border bg-muted/20 flex-col shrink-0 ${mobileView === 'panel' ? 'hidden md:flex' : 'flex'}`}>
-        <div className="p-3 border-b border-border space-y-2.5">
-          <button
-            type="button"
-            onClick={handleNewChat}
-            className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors cursor-pointer"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            <span>New Chat</span>
-          </button>
-          <p className="text-[11px] font-semibold tracking-wide text-muted-foreground">
-            RECENT CHATS ({sessions.length})
-          </p>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {sessions.map(s => {
-            const isActive = s.id === activeSessionId
-            return (
-              <div
-                key={s.id}
-                onClick={() => handleSelectSession(s.id)}
-                className={`group flex items-center justify-between px-2.5 py-2 rounded text-xs cursor-pointer transition-colors ${
-                  isActive 
-                    ? 'bg-emerald-600/10 text-emerald-800 dark:text-emerald-300 font-semibold border border-emerald-600/30' 
-                    : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'
-                }`}
-              >
-                <div className="flex items-center gap-2 min-w-0 flex-1">
-                  <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                  <span className="truncate">{s.title || 'Untitled Session'}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={(e) => handleDeleteSession(e, s.id)}
-                  className="opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:text-red-500 p-0.5 rounded transition-opacity"
-                  title="Delete chat"
-                >
-                  <Trash2 className="h-3 w-3" />
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Main Chat Area — hidden on mobile while the list is shown. */}
-      <div className={`flex-1 flex-col min-w-0 bg-background ${mobileView === 'list' ? 'hidden md:flex' : 'flex'}`}>
-        {/* Mobile Back row — the old header carried the Back button, so
-            this slim md:hidden row keeps that affordance. */}
-        <div className="md:hidden border-b border-border px-3 py-2 bg-card">
-          <button
-            type="button"
-            onClick={() => setMobileView('list')}
-            aria-label="Back to conversations"
-            className="inline-flex items-center gap-0.5 p-1.5 rounded hover:bg-muted text-muted-foreground"
-          >
-            <ChevronLeft className="h-4 w-4" />
-            <span className="text-xs font-medium">Back</span>
-          </button>
-        </div>
-
+    // Single column: the conversation list lives in the global sidebar
+    // now, so this page is always just the centered message column,
+    // the input bar, and the disclaimer line — on mobile as well as
+    // desktop (the list is reached via the sidebar drawer).
+    <div className="h-[calc(100vh-6.5rem)] flex flex-col rounded-md border border-border bg-card shadow-xs overflow-hidden">
+      <div className="flex-1 flex flex-col min-w-0 bg-background">
         {/* Messages Stream — centered max-width column. */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6">
           <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col space-y-4">
