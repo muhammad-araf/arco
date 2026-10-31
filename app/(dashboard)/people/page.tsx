@@ -4,7 +4,7 @@ import * as React from "react"
 import Link from "next/link"
 import { getMyProfile, listProfiles, setUserRole, type AppRole } from "@/app/actions/auth"
 import { AlertBanner, EmptyState } from "@/components/erp-ui"
-import { UsersSkeleton } from "@/components/route-skeletons"
+import { PeopleSkeleton } from "@/components/route-skeletons"
 
 const ROLE_LABELS: Record<AppRole, string> = {
   owner_admin: "Owner / Admin",
@@ -138,7 +138,7 @@ export default function PeoplePage() {
       {activeTab === "system-users" && (
         <>
           {loading ? (
-            <UsersSkeleton />
+            <PeopleSkeleton />
           ) : (
             <div className="space-y-6">
               <p className="text-xs text-muted-foreground">
