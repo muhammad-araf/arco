@@ -21,7 +21,7 @@ import {
   SubmitSpinner,
   getUrlFilter,
 } from "@/components/erp-ui"
-import { PayrollSkeleton } from "@/components/route-skeletons"
+import { EmployeesSkeleton } from "@/components/route-skeletons"
 import { PayrollPrint } from "@/components/print/payroll-print"
 import dynamic from "next/dynamic"
 
@@ -407,7 +407,7 @@ export default function EmployeesPage() {
     return drillFilter === "unpaid" ? merged.filter((p: any) => Number(p.balance_amount || 0) > 0) : merged
   }, [periods, unpaid, drillFilter])
 
-  if (isLoading) return <PayrollSkeleton />
+  if (isLoading) return <EmployeesSkeleton />
 
   return (
     <div className="space-y-6">
