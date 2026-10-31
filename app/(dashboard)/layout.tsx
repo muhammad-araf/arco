@@ -2,8 +2,6 @@ import * as React from "react"
 import { Suspense } from "react"
 import { redirect } from "next/navigation"
 import { connection } from "next/server"
-import Link from "next/link"
-import { Sparkles } from "lucide-react"
 import { IdleTimeoutLoader, SidebarSkeleton, SidebarWithActor } from "@/components/layout-shell-parts"
 import { ThemeToggle } from "@/components/theme-toggle"
 import { TodayBadge } from "@/components/today-badge"
@@ -93,14 +91,6 @@ export default async function DashboardLayout({
           </div>
 
           <div className="flex items-center gap-2.5">
-            <Link
-              href="/chat"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card hover:bg-muted text-xs font-semibold text-foreground transition-colors"
-              title="Open ARCO AI Command Center"
-            >
-              <Sparkles className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-              <span className="hidden sm:inline">AI Command</span>
-            </Link>
             <ThemeToggle />
           </div>
         </header>
