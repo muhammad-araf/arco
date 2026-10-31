@@ -57,6 +57,60 @@ function monthRange(year: number, month: number): { from: string; to: string } {
   return { from, to: `${year}-${String(month).padStart(2, "0")}-${String(last).padStart(2, "0")}` }
 }
 
+// One attendance-grid row, memoized on the employee object reference plus
+// primitive status/overtime and stable callbacks. Every status click or
+// overtime keystroke used to re-render the whole grid; unchanged rows
+// now skip re-rendering. Cells copied verbatim from the old inline row,
+// with the per-row setState closures replaced by the callbacks below.
+const AttendanceRow = React.memo(function AttendanceRow(props: {
+  emp: Employee
+  currentStatus: AttendanceStatus
+  overtime: number
+  onStatus: (empId: string, status: AttendanceStatus) => void
+  onOvertime: (empId: string, value: number) => void
+}) {
+  const { emp, currentStatus, overtime, onStatus, onOvertime } = props
+  return (
+    <tr className="hover:bg-muted transition-colors">
+      <td className="py-3 font-mono font-bold text-muted-foreground">{emp.code}</td>
+      <td className="py-3 font-bold text-foreground">{emp.full_name}</td>
+      <td className="py-3 text-muted-foreground">{emp.designation}</td>
+      <td className="py-3 text-muted-foreground capitalize">
+        {emp.pay_type === "monthly" ? "Monthly Salary" : emp.pay_type === "piece_rate" ? "Piece Rate" : "Daily Wage"}
+      </td>
+      <td className="py-3 text-right font-mono font-bold text-foreground">
+        {formatCurrency(emp.base_rate)} {emp.pay_type === "daily" ? "/ day" : emp.pay_type === "piece_rate" ? "/ piece" : "/ mo"}
+      </td>
+      <td className="py-3 text-center">
+        <div className="inline-flex flex-wrap items-center gap-1 p-1 rounded-lg bg-muted border border-border">
+          {ALL_STATUSES.map((st) => (
+            <button
+              key={st}
+              type="button"
+              onClick={() => onStatus(emp.id, st)}
+              className={`px-2 py-1 rounded text-[10px] font-bold cursor-pointer transition-colors ${
+                currentStatus === st ? "bg-emerald-600 text-white shadow-xs" : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {STATUS_LABEL[st]}
+            </button>
+          ))}
+        </div>
+      </td>
+      <td className="py-3 text-center">
+        <input
+          type="number"
+          min="0"
+          step="0.5"
+          value={overtime}
+          onChange={(e) => onOvertime(emp.id, Number(e.target.value))}
+          className="w-20 px-2 py-1.5 rounded-lg bg-background border border-border text-foreground font-mono text-center"
+        />
+      </td>
+    </tr>
+  )
+})
+
 export default function EmployeesPage() {
   const [employees, setEmployees] = React.useState<Employee[]>([])
   const [attendanceDate, setAttendanceDate] = React.useState("")
@@ -328,8 +382,26 @@ export default function EmployeesPage() {
     () => [...periods, ...unpaid, ...drafts].filter((p: any, i: number, arr: any[]) => arr.findIndex((x: any) => x.id === p.id) === i),
     [periods, unpaid, drafts],
   )
-  const employeeName = (id: string) =>
-    employees.find((e) => e.id === id)?.full_name ?? "Not set"
+  // Employee-name map, rebuilt only when the employee list changes. The
+  // old .find() ran once per row in the register, drafts, finalized and
+  // advances tables (and per option in the payment-history select) on
+  // every render. First entry wins, exactly as .find() did.
+  const employeeNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const e of employees) if (!map.has(e.id)) map.set(e.id, e.full_name)
+    return map
+  }, [employees])
+  const employeeName = (id: string) => employeeNameMap.get(id) ?? "Not set"
+  // Stable attendance callbacks so AttendanceRow's memo is not defeated
+  // by a new closure on every render; both use functional updates, so
+  // they need no dependencies. The overtime clamp matches the old inline
+  // handler (Number("") and NaN both become 0, then clamped at 0).
+  const handleAttendanceStatus = React.useCallback((empId: string, st: AttendanceStatus) => {
+    setAttendanceState((prev) => ({ ...prev, [empId]: st }))
+  }, [])
+  const handleAttendanceOvertime = React.useCallback((empId: string, value: number) => {
+    setOvertimeState((prev) => ({ ...prev, [empId]: Math.max(0, value || 0) }))
+  }, [])
   const visibleFinalized = React.useMemo(() => {
     const merged = [...periods, ...unpaid.filter((u) => !periods.some((p) => p.id === u.id))]
     return drillFilter === "unpaid" ? merged.filter((p: any) => Number(p.balance_amount || 0) > 0) : merged
@@ -506,48 +578,16 @@ export default function EmployeesPage() {
                   </td>
                 </tr>
               )}
-              {employees.map((emp) => {
-                const currentStatus = attendanceState[emp.id] || "present"
-                return (
-                  <tr key={emp.id} className="hover:bg-muted transition-colors">
-                    <td className="py-3 font-mono font-bold text-muted-foreground">{emp.code}</td>
-                    <td className="py-3 font-bold text-foreground">{emp.full_name}</td>
-                    <td className="py-3 text-muted-foreground">{emp.designation}</td>
-                    <td className="py-3 text-muted-foreground capitalize">
-                      {emp.pay_type === "monthly" ? "Monthly Salary" : emp.pay_type === "piece_rate" ? "Piece Rate" : "Daily Wage"}
-                    </td>
-                    <td className="py-3 text-right font-mono font-bold text-foreground">
-                      {formatCurrency(emp.base_rate)} {emp.pay_type === "daily" ? "/ day" : emp.pay_type === "piece_rate" ? "/ piece" : "/ mo"}
-                    </td>
-                    <td className="py-3 text-center">
-                      <div className="inline-flex flex-wrap items-center gap-1 p-1 rounded-lg bg-muted border border-border">
-                        {ALL_STATUSES.map((st) => (
-                          <button
-                            key={st}
-                            type="button"
-                            onClick={() => setAttendanceState((prev) => ({ ...prev, [emp.id]: st }))}
-                            className={`px-2 py-1 rounded text-[10px] font-bold cursor-pointer transition-colors ${
-                              currentStatus === st ? "bg-emerald-600 text-white shadow-xs" : "text-muted-foreground hover:text-foreground"
-                            }`}
-                          >
-                            {STATUS_LABEL[st]}
-                          </button>
-                        ))}
-                      </div>
-                    </td>
-                    <td className="py-3 text-center">
-                      <input
-                        type="number"
-                        min="0"
-                        step="0.5"
-                        value={overtimeState[emp.id] ?? 0}
-                        onChange={(e) => setOvertimeState((prev) => ({ ...prev, [emp.id]: Math.max(0, Number(e.target.value) || 0) }))}
-                        className="w-20 px-2 py-1.5 rounded-lg bg-background border border-border text-foreground font-mono text-center"
-                      />
-                    </td>
-                  </tr>
-                )
-              })}
+              {employees.map((emp) => (
+                <AttendanceRow
+                  key={emp.id}
+                  emp={emp}
+                  currentStatus={attendanceState[emp.id] || "present"}
+                  overtime={overtimeState[emp.id] ?? 0}
+                  onStatus={handleAttendanceStatus}
+                  onOvertime={handleAttendanceOvertime}
+                />
+              ))}
             </tbody>
           </table>
         </div>
@@ -622,7 +662,7 @@ export default function EmployeesPage() {
         <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2 text-right">Gross</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status</th></tr></thead>
           <tbody className="divide-y divide-border">
             {registerRows.length === 0 && <tr><td colSpan={6} className="py-4 text-muted-foreground">No payroll periods for this month yet.</td></tr>}
-            {registerRows.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? p.employee_id}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}</td></tr>))}
+            {registerRows.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employeeNameMap.get(p.employee_id) ?? p.employee_id}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}</td></tr>))}
             {registerRows.length > 0 && (<tr className="border-t-2 border-border font-bold"><td className="py-2">Totals</td><td className="py-2 text-right">{formatCurrency(Number(registerTotals?.gross || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(registerTotals?.net || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(registerTotals?.paid || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(registerTotals?.balance || 0))}</td><td /></tr>)}
           </tbody></table></div>
       </div>)}
@@ -632,7 +672,7 @@ export default function EmployeesPage() {
         <div className="text-xs">
           <h2 className="text-sm font-bold text-foreground mb-1">Payment History</h2>
           <p className="text-muted-foreground mb-3">Pick a period to see every payment recorded against it.</p>
-          <select value={payHistoryPeriodId} onChange={(e) => setPayHistoryPeriodId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground mb-3"><option value="">Select period</option>{[...periods, ...unpaid, ...drafts].filter((p: any, i: number, arr: any[]) => arr.findIndex((x: any) => x.id === p.id) === i).map((p: any) => (<option key={p.id} value={p.id}>{employees.find((e) => e.id === p.employee_id)?.full_name ?? "Not set"} — {p.month}/{p.year} ({p.status})</option>))}</select>
+          <select value={payHistoryPeriodId} onChange={(e) => setPayHistoryPeriodId(e.target.value)} className="w-full px-2.5 py-2 rounded-lg bg-background border border-border text-foreground mb-3"><option value="">Select period</option>{allPeriods.map((p: any) => (<option key={p.id} value={p.id}>{employeeName(p.employee_id)} — {p.month}/{p.year} ({p.status})</option>))}</select>
           {payHistoryPeriodId && payHistoryRows.length === 0 && <p className="text-muted-foreground">No payments recorded for this period yet.</p>}
           {payHistoryRows.length > 0 && (<table className="w-full text-left text-xs"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Date</th><th className="pb-2 text-right">Amount</th><th className="pb-2">Method</th><th className="pb-2">Reference</th></tr></thead><tbody className="divide-y divide-border">{payHistoryRows.map((r: any) => (<tr key={r.id}><td className="py-2">{r.date?.slice(0, 10)}</td><td className="py-2 text-right">{formatCurrency(Number(r.amount || 0))}</td><td className="py-2">{r.payment_method ?? r.account ?? "—"}</td><td className="py-2 font-mono">{r.reference_no ?? "—"}</td></tr>))}</tbody></table>)}
         </div>
@@ -659,7 +699,7 @@ export default function EmployeesPage() {
         <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-center">Action</th></tr></thead>
           <tbody className="divide-y divide-border">
             {drafts.length === 0 && <tr><td colSpan={4} className="py-4 text-muted-foreground">No drafts — run a payroll from the Run payroll button above to create one.</td></tr>}
-            {drafts.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? "Not set"}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-center"><button type="button" onClick={() => handleApprove(p.id)} className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button></td></tr>))}
+            {drafts.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employeeName(p.employee_id)}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-center"><button type="button" onClick={() => handleApprove(p.id)} className="px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button></td></tr>))}
           </tbody></table></div>
       </div>)}
 
@@ -673,13 +713,13 @@ export default function EmployeesPage() {
         <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[720px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Period</th><th className="pb-2 text-right">Gross</th><th className="pb-2 text-right">Net payable</th><th className="pb-2 text-right">Paid</th><th className="pb-2 text-right">Balance</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
             {visibleFinalized.length === 0 && <tr><td colSpan={7} className="py-4 text-muted-foreground">No payroll periods yet — run the first draft from the Run payroll button above.</td></tr>}
-            {visibleFinalized.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === p.employee_id)?.full_name ?? "Not set"}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}<button type="button" onClick={() => setPrintPayroll(p)} className="ml-2 px-2 py-0.5 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print</button>{p.status === "draft" && (<button type="button" onClick={() => handleApprove(p.id)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button>)}{(p.status === "approved" || p.status === "partially_paid") && Number(p.balance_amount || 0) > 0 && (<button type="button" onClick={() => setPayPeriod(p)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Pay</button>)}</td></tr>))}
+            {visibleFinalized.map((p: any) => (<tr key={p.id}><td className="py-2 font-semibold">{employeeName(p.employee_id)}</td><td className="py-2">{p.month}/{p.year}</td><td className="py-2 text-right">{formatCurrency(Number(p.gross_pay || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.net_payable || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(p.paid_amount || 0))}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(p.balance_amount || 0))}</td><td className="py-2 text-center">{p.status}<button type="button" onClick={() => setPrintPayroll(p)} className="ml-2 px-2 py-0.5 rounded-md bg-card hover:bg-muted border border-border text-[11px] font-semibold cursor-pointer">Print</button>{p.status === "draft" && (<button type="button" onClick={() => handleApprove(p.id)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Approve</button>)}{(p.status === "approved" || p.status === "partially_paid") && Number(p.balance_amount || 0) > 0 && (<button type="button" onClick={() => setPayPeriod(p)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Pay</button>)}</td></tr>))}
           </tbody></table></div>
       </div>)}
 
       {tab === "payroll" && printPayroll && (<div className="expensive-card p-4">
         <div className="flex items-center justify-between gap-3">
-          <p className="text-xs text-muted-foreground">Payroll print document for {employees.find((e) => e.id === printPayroll.employee_id)?.full_name ?? "this employee"} — {printPayroll.month}/{printPayroll.year}.</p>
+          <p className="text-xs text-muted-foreground">Payroll print document for {employeeNameMap.get(printPayroll.employee_id) ?? "this employee"} — {printPayroll.month}/{printPayroll.year}.</p>
           <div className="flex gap-2">
             <PrintButton label="Print payroll" className="px-4 py-2 rounded-lg bg-emerald-700 text-white text-xs font-bold cursor-pointer" />
             <button type="button" onClick={() => setPrintPayroll(null)} className="px-4 py-2 rounded-lg bg-card border border-border text-xs font-semibold cursor-pointer">Close</button>
@@ -688,8 +728,8 @@ export default function EmployeesPage() {
         <div className="hidden print:block mt-2">
           <PayrollPrint
             periodLabel={`${printPayroll.month}/${printPayroll.year}`}
-            employeeName={employees.find((e) => e.id === printPayroll.employee_id)?.full_name}
-            rows={[{ employee: employees.find((e) => e.id === printPayroll.employee_id)?.full_name, base: printPayroll.gross_pay, net: printPayroll.net_payable }]}
+            employeeName={employeeNameMap.get(printPayroll.employee_id)}
+            rows={[{ employee: employeeNameMap.get(printPayroll.employee_id), base: printPayroll.gross_pay, net: printPayroll.net_payable }]}
             totalNet={printPayroll.net_payable}
           />
         </div>
@@ -700,7 +740,7 @@ export default function EmployeesPage() {
         <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Employee</th><th className="pb-2">Date</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-right">Recovered</th><th className="pb-2 text-center">Status</th></tr></thead>
           <tbody className="divide-y divide-border">
             {advances.length === 0 && <tr><td colSpan={5} className="py-4 text-muted-foreground">No advances recorded yet.</td></tr>}
-            {advances.map((a: any) => (<tr key={a.id}><td className="py-2 font-semibold">{employees.find((e) => e.id === a.employee_id)?.full_name ?? a.employee_id}</td><td className="py-2">{a.date?.slice(0, 10)}</td><td className="py-2 text-right">{formatCurrency(Number(a.amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(a.recovered_amount || 0))}</td><td className="py-2 text-center">{a.status}</td></tr>))}
+            {advances.map((a: any) => (<tr key={a.id}><td className="py-2 font-semibold">{employeeNameMap.get(a.employee_id) ?? a.employee_id}</td><td className="py-2">{a.date?.slice(0, 10)}</td><td className="py-2 text-right">{formatCurrency(Number(a.amount || 0))}</td><td className="py-2 text-right">{formatCurrency(Number(a.recovered_amount || 0))}</td><td className="py-2 text-center">{a.status}</td></tr>))}
           </tbody></table></div>
       </div>)}
 

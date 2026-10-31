@@ -32,6 +32,21 @@ import { PrintButton } from "@/components/print/print-button"
 import { amountInWordsPKR } from "@/lib/calc/finance"
 import { DaybookSkeleton } from "@/components/route-skeletons"
 
+// One expense row, memoized on the expense object reference plus stable
+// callbacks. Typing in the cash-transfer form re-renders the page while
+// the expense list is unchanged; unchanged rows now skip re-rendering.
+// The row below is the old inline row, copied verbatim, with the per-row
+// closures replaced by the stable callbacks passed in as props.
+const ExpenseRow = React.memo(function ExpenseRow(props: {
+  expense: any
+  onPost: (row: any) => void
+  onEdit: (row: any) => void
+  onReverse: (row: any) => void
+}) {
+  const { expense: e, onPost, onEdit, onReverse } = props
+  return (<tr><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2 text-muted-foreground">{formatDate(e.date)}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}{(e as any).attachment_url ? (<div><AttachmentLink url={(e as any).attachment_url} note={(e as any).attachment_note} /></div>) : null}</td><td className="py-2 text-muted-foreground">{e.location || "—"}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.settlement ? ` (${e.settlement})` : ""}{e.status === "draft" && (<><button type="button" onClick={() => onPost(e)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Post</button><button type="button" onClick={() => onEdit(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Edit</button></>)} {e.status === "posted" && (<button type="button" onClick={() => onReverse(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>)
+})
+
 export default function DaybookPage() {
   const [expenses, setExpenses] = React.useState<ExpenseVoucher[]>([])
   const [cashClosing, setCashClosing] = React.useState(0)
@@ -129,7 +144,11 @@ export default function DaybookPage() {
   const currentBankBalance = bankClosing
   const currentOnlineBalance = onlineClosing
 
-  const handlePostExpenseDraft = async (row: any) => {
+  // Stable identity so ExpenseRow's memo is not defeated by a new
+  // handler on every render; the body is unchanged. (onEdit/onReverse
+  // need no wrapping: they are the setState functions themselves, which
+  // React keeps stable.)
+  const handlePostExpenseDraft = React.useCallback(async (row: any) => {
     if (isPending) return
     setIsPending(true)
     try {
@@ -145,7 +164,7 @@ export default function DaybookPage() {
     } finally {
       setIsPending(false)
     }
-  }
+  }, [isPending, loadData])
 
   const handleTransfer = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -295,7 +314,7 @@ export default function DaybookPage() {
         <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[640px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-2">Expense</th><th className="pb-2">Date</th><th className="pb-2">Category</th><th className="pb-2">Payee</th><th className="pb-2">Location</th><th className="pb-2 text-right">Amount</th><th className="pb-2 text-center">Status / Actions</th></tr></thead>
           <tbody className="divide-y divide-border">
             {expenses.length === 0 && <tr><td colSpan={7} className="py-4"><EmptyState title="No expenses in this range" hint="An expense records money spent running the godown — fuel, repairs, wages. Record one with New Expense; posted expenses appear here and reduce cash." actionLabel="Record Expense" onAction={() => setIsExpenseModalOpen(true)} /></td></tr>}
-            {expenses.map((e: any) => (<tr key={e.id}><td className="py-2 font-mono font-bold">{e.expense_no}</td><td className="py-2 text-muted-foreground">{formatDate(e.date)}</td><td className="py-2">{e.category_name}</td><td className="py-2">{e.payee}{(e as any).attachment_url ? (<div><AttachmentLink url={(e as any).attachment_url} note={(e as any).attachment_note} /></div>) : null}</td><td className="py-2 text-muted-foreground">{e.location || "—"}</td><td className="py-2 text-right font-bold">{formatCurrency(Number(e.amount || 0))}</td><td className="py-2 text-center">{e.status}{e.settlement ? ` (${e.settlement})` : ""}{e.status === "draft" && (<><button type="button" onClick={() => handlePostExpenseDraft(e)} className="ml-2 px-2 py-0.5 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-[11px] font-semibold cursor-pointer">Post</button><button type="button" onClick={() => setEditTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-muted text-[11px] font-semibold cursor-pointer">Edit</button></>)} {e.status === "posted" && (<button type="button" onClick={() => setExpReverseTarget(e)} className="ml-2 px-2 py-0.5 rounded-md hover:bg-red-500/10 text-red-600 dark:text-red-400 text-[11px] font-semibold cursor-pointer">Reverse</button>)}</td></tr>))}
+            {expenses.map((e: any) => (<ExpenseRow key={e.id} expense={e} onPost={handlePostExpenseDraft} onEdit={setEditTarget} onReverse={setExpReverseTarget} />))}
           </tbody></table>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
             <span>Showing {expenses.length === 0 ? 0 : (expensePage - 1) * expensePageSize + 1}–{(expensePage - 1) * expensePageSize + expenses.length} of {totalExpenses} expenses</span>

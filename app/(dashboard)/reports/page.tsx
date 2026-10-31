@@ -25,6 +25,27 @@ import {
   } from "@/components/erp-ui"
 import { ReportsSkeleton } from "@/components/route-skeletons"
 
+// One stock-movement row, memoized on primitive props only. The movement
+// table re-rendered on every ReportsPage render (date typing, COGS typing,
+// banners) even when its rows were unchanged; with names resolved by the
+// parent into strings, unchanged rows now skip re-rendering. No output
+// change: the cells below are the old inline row, copied verbatim.
+const StockMovementRow = React.memo(function StockMovementRow(props: {
+  godown: string
+  product: string
+  owner: string
+  opening: number
+  inward: number
+  consumed: number
+  produced: number
+  dispatched: number
+  adjusted: number
+  closing: number
+}) {
+  const { godown, product, owner, opening, inward, consumed, produced, dispatched, adjusted, closing } = props
+  return (<tr><td className="py-2 font-sans">{godown}</td><td className="py-2 font-sans font-semibold">{product}</td><td className="py-2 font-sans">{owner}</td><td className="py-2 text-right">{formatWeight(opening)}</td><td className="py-2 text-right">{formatWeight(inward)}</td><td className="py-2 text-right">{formatWeight(consumed)}</td><td className="py-2 text-right">{formatWeight(produced)}</td><td className="py-2 text-right">{formatWeight(dispatched)}</td><td className="py-2 text-right">{formatWeight(adjusted)}</td><td className="py-2 text-right font-bold">{formatWeight(closing)}</td></tr>)
+})
+
 export default function ReportsPage() {
   const [selectedReport, setSelectedReport] = React.useState<"pnl" | "stock" | "valuation">("pnl")
   const [reportError, setReportError] = React.useState("")
@@ -291,19 +312,54 @@ export default function ReportsPage() {
   const netMargin = totalRevenue > 0 ? Math.round((netProfit / totalRevenue) * 100) : 0
   const plWarnings: string[] = Array.isArray(pl?.warnings) ? pl.warnings : []
 
-  const stockTotals = stockSummary.reduce((acc, item) => ({ kg: acc.kg + item.totalStock, bags: acc.bags + item.bagsCount }), { kg: 0, bags: 0 })
+  // Lookup maps, rebuilt only when the lookup list changes. The old
+  // per-row .find() made every movement/valuation row scan the whole
+  // lookup list on every render (rows x lookups, repeated for the table,
+  // the totals and the export). First entry wins, exactly as .find() did,
+  // and a missing id still falls back to the id itself.
+  const godownNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const g of godowns as any[]) if (!map.has(g.id)) map.set(g.id, g.name)
+    return map
+  }, [godowns])
+  const productNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const x of products as any[]) if (!map.has(x.id)) map.set(x.id, x.name)
+    return map
+  }, [products])
+  const productCategoryMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const x of products as any[]) if (!map.has(x.id)) map.set(x.id, x.category)
+    return map
+  }, [products])
+  const partyNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const x of parties as any[]) if (!map.has(x.id)) map.set(x.id, x.name)
+    return map
+  }, [parties])
+  const productCategories = React.useMemo(
+    () => [...new Set(products.map((x: any) => x.category).filter(Boolean))],
+    [products],
+  )
   // Movement computed rows.
-  const godownName = (id: string) => godowns.find((g: any) => g.id === id)?.name ?? id
-  const productName = (id: string) => products.find((x: any) => x.id === id)?.name ?? id
-  const partyName = (id: string) => parties.find((x: any) => x.id === id)?.name ?? id
-  const movFiltered = movRows.filter((m: any) => {
+  const godownName = (id: string) => godownNameMap.get(id) ?? id
+  const productName = (id: string) => productNameMap.get(id) ?? id
+  const partyName = (id: string) => partyNameMap.get(id) ?? id
+  const stockTotals = React.useMemo(
+    () => stockSummary.reduce((acc, item) => ({ kg: acc.kg + item.totalStock, bags: acc.bags + item.bagsCount }), { kg: 0, bags: 0 }),
+    [stockSummary],
+  )
+  const movFiltered = React.useMemo(() => movRows.filter((m: any) => {
     if (movGodown && m.godown_id !== movGodown) return false
     if (movProduct && m.product_id !== movProduct) return false
     if (movOwner && (m.party_id ?? "") !== movOwner) return false
-    if (movCategory) { const prod = products.find((x: any) => x.id === m.product_id); if (prod?.category !== movCategory) return false }
+    if (movCategory && productCategoryMap.get(m.product_id) !== movCategory) return false
     return true
-  })
-  const movTotals = movFiltered.reduce((a: any, m: any) => ({ opening: a.opening + m.opening, inward: a.inward + m.inward, consumed: a.consumed + m.consumed, produced: a.produced + m.produced, dispatched: a.dispatched + m.dispatched, adjusted: a.adjusted + m.adjusted, closing: a.closing + m.closing }), { opening: 0, inward: 0, consumed: 0, produced: 0, dispatched: 0, adjusted: 0, closing: 0 })
+  }), [movRows, movGodown, movProduct, movOwner, movCategory, productCategoryMap])
+  const movTotals = React.useMemo(
+    () => movFiltered.reduce((a: any, m: any) => ({ opening: a.opening + m.opening, inward: a.inward + m.inward, consumed: a.consumed + m.consumed, produced: a.produced + m.produced, dispatched: a.dispatched + m.dispatched, adjusted: a.adjusted + m.adjusted, closing: a.closing + m.closing }), { opening: 0, inward: 0, consumed: 0, produced: 0, dispatched: 0, adjusted: 0, closing: 0 }),
+    [movFiltered],
+  )
   // Shared by the CSV / Excel / PDF buttons below: one definition of the
   // current tab's rows, columns, title, range and totals (spec §16), so
   // all three formats of the same report always agree.
@@ -526,14 +582,14 @@ export default function ReportsPage() {
               <div className="flex flex-wrap gap-2 mb-4 text-xs">
                 <select value={movGodown} onChange={(e) => setMovGodown(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">All godowns</option>{godowns.map((g: any) => (<option key={g.id} value={g.id}>{g.name}</option>))}</select>
                 <select value={movProduct} onChange={(e) => setMovProduct(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">All products</option>{products.map((x: any) => (<option key={x.id} value={x.id}>{x.name}</option>))}</select>
-                <select value={movCategory} onChange={(e) => setMovCategory(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">All categories</option>{[...new Set(products.map((x: any) => x.category).filter(Boolean))].map((c: any) => (<option key={c} value={c}>{c}</option>))}</select>
+                <select value={movCategory} onChange={(e) => setMovCategory(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">All categories</option>{productCategories.map((c: any) => (<option key={c} value={c}>{c}</option>))}</select>
                 <select value={movOwner} onChange={(e) => setMovOwner(e.target.value)} className="px-2.5 py-2 rounded-lg bg-background border border-border text-foreground"><option value="">All owners</option><option value="">Company stock</option>{parties.map((x: any) => (<option key={x.id} value={x.id}>{x.name}</option>))}</select>
               </div>
               {movLoading ? <p className="text-xs text-muted-foreground">Loading movement…</p> : (
               <div className="overflow-x-auto"><table className="w-full text-left text-xs min-w-[880px]"><thead><tr className="border-b border-border text-muted-foreground uppercase text-[10px] font-bold"><th className="pb-3">Godown</th><th className="pb-3">Product</th><th className="pb-3">Owner</th><th className="pb-3 text-right">Opening</th><th className="pb-3 text-right">Inward</th><th className="pb-3 text-right">Consumed</th><th className="pb-3 text-right">Produced</th><th className="pb-3 text-right">Dispatched</th><th className="pb-3 text-right">Adjusted</th><th className="pb-3 text-right">Closing</th></tr></thead>
                 <tbody className="divide-y divide-border font-mono">
                   {movFiltered.length === 0 && <tr><td colSpan={10} className="py-4 text-muted-foreground font-sans">No movement rows for these filters.</td></tr>}
-                  {movFiltered.map((m: any, i: number) => (<tr key={i}><td className="py-2 font-sans">{godownName(m.godown_id)}</td><td className="py-2 font-sans font-semibold">{productName(m.product_id)}</td><td className="py-2 font-sans">{m.party_id ? partyName(m.party_id) : "Company"}</td><td className="py-2 text-right">{formatWeight(m.opening)}</td><td className="py-2 text-right">{formatWeight(m.inward)}</td><td className="py-2 text-right">{formatWeight(m.consumed)}</td><td className="py-2 text-right">{formatWeight(m.produced)}</td><td className="py-2 text-right">{formatWeight(m.dispatched)}</td><td className="py-2 text-right">{formatWeight(m.adjusted)}</td><td className="py-2 text-right font-bold">{formatWeight(m.closing)}</td></tr>))}
+                  {movFiltered.map((m: any, i: number) => (<StockMovementRow key={i} godown={godownName(m.godown_id)} product={productName(m.product_id)} owner={m.party_id ? partyName(m.party_id) : "Company"} opening={m.opening} inward={m.inward} consumed={m.consumed} produced={m.produced} dispatched={m.dispatched} adjusted={m.adjusted} closing={m.closing} />))}
                   {movFiltered.length > 0 && (<tr className="border-t-2 border-border font-bold"><td className="py-2 font-sans" colSpan={3}>Totals</td><td className="py-2 text-right">{formatWeight(movTotals.opening)}</td><td className="py-2 text-right">{formatWeight(movTotals.inward)}</td><td className="py-2 text-right">{formatWeight(movTotals.consumed)}</td><td className="py-2 text-right">{formatWeight(movTotals.produced)}</td><td className="py-2 text-right">{formatWeight(movTotals.dispatched)}</td><td className="py-2 text-right">{formatWeight(movTotals.adjusted)}</td><td className="py-2 text-right">{formatWeight(movTotals.closing)}</td></tr>)}
                 </tbody></table></div>)}
               <p className="text-[11px] text-muted-foreground mt-3">Opening = opening balances + ledger net before the period. Adjusted includes adjustment vouchers and transfer net (a transfer moves stock between godowns, so it nets within a pool). Computed from stock_ledger + openings; the current-stock view above is the closing balance.</p>

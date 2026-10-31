@@ -35,6 +35,92 @@ import { InventoryTransferDialog } from "@/components/inventory-transfer-dialog"
 import { InventoryAdjustmentDialog } from "@/components/inventory-adjustment-dialog"
 import { GodownSelect } from "@/components/erp-form"
 
+// Summary, ledger and count rows, memoized so the page's frequent
+// re-renders (search typing, count typing, collapse toggles) skip rows
+// whose data is unchanged. Each is the old inline row copied verbatim;
+// summary/ledger rows take the row object itself (its reference is
+// stable across renders of the same loaded page), the count row takes
+// primitives plus the one stable callback below.
+const InventorySummaryRow = React.memo(function InventorySummaryRow(props: { item: any }) {
+  const { item } = props
+  return (
+    <tr className="hover:bg-muted transition-colors">
+      <td className="py-3 font-bold text-foreground">{item.product_name}</td>
+      <td className="py-3 text-muted-foreground">{item.party_name || "Company"}</td>
+      <td className="py-3 text-right font-black text-emerald-600 dark:text-emerald-400 text-sm">
+        {formatWeight(item.balance_kg)}
+      </td>
+      <td className="py-3 text-right text-muted-foreground font-mono">
+        {formatWeight(item.min_stock_kg || 0)}
+      </td>
+      <td className="py-3 text-center">
+        {item.below_min_stock ? (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-semibold border border-amber-500/20">
+            <AlertTriangle className="h-3 w-3" />
+            Low Stock
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-semibold border border-emerald-500/20">
+            <CheckCircle2 className="h-3 w-3" />
+            In Stock
+          </span>
+        )}
+      </td>
+    </tr>
+  )
+})
+
+const InventoryLedgerRow = React.memo(function InventoryLedgerRow(props: { entry: StockLedgerEntry }) {
+  const { entry } = props
+  return (
+    <tr className="hover:bg-muted transition-colors">
+      <td className="py-3 text-muted-foreground font-sans">{formatDateTime(entry.date)}</td>
+      <td className="py-3 font-bold text-foreground font-sans">{entry.voucher_no}</td>
+      <td className="py-3">
+        <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground uppercase text-[9px] font-bold">
+          {entry.voucher_type.replace("_", " ")}
+        </span>
+      </td>
+      <td className="py-3 text-muted-foreground font-sans">{entry.godown_name}</td>
+      <td className="py-3 font-semibold text-foreground font-sans">{entry.product_name}</td>
+      <td className="py-3 text-muted-foreground font-sans">{(entry as any).lot_number || "—"}</td>
+      <td className="py-3 text-right font-bold text-emerald-600 dark:text-emerald-400">
+        {entry.inward_qty > 0 ? `+${entry.inward_qty.toLocaleString()} kg` : "-"}
+      </td>
+      <td className="py-3 text-right font-bold text-blue-600 dark:text-blue-400">
+        {entry.outward_qty > 0 ? `-${entry.outward_qty.toLocaleString()} kg` : "-"}
+      </td>
+      <td className="py-3 text-right font-black text-foreground">
+        {entry.running_balance.toLocaleString()} kg
+      </td>
+      <td className="py-3 text-muted-foreground font-sans text-[11px] truncate max-w-xs">
+        {entry.notes || "Recorded movement"}
+      </td>
+    </tr>
+  )
+})
+
+const CountRow = React.memo(function CountRow(props: {
+  rowKey: string
+  product: string
+  owner: string
+  systemQty: number
+  counted: string
+  variance: number
+  onCounted: (key: string, value: string) => void
+}) {
+  const { rowKey, product, owner, systemQty, counted, variance, onCounted } = props
+  return (
+    <tr className="hover:bg-muted transition-colors">
+      <td className="py-3 font-bold text-foreground">{product}</td>
+      <td className="py-3 text-muted-foreground">{owner}</td>
+      <td className="py-3 text-right font-mono">{formatWeight(systemQty)}</td>
+      <td className="py-3 text-right"><input type="number" min="0" value={counted} onChange={(e) => onCounted(rowKey, e.target.value)} className="w-32 px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono text-right" /></td>
+      <td className={`py-3 text-right font-bold font-mono ${variance === 0 ? "text-muted-foreground" : variance > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{variance > 0 ? `+${formatWeight(variance)}` : formatWeight(variance)}</td>
+    </tr>
+  )
+})
+
 export default function InventoryPage() {
   const [activeTab, setActiveTab] = React.useState<"summary" | "ledger" | "transfers" | "adjustments" | "count" | "ageing">("summary")
   const [rawSummary, setRawSummary] = React.useState<any[]>([])
@@ -75,6 +161,37 @@ export default function InventoryPage() {
   const [transferError, setTransferError] = React.useState("")
   const [transferNotice, setTransferNotice] = React.useState("")
   const [drillFilter, setDrillFilter] = React.useState<string | null>(null)
+
+  // Lookup maps, rebuilt only when the lookup list changes. The old
+  // per-row .find() made every transfers/adjustments/export row scan the
+  // whole godown, product or party list on every render. First entry
+  // wins, exactly as .find() did; a missing id still falls back to the
+  // id (or "Not set") at each call site, as before.
+  const godownNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const g of godowns) if (!map.has(g.id)) map.set(g.id, g.name)
+    return map
+  }, [godowns])
+  const productNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const x of products) if (!map.has(x.id)) map.set(x.id, x.name)
+    return map
+  }, [products])
+  const partyNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const x of parties) if (!map.has(x.id)) map.set(x.id, x.name)
+    return map
+  }, [parties])
+  const productInfoMap = React.useMemo(() => {
+    const map = new Map<string, { code: string; category: string }>()
+    for (const x of products) if (!map.has(x.id)) map.set(x.id, { code: x.code, category: x.category })
+    return map
+  }, [products])
+  // Stable identity so CountRow's memo is not defeated by a new closure
+  // on every keystroke; the update is the old inline one, unchanged.
+  const handleCountedChange = React.useCallback((key: string, value: string) => {
+    setCounted((prev) => ({ ...prev, [key]: value }))
+  }, [])
 
   const applyLedgerPage = React.useCallback((le: any, godownList: Godown[], productList: Product[]) => {
     const rows = Array.isArray(le.data?.rows) ? le.data.rows : []
@@ -174,7 +291,10 @@ export default function InventoryPage() {
     }
   }, [godowns, rawSummary, countGodown])
 
-  const countRows = rawSummary.filter((r) => !countGodown || r.godown_id === countGodown)
+  const countRows = React.useMemo(
+    () => rawSummary.filter((r) => !countGodown || r.godown_id === countGodown),
+    [rawSummary, countGodown],
+  )
   const countKey = (r: any) => `${r.godown_id}|${r.product_id}|${r.party_id ?? ""}`
   const handleCountSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -213,23 +333,36 @@ export default function InventoryPage() {
     }
   }
 
-  const filteredSummary = rawSummary.filter((r) => {
-    const prod = products.find((x) => x.id === r.product_id)
+  const filteredSummary = React.useMemo(() => rawSummary.filter((r) => {
+    const prod = productInfoMap.get(r.product_id)
     const matchesSearch = (r.product_name ?? "").toLowerCase().includes(searchQuery.toLowerCase()) || (prod?.code ?? "").toLowerCase().includes(searchQuery.toLowerCase())
     // Category now arrives server-side on the summary row; the masters
     // join is only a fallback for older cached rows.
     const matchesCategory = selectedCategory === "all" || (r.product_category ?? prod?.category ?? "") === selectedCategory
     const matchesDrill = drillFilter === "low" ? !!r.below_min_stock : true
     return matchesSearch && matchesCategory && matchesDrill
-  })
+  }), [rawSummary, productInfoMap, searchQuery, selectedCategory, drillFilter])
 
-  const filteredLedger = ledgerEntries.filter((entry) => {
+  const filteredLedger = React.useMemo(() => ledgerEntries.filter((entry) => {
     const matchesSearch =
       (entry.product_name || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
       entry.voucher_no.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (entry.notes || "").toLowerCase().includes(searchQuery.toLowerCase())
     return matchesSearch
-  })
+  }), [ledgerEntries, searchQuery])
+
+  // Per-godown groups, built once per filtered list: the old render
+  // re-filtered the whole summary once per godown on every render, and
+  // re-counted low stock per group. Order is godown order, empty godowns
+  // omitted, exactly as the old godowns.map with its early return did.
+  const groupedSummary = React.useMemo(() => {
+    const groups: { godown: Godown; rows: any[]; lowCount: number }[] = []
+    for (const g of godowns) {
+      const rows = filteredSummary.filter((r) => r.godown_id === g.id)
+      if (rows.length) groups.push({ godown: g, rows, lowCount: rows.filter((r) => r.below_min_stock).length })
+    }
+    return groups
+  }, [godowns, filteredSummary])
 
   const handleTransferReversal = async (reasonCode: string, reason: string) => {
     if (!revTransfer || revPending) return
@@ -268,11 +401,11 @@ export default function InventoryPage() {
   // Shared by the CSV / Excel / PDF buttons: one definition of the active
   // tab's rows, columns, title and totals, so all formats agree.
   const getInventoryExport = () => {
-    if (activeTab === "count") return { rows: countRows.map((r: any) => ({ godown: godowns.find((g) => g.id === r.godown_id)?.name ?? r.godown_id, product: r.product_name, owner: r.party_name || "Company", system_kg: r.balance_kg, counted_kg: Number(counted[countKey(r)]) || 0, variance_kg: (Number(counted[countKey(r)]) || 0) - (Number(r.balance_kg) || 0) })), filename: "stock_count", columns: [{ key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "owner", label: "Owner" }, { key: "system_kg", label: "System (kg)" }, { key: "counted_kg", label: "Counted (kg)" }, { key: "variance_kg", label: "Variance (kg)" }], options: { title: "Stock Count" }, report: "inventory_count" }
+    if (activeTab === "count") return { rows: countRows.map((r: any) => ({ godown: godownNameMap.get(r.godown_id) ?? r.godown_id, product: r.product_name, owner: r.party_name || "Company", system_kg: r.balance_kg, counted_kg: Number(counted[countKey(r)]) || 0, variance_kg: (Number(counted[countKey(r)]) || 0) - (Number(r.balance_kg) || 0) })), filename: "stock_count", columns: [{ key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "owner", label: "Owner" }, { key: "system_kg", label: "System (kg)" }, { key: "counted_kg", label: "Counted (kg)" }, { key: "variance_kg", label: "Variance (kg)" }], options: { title: "Stock Count" }, report: "inventory_count" }
     if (activeTab === "ageing") return { rows: ageing.map((a: any) => ({ godown: a.godown_name, product: a.product_name, owner: a.party_name || "Company", days_0_30: a.buckets["0-30"] ?? 0, days_31_60: a.buckets["31-60"] ?? 0, days_61_90: a.buckets["61-90"] ?? 0, days_90_plus: a.buckets["90+"] ?? 0, total_kg: a.total_kg ?? 0 })), filename: "stock_ageing", columns: [{ key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "owner", label: "Owner" }, { key: "days_0_30", label: "0-30 days" }, { key: "days_31_60", label: "31-60 days" }, { key: "days_61_90", label: "61-90 days" }, { key: "days_90_plus", label: "90+ days" }, { key: "total_kg", label: "Total (kg)" }], options: { title: "Stock Ageing (FIFO approximation)" }, report: "inventory_ageing" }
     if (activeTab === "summary") return { rows: filteredSummary.map((r) => ({ godown: r.godown_name, product: r.product_name, owner: r.party_name || "Company", stock_kg: r.balance_kg, min_stock: r.min_stock_kg || 0, below_min: r.below_min_stock ? "yes" : "no" })), filename: "godown_stock_summary", columns: [{ key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "owner", label: "Owner" }, { key: "stock_kg", label: "Stock (kg)" }, { key: "min_stock", label: "Min stock" }, { key: "below_min", label: "Below min" }], options: { title: "Godown Stock Summary", totals: { stock_kg: filteredSummary.reduce((a, r) => a + (Number(r.balance_kg) || 0), 0) } }, report: "inventory_summary" }
-    if (activeTab === "transfers") return { rows: transfers.map((t: any) => ({ transfer_no: t.transfer_no, date: t.date, from: godowns.find((g) => g.id === t.from_godown_id)?.name ?? "Not set", to: godowns.find((g) => g.id === t.to_godown_id)?.name ?? "Not set", product: products.find((x) => x.id === t.product_id)?.name ?? t.product_id, quantity_kg: t.quantity, status: t.status })), filename: "transfers", columns: [{ key: "transfer_no", label: "Transfer no" }, { key: "date", label: "Date" }, { key: "from", label: "From" }, { key: "to", label: "To" }, { key: "product", label: "Product" }, { key: "quantity_kg", label: "Quantity (kg)" }, { key: "status", label: "Status" }], options: { title: "Stock Transfers", totals: { quantity_kg: transfers.reduce((a, t: any) => a + (Number(t.quantity) || 0), 0) } }, report: "inventory_transfers" }
-    if (activeTab === "adjustments") return { rows: adjustments.map((a: any) => ({ adjustment_no: a.adjustment_no, date: a.date, godown: godowns.find((g) => g.id === a.godown_id)?.name ?? a.godown_id, product: products.find((x) => x.id === a.product_id)?.name ?? a.product_id, before_kg: a.quantity_before, after_kg: a.quantity_after, status: a.status })), filename: "adjustments", columns: [{ key: "adjustment_no", label: "Adjustment no" }, { key: "date", label: "Date" }, { key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "before_kg", label: "Before (kg)" }, { key: "after_kg", label: "After (kg)" }, { key: "status", label: "Status" }], options: { title: "Stock Adjustments" }, report: "inventory_adjustments" }
+    if (activeTab === "transfers") return { rows: transfers.map((t: any) => ({ transfer_no: t.transfer_no, date: t.date, from: godownNameMap.get(t.from_godown_id) ?? "Not set", to: godownNameMap.get(t.to_godown_id) ?? "Not set", product: productNameMap.get(t.product_id) ?? t.product_id, quantity_kg: t.quantity, status: t.status })), filename: "transfers", columns: [{ key: "transfer_no", label: "Transfer no" }, { key: "date", label: "Date" }, { key: "from", label: "From" }, { key: "to", label: "To" }, { key: "product", label: "Product" }, { key: "quantity_kg", label: "Quantity (kg)" }, { key: "status", label: "Status" }], options: { title: "Stock Transfers", totals: { quantity_kg: transfers.reduce((a, t: any) => a + (Number(t.quantity) || 0), 0) } }, report: "inventory_transfers" }
+    if (activeTab === "adjustments") return { rows: adjustments.map((a: any) => ({ adjustment_no: a.adjustment_no, date: a.date, godown: godownNameMap.get(a.godown_id) ?? a.godown_id, product: productNameMap.get(a.product_id) ?? a.product_id, before_kg: a.quantity_before, after_kg: a.quantity_after, status: a.status })), filename: "adjustments", columns: [{ key: "adjustment_no", label: "Adjustment no" }, { key: "date", label: "Date" }, { key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "before_kg", label: "Before (kg)" }, { key: "after_kg", label: "After (kg)" }, { key: "status", label: "Status" }], options: { title: "Stock Adjustments" }, report: "inventory_adjustments" }
     return { rows: filteredLedger.map((e) => ({ date: e.date, voucher_no: e.voucher_no, type: e.voucher_type, godown: e.godown_name, product: e.product_name, inward_kg: e.inward_qty, outward_kg: e.outward_qty, balance_kg: e.running_balance, notes: e.notes || "" })), filename: "stock_movement_ledger", columns: [{ key: "date", label: "Date" }, { key: "voucher_no", label: "Voucher" }, { key: "type", label: "Type" }, { key: "godown", label: "Godown" }, { key: "product", label: "Product" }, { key: "inward_kg", label: "Inward (kg)" }, { key: "outward_kg", label: "Outward (kg)" }, { key: "balance_kg", label: "Balance (kg)" }, { key: "notes", label: "Notes" }], options: { title: "Stock Movement Ledger", totals: { inward_kg: filteredLedger.reduce((a, e) => a + (Number(e.inward_qty) || 0), 0), outward_kg: filteredLedger.reduce((a, e) => a + (Number(e.outward_qty) || 0), 0) } }, report: "inventory_ledger" }
   }
   const handleInventoryExport = async (format: "csv" | "xlsx" | "pdf") => {
@@ -475,12 +608,8 @@ export default function InventoryPage() {
           evaluated per godown row, never from an enterprise total. */}
       {activeTab === "summary" && (
         <div className="space-y-4">
-          {godowns.map((g) => {
-            const rows = filteredSummary.filter((r) => r.godown_id === g.id)
-            if (!rows.length) return null
-            const lowCount = rows.filter((r) => r.below_min_stock).length
-            return (
-              <div key={g.id} className="expensive-card p-5">
+          {groupedSummary.map(({ godown: g, rows, lowCount }) => (
+            <div key={g.id} className="expensive-card p-5">
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-sm font-bold text-foreground">{g.name}</h2>
                   <span className="flex items-center gap-3">
@@ -510,37 +639,14 @@ export default function InventoryPage() {
                     </thead>
                     <tbody className="divide-y divide-border">
                       {rows.map((item: any) => (
-                        <tr key={`${item.godown_id}-${item.product_id}-${item.party_id ?? ""}`} className="hover:bg-muted transition-colors">
-                          <td className="py-3 font-bold text-foreground">{item.product_name}</td>
-                          <td className="py-3 text-muted-foreground">{item.party_name || "Company"}</td>
-                          <td className="py-3 text-right font-black text-emerald-600 dark:text-emerald-400 text-sm">
-                            {formatWeight(item.balance_kg)}
-                          </td>
-                          <td className="py-3 text-right text-muted-foreground font-mono">
-                            {formatWeight(item.min_stock_kg || 0)}
-                          </td>
-                          <td className="py-3 text-center">
-                            {item.below_min_stock ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 text-[10px] font-semibold border border-amber-500/20">
-                                <AlertTriangle className="h-3 w-3" />
-                                Low Stock
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-semibold border border-emerald-500/20">
-                                <CheckCircle2 className="h-3 w-3" />
-                                In Stock
-                              </span>
-                            )}
-                          </td>
-                        </tr>
+                        <InventorySummaryRow key={`${item.godown_id}-${item.product_id}-${item.party_id ?? ""}`} item={item} />
                       ))}
                     </tbody>
                   </table>
                 </div>
                 )}
               </div>
-            )
-          })}
+          ))}
           {filteredSummary.length === 0 && (
             <div className="expensive-card p-5">
               <EmptyState
@@ -583,30 +689,7 @@ export default function InventoryPage() {
                   </tr>
                 )}
                 {filteredLedger.map((entry) => (
-                  <tr key={entry.id} className="hover:bg-muted transition-colors">
-                    <td className="py-3 text-muted-foreground font-sans">{formatDateTime(entry.date)}</td>
-                    <td className="py-3 font-bold text-foreground font-sans">{entry.voucher_no}</td>
-                    <td className="py-3">
-                      <span className="px-1.5 py-0.5 rounded bg-muted text-muted-foreground uppercase text-[9px] font-bold">
-                        {entry.voucher_type.replace("_", " ")}
-                      </span>
-                    </td>
-                    <td className="py-3 text-muted-foreground font-sans">{entry.godown_name}</td>
-                    <td className="py-3 font-semibold text-foreground font-sans">{entry.product_name}</td>
-                    <td className="py-3 text-muted-foreground font-sans">{(entry as any).lot_number || "—"}</td>
-                    <td className="py-3 text-right font-bold text-emerald-600 dark:text-emerald-400">
-                      {entry.inward_qty > 0 ? `+${entry.inward_qty.toLocaleString()} kg` : "-"}
-                    </td>
-                    <td className="py-3 text-right font-bold text-blue-600 dark:text-blue-400">
-                      {entry.outward_qty > 0 ? `-${entry.outward_qty.toLocaleString()} kg` : "-"}
-                    </td>
-                    <td className="py-3 text-right font-black text-foreground">
-                      {entry.running_balance.toLocaleString()} kg
-                    </td>
-                    <td className="py-3 text-muted-foreground font-sans text-[11px] truncate max-w-xs">
-                      {entry.notes || "Recorded movement"}
-                    </td>
-                  </tr>
+                  <InventoryLedgerRow key={entry.id} entry={entry} />
                 ))}
               </tbody>
             </table>
@@ -655,9 +738,9 @@ export default function InventoryPage() {
                   <tr key={t.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-bold text-foreground font-mono">{t.transfer_no}</td>
                     <td className="py-3 text-muted-foreground">{formatDateTime(t.date)}</td>
-                    <td className="py-3 text-muted-foreground">{godowns.find((g) => g.id === t.from_godown_id)?.name ?? "Not set"} → {godowns.find((g) => g.id === t.to_godown_id)?.name ?? "Not set"}</td>
-                    <td className="py-3 font-semibold text-foreground">{products.find((x) => x.id === t.product_id)?.name ?? t.product_id}</td>
-                    <td className="py-3 text-muted-foreground">{t.party_id ? (parties.find((x) => x.id === t.party_id)?.name ?? t.party_id) : "Company"}</td>
+                    <td className="py-3 text-muted-foreground">{godownNameMap.get(t.from_godown_id) ?? "Not set"} → {godownNameMap.get(t.to_godown_id) ?? "Not set"}</td>
+                    <td className="py-3 font-semibold text-foreground">{productNameMap.get(t.product_id) ?? t.product_id}</td>
+                    <td className="py-3 text-muted-foreground">{t.party_id ? (partyNameMap.get(t.party_id) ?? t.party_id) : "Company"}</td>
                     <td className="py-3 text-right font-bold text-foreground">{formatWeight(t.quantity)}</td>
                     <td className="py-3 text-center">{t.status === "draft" ? "Draft" : t.status === "reversed" ? "Reversed" : "Posted"}</td>
                     <td className="py-3 text-center">
@@ -713,9 +796,9 @@ export default function InventoryPage() {
                   <tr key={a.id} className="hover:bg-muted transition-colors">
                     <td className="py-3 font-bold text-foreground font-mono">{a.adjustment_no}</td>
                     <td className="py-3 text-muted-foreground">{formatDateTime(a.date)}</td>
-                    <td className="py-3 text-muted-foreground">{godowns.find((g) => g.id === a.godown_id)?.name ?? a.godown_id}</td>
-                    <td className="py-3 font-semibold text-foreground">{products.find((x) => x.id === a.product_id)?.name ?? a.product_id}</td>
-                    <td className="py-3 text-muted-foreground">{a.party_id ? (parties.find((x) => x.id === a.party_id)?.name ?? a.party_id) : "Company"}</td>
+                    <td className="py-3 text-muted-foreground">{godownNameMap.get(a.godown_id) ?? a.godown_id}</td>
+                    <td className="py-3 font-semibold text-foreground">{productNameMap.get(a.product_id) ?? a.product_id}</td>
+                    <td className="py-3 text-muted-foreground">{a.party_id ? (partyNameMap.get(a.party_id) ?? a.party_id) : "Company"}</td>
                     <td className="py-3 text-right font-bold text-foreground">{a.quantity_before} kg → {a.quantity_after} kg</td>
                     <td className="py-3 text-center">{a.status === "draft" ? "Draft" : a.status === "reversed" ? "Reversed" : "Posted"}</td>
                     <td className="py-3 text-center">
@@ -783,15 +866,7 @@ export default function InventoryPage() {
                     const systemQty = Number(r.balance_kg) || 0
                     const countedQty = Number(counted[key])
                     const variance = Number.isFinite(countedQty) ? countedQty - systemQty : 0
-                    return (
-                      <tr key={key} className="hover:bg-muted transition-colors">
-                        <td className="py-3 font-bold text-foreground">{r.product_name}</td>
-                        <td className="py-3 text-muted-foreground">{r.party_name || "Company"}</td>
-                        <td className="py-3 text-right font-mono">{formatWeight(systemQty)}</td>
-                        <td className="py-3 text-right"><input type="number" min="0" value={counted[key] ?? ""} onChange={(e) => setCounted((prev) => ({ ...prev, [key]: e.target.value }))} className="w-32 px-2 py-1.5 rounded-md bg-background border border-border text-foreground font-mono text-right" /></td>
-                        <td className={`py-3 text-right font-bold font-mono ${variance === 0 ? "text-muted-foreground" : variance > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>{variance > 0 ? `+${formatWeight(variance)}` : formatWeight(variance)}</td>
-                      </tr>
-                    )
+                    return (<CountRow key={key} rowKey={key} product={r.product_name} owner={r.party_name || "Company"} systemQty={systemQty} counted={counted[key] ?? ""} variance={variance} onCounted={handleCountedChange} />)
                   })}
                 </tbody>
               </table>

@@ -71,6 +71,37 @@ async function exportRows(
   if (ok) void logExport({ report, format })
 }
 
+// One stock-ledger row, memoized on primitive props only. Typing in the
+// stock filters (voucher, lot, godown…) re-renders the page while the
+// loaded rows are unchanged; with names resolved by the parent, unchanged
+// rows now skip re-rendering. Cells copied verbatim from the old inline row.
+const StockLedgerRow = React.memo(function StockLedgerRow(props: {
+  date: string | undefined
+  voucherNo: string
+  type: string
+  godown: string
+  product: string
+  lot: string
+  inwardQty: number
+  outwardQty: number
+  balance: number
+}) {
+  const { date, voucherNo, type, godown, product, lot, inwardQty, outwardQty, balance } = props
+  return (
+    <tr>
+      <td className="py-2">{date}</td>
+      <td className="py-2 font-mono font-bold">{voucherNo}</td>
+      <td className="py-2">{type}</td>
+      <td className="py-2">{godown}</td>
+      <td className="py-2">{product}</td>
+      <td className="py-2 font-mono">{lot}</td>
+      <td className="py-2 text-right">{formatWeight(inwardQty)}</td>
+      <td className="py-2 text-right">{formatWeight(outwardQty)}</td>
+      <td className="py-2 text-right font-bold">{formatWeight(balance)}</td>
+    </tr>
+  )
+})
+
 export default function LedgersPage() {
   const [activeTab, setActiveTab] = React.useState<Tab>("stock")
   const [error, setError] = React.useState("")
@@ -128,10 +159,29 @@ export default function LedgersPage() {
   const [costType, setCostType] = React.useState("")
   const [costBusy, setCostBusy] = React.useState(false)
 
-  const godownName = (id: string) => godowns.find((g) => g.id === id)?.name ?? id
-  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? id
-  const packagingName = (id: string) =>
-    packaging.find((p) => p.id === id)?.name ?? id
+  // Lookup maps, rebuilt only when the lookup list changes. The old
+  // per-row .find() made every ledger row scan the whole lookup list on
+  // every render, for the table and again for print/export rows. First
+  // entry wins, exactly as .find() did; a missing id still falls back
+  // to the id itself.
+  const godownNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const g of godowns) if (!map.has(g.id)) map.set(g.id, g.name)
+    return map
+  }, [godowns])
+  const productNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const p of products) if (!map.has(p.id)) map.set(p.id, p.name)
+    return map
+  }, [products])
+  const packagingNameMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const p of packaging) if (!map.has(p.id)) map.set(p.id, p.name)
+    return map
+  }, [packaging])
+  const godownName = (id: string) => godownNameMap.get(id) ?? id
+  const productName = (id: string) => productNameMap.get(id) ?? id
+  const packagingName = (id: string) => packagingNameMap.get(id) ?? id
 
   const loadStock = React.useCallback(
     async (page: number) => {
@@ -270,18 +320,33 @@ export default function LedgersPage() {
     if (activeTab === "cost") void loadCost()
   }
 
-  const stockTotals = stockRows.reduce(
-    (a, r) => ({
-      inward: a.inward + (Number(r.inward_qty) || 0),
-      outward: a.outward + (Number(r.outward_qty) || 0),
-    }),
-    { inward: 0, outward: 0 },
+  const stockTotals = React.useMemo(
+    () => stockRows.reduce(
+      (a, r) => ({
+        inward: a.inward + (Number(r.inward_qty) || 0),
+        outward: a.outward + (Number(r.outward_qty) || 0),
+      }),
+      { inward: 0, outward: 0 },
+    ),
+    [stockRows],
   )
-  const costTypes = [...new Set(costRows.map((r) => String(r.cost_type ?? "")))].filter(Boolean)
-  const shownCostRows = costType ? costRows.filter((r) => r.cost_type === costType) : costRows
-  const shownCostTotal = shownCostRows.reduce((a, r) => a + (Number(r.amount) || 0), 0)
-  const stmtParties = parties.filter((x) =>
-    stmtKind === "vendor" ? x.type === "supplier" || x.type === "both" : x.type === "customer" || x.type === "both",
+  const costTypes = React.useMemo(
+    () => [...new Set(costRows.map((r) => String(r.cost_type ?? "")))].filter(Boolean),
+    [costRows],
+  )
+  const shownCostRows = React.useMemo(
+    () => (costType ? costRows.filter((r) => r.cost_type === costType) : costRows),
+    [costRows, costType],
+  )
+  const shownCostTotal = React.useMemo(
+    () => shownCostRows.reduce((a, r) => a + (Number(r.amount) || 0), 0),
+    [shownCostRows],
+  )
+  const stmtParties = React.useMemo(
+    () => parties.filter((x) =>
+      stmtKind === "vendor" ? x.type === "supplier" || x.type === "both" : x.type === "customer" || x.type === "both",
+    ),
+    [parties, stmtKind],
   )
 
   if (isLoading) return <PageSkeleton rows={8} />
@@ -420,17 +485,18 @@ export default function LedgersPage() {
                 </tr></thead>
                 <tbody className="divide-y divide-border">
                   {stockRows.map((e: any) => (
-                    <tr key={e.id}>
-                      <td className="py-2">{e.date?.slice(0, 10)}</td>
-                      <td className="py-2 font-mono font-bold">{e.voucher_no}</td>
-                      <td className="py-2">{e.voucher_type}</td>
-                      <td className="py-2">{godownName(e.godown_id)}</td>
-                      <td className="py-2">{productName(e.product_id)}</td>
-                      <td className="py-2 font-mono">{e.lot_number ?? "—"}</td>
-                      <td className="py-2 text-right">{formatWeight(Number(e.inward_qty || 0))}</td>
-                      <td className="py-2 text-right">{formatWeight(Number(e.outward_qty || 0))}</td>
-                      <td className="py-2 text-right font-bold">{formatWeight(Number(e.running_balance || 0))}</td>
-                    </tr>
+                    <StockLedgerRow
+                      key={e.id}
+                      date={e.date?.slice(0, 10)}
+                      voucherNo={e.voucher_no}
+                      type={e.voucher_type}
+                      godown={godownName(e.godown_id)}
+                      product={productName(e.product_id)}
+                      lot={e.lot_number ?? "—"}
+                      inwardQty={Number(e.inward_qty || 0)}
+                      outwardQty={Number(e.outward_qty || 0)}
+                      balance={Number(e.running_balance || 0)}
+                    />
                   ))}
                 </tbody>
               </table>
