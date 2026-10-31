@@ -35,6 +35,12 @@ function errMessage(e: unknown): string {
 async function db(): Promise<Db> {
   return createClient();
 }
+// Reference-data cache: module entries, 5-minute TTL, in-flight dedup
+// via mastersPending. In-process writes in this file clear it through
+// revalidateMasters(); writers in OTHER files must do the same —
+// finance.ts (cash_accounts, via getCommonMasters) and production.ts
+// (packaging_types.current_stock) both call clearMastersCache() after
+// a successful write. The TTL is only a backstop for out-of-band edits.
 const mastersCache = new Map<string, { data: unknown; expires: number }>();
 const mastersPending = new Map<string, Promise<ActionResult>>();
 
@@ -59,6 +65,13 @@ async function listTable(
   includeInactive: boolean,
   orderBy: string,
 ): Promise<ActionResult> {
+  // The signed-in gate runs BEFORE the cache lookup: a cached hit must
+  // never serve master rows to an unauthenticated caller. The gate
+  // itself is actor-cached (auth.ts), so this costs no extra query
+  // on the hot path; the client is React-cached (lib/supabase/server).
+  const supabase = await db();
+  const gate = await requireSignedIn(supabase);
+  if (!gate.ok) return fail(gate.error);
   const cacheKey = `${table}:${includeInactive}:${orderBy}`;
   const cached = mastersCache.get(cacheKey);
   if (cached && Date.now() < cached.expires) {
@@ -69,9 +82,6 @@ async function listTable(
 
   const fetchPromise = (async () => {
     try {
-      const supabase = await db();
-      const gate = await requireSignedIn(supabase);
-      if (!gate.ok) return fail(gate.error);
       let query = supabase.from(table).select("*").order(orderBy);
       if (!includeInactive) query = query.eq("is_active", true);
       const { data, error } = await query;

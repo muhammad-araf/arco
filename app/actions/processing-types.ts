@@ -34,6 +34,32 @@ function fail(error: string): ActionResult {
   return { success: false, error };
 }
 
+// Reference-data cache (same shape as masters.ts / settings.ts):
+// module-level entries with a 5-minute TTL, plus an in-flight promise
+// map so concurrent callers share one fetch. The signed-in gate runs
+// BEFORE the cache lookup, so a cached hit never bypasses auth. The
+// generation counter closes the clear-during-fetch race: a fetch that
+// started before a write never repopulates the cache with pre-write
+// rows. The TTL is only a backstop for out-of-band edits (direct SQL,
+// another server instance); every in-process write below clears the
+// cache synchronously on success.
+const PROCESSING_TYPES_TTL_MS = 300000;
+const processingTypesCache = new Map<
+  string,
+  { data: ProcessingType[]; expires: number }
+>();
+const processingTypesPending = new Map<
+  string,
+  Promise<ActionResult<ProcessingType[]>>
+>();
+let processingTypesGeneration = 0;
+
+export async function clearProcessingTypesCache(): Promise<void> {
+  processingTypesGeneration += 1;
+  processingTypesCache.clear();
+  processingTypesPending.clear();
+}
+
 /** All processing types, active first by name order. Any signed-in
  * operator may read. */
 export async function listProcessingTypes(
@@ -43,11 +69,37 @@ export async function listProcessingTypes(
   if (!db) return { success: false, error };
   const gate = await requireSignedIn(db);
   if (!gate.ok) return { success: false, error: gate.error };
-  let query = db.from("processing_types").select("*").order("name");
-  if (!includeInactive) query = query.eq("is_active", true);
-  const { data, error: qError } = await query;
-  if (qError) return { success: false, error: qError.message };
-  return { success: true, data: (data ?? []) as ProcessingType[] };
+  const cacheKey = includeInactive ? "all" : "active";
+  const cached = processingTypesCache.get(cacheKey);
+  if (cached && Date.now() < cached.expires) {
+    return { success: true, data: [...cached.data] };
+  }
+  const pending = processingTypesPending.get(cacheKey);
+  if (pending) return pending;
+  const generation = processingTypesGeneration;
+  let fetchPromise: Promise<ActionResult<ProcessingType[]>> | null = null;
+  fetchPromise = (async () => {
+    try {
+      let query = db.from("processing_types").select("*").order("name");
+      if (!includeInactive) query = query.eq("is_active", true);
+      const { data, error: qError } = await query;
+      if (qError) return { success: false, error: qError.message };
+      const rows = (data ?? []) as ProcessingType[];
+      if (generation === processingTypesGeneration) {
+        processingTypesCache.set(cacheKey, {
+          data: rows,
+          expires: Date.now() + PROCESSING_TYPES_TTL_MS,
+        });
+      }
+      return { success: true, data: rows };
+    } finally {
+      if (processingTypesPending.get(cacheKey) === fetchPromise) {
+        processingTypesPending.delete(cacheKey);
+      }
+    }
+  })();
+  processingTypesPending.set(cacheKey, fetchPromise);
+  return fetchPromise;
 }
 
 export async function createProcessingType(
@@ -65,6 +117,7 @@ export async function createProcessingType(
     .select()
     .single();
   if (iError) return { success: false, error: iError.message };
+  await clearProcessingTypesCache();
   await logAudit(db, {
     action: "create",
     entityType: "processing_types",
@@ -94,6 +147,7 @@ export async function deactivateProcessingType(
     .select()
     .single();
   if (uError) return { success: false, error: uError.message };
+  await clearProcessingTypesCache();
   await logAudit(db, {
     action: "deactivate",
     entityType: "processing_types",
@@ -124,6 +178,7 @@ export async function reactivateProcessingType(
     .select()
     .single();
   if (uError) return { success: false, error: uError.message };
+  await clearProcessingTypesCache();
   await logAudit(db, {
     action: "reactivate",
     entityType: "processing_types",

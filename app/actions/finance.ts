@@ -63,7 +63,12 @@ import {
   computeStockValuation,
   isPackagingConsumptionVoucherType,
 } from "@/lib/calc/finance-valuation";
-import { listGodowns, listProducts, listParties } from "./masters";
+import {
+  clearMastersCache,
+  listGodowns,
+  listProducts,
+  listParties,
+} from "./masters";
 
 type Db = Awaited<ReturnType<typeof import("@/lib/supabase/server").createClient>>;
 
@@ -473,6 +478,38 @@ function pageWindow(filters: { page?: number; pageSize?: number }): {
   return { page, pageSize, fromRow: (page - 1) * pageSize, toRow: page * pageSize - 1 };
 }
 
+// ------------------------------------------------- finance reference-data cache
+// Cash accounts and expense categories are reference data owned by
+// this file: every write to either table goes through the functions
+// below, so each list can be cached with the same shape as masters.ts
+// (module entry, 5-minute TTL, in-flight dedup, signed-in gate before
+// the cache lookup). The generation counter closes the
+// clear-during-fetch race: a fetch that started before a write never
+// repopulates the cache with pre-write rows. The TTL is only a
+// backstop for out-of-band edits; every successful write below clears
+// its cache entry (cash-account writes also clear the masters cache,
+// which serves cash_accounts via getCommonMasters). Nothing here
+// caches ledger rows, balances, or computed figures: the cash-ledger
+// opening-balance query further down stays uncached on purpose.
+const FINANCE_REFERENCE_TTL_MS = 300000;
+let cachedCashAccounts: { data: unknown; expires: number } | null = null;
+let cashAccountsPending: Promise<ActionResult> | null = null;
+let cashAccountsGeneration = 0;
+let cachedExpenseCategories: { data: unknown; expires: number } | null = null;
+let expenseCategoriesPending: Promise<ActionResult> | null = null;
+let expenseCategoriesGeneration = 0;
+
+function clearCashAccountsCache(): void {
+  cashAccountsGeneration += 1;
+  cachedCashAccounts = null;
+  cashAccountsPending = null;
+}
+function clearExpenseCategoriesCache(): void {
+  expenseCategoriesGeneration += 1;
+  cachedExpenseCategories = null;
+  expenseCategoriesPending = null;
+}
+
 // ---------------------------------------------------------------- cash accounts
 
 export async function listCashAccounts(): Promise<ActionResult> {
@@ -480,12 +517,33 @@ export async function listCashAccounts(): Promise<ActionResult> {
   if (!db) return fail(error);
   const gate = await requireSignedIn(db);
   if (!gate.ok) return fail(gate.error);
-  const { data, error: qError } = await db
-    .from("cash_accounts")
-    .select("*")
-    .order("code", { ascending: true });
-  if (qError) return fail(qError.message);
-  return { success: true, data };
+  if (cachedCashAccounts && Date.now() < cachedCashAccounts.expires) {
+    const data = cachedCashAccounts.data;
+    return { success: true, data: Array.isArray(data) ? [...data] : data };
+  }
+  if (cashAccountsPending) return cashAccountsPending;
+  const generation = cashAccountsGeneration;
+  let fetchPromise: Promise<ActionResult> | null = null;
+  fetchPromise = (async () => {
+    try {
+      const { data, error: qError } = await db
+        .from("cash_accounts")
+        .select("*")
+        .order("code", { ascending: true });
+      if (qError) return fail(qError.message);
+      if (generation === cashAccountsGeneration) {
+        cachedCashAccounts = {
+          data,
+          expires: Date.now() + FINANCE_REFERENCE_TTL_MS,
+        };
+      }
+      return { success: true, data };
+    } finally {
+      if (cashAccountsPending === fetchPromise) cashAccountsPending = null;
+    }
+  })();
+  cashAccountsPending = fetchPromise;
+  return fetchPromise;
 }
 
 export async function createCashAccount(input: {
@@ -514,6 +572,8 @@ export async function createCashAccount(input: {
     .select()
     .single();
   if (iError) return fail(iError.message);
+  clearCashAccountsCache();
+  await clearMastersCache();
   await logAudit(db, {
     action: "create", entityType: "cash_accounts", entityId: data.id,
     after: { code: input.code, opening_balance: opening },
@@ -560,6 +620,8 @@ export async function updateCashAccount(input: {
     .select()
     .single();
   if (uError) return fail(uError.message);
+  clearCashAccountsCache();
+  await clearMastersCache();
   await logAudit(db, {
     action: "update", entityType: "cash_accounts", entityId: input.id,
     before: before as Record<string, unknown>, after: patch,
@@ -584,6 +646,8 @@ async function setCashAccountActive(id: string, active: boolean): Promise<Action
     .select()
     .single();
   if (uError) return fail(uError.message);
+  clearCashAccountsCache();
+  await clearMastersCache();
   await logAudit(db, {
     action: active ? "reactivate" : "deactivate", entityType: "cash_accounts", entityId: id,
     before: { is_active: !active }, after: { is_active: active },
@@ -1871,12 +1935,35 @@ export async function listExpenseCategories(): Promise<ActionResult> {
   if (!db) return fail(error);
   const gate = await requireSignedIn(db);
   if (!gate.ok) return fail(gate.error);
-  const { data, error: qError } = await db
-    .from("expense_categories")
-    .select("*")
-    .order("name", { ascending: true });
-  if (qError) return fail(qError.message);
-  return { success: true, data };
+  if (cachedExpenseCategories && Date.now() < cachedExpenseCategories.expires) {
+    const data = cachedExpenseCategories.data;
+    return { success: true, data: Array.isArray(data) ? [...data] : data };
+  }
+  if (expenseCategoriesPending) return expenseCategoriesPending;
+  const generation = expenseCategoriesGeneration;
+  let fetchPromise: Promise<ActionResult> | null = null;
+  fetchPromise = (async () => {
+    try {
+      const { data, error: qError } = await db
+        .from("expense_categories")
+        .select("*")
+        .order("name", { ascending: true });
+      if (qError) return fail(qError.message);
+      if (generation === expenseCategoriesGeneration) {
+        cachedExpenseCategories = {
+          data,
+          expires: Date.now() + FINANCE_REFERENCE_TTL_MS,
+        };
+      }
+      return { success: true, data };
+    } finally {
+      if (expenseCategoriesPending === fetchPromise) {
+        expenseCategoriesPending = null;
+      }
+    }
+  })();
+  expenseCategoriesPending = fetchPromise;
+  return fetchPromise;
 }
 
 export async function createExpenseCategory(input: {
@@ -1899,6 +1986,7 @@ export async function createExpenseCategory(input: {
     .select()
     .single();
   if (iError) return fail(iError.message);
+  clearExpenseCategoriesCache();
   await logAudit(db, {
     action: "create", entityType: "expense_categories", entityId: data.id,
     after: { name: input.name.trim() },
@@ -1936,6 +2024,7 @@ export async function updateExpenseCategory(input: {
     .select()
     .single();
   if (uError) return fail(uError.message);
+  clearExpenseCategoriesCache();
   await logAudit(db, {
     action: "update", entityType: "expense_categories", entityId: input.id,
     before: before as Record<string, unknown>, after: patch,
@@ -1959,6 +2048,7 @@ export async function deactivateExpenseCategory(id: string): Promise<ActionResul
     .select()
     .single();
   if (uError) return fail(uError.message);
+  clearExpenseCategoriesCache();
   await logAudit(db, {
     action: "deactivate", entityType: "expense_categories", entityId: id,
     userId: gate.actor.userId, userEmail: gate.actor.email,
@@ -1982,6 +2072,7 @@ async function setExpenseCategoryActive(id: string, active: boolean): Promise<Ac
     .select()
     .single();
   if (uError) return fail(uError.message);
+  clearExpenseCategoriesCache();
   await logAudit(db, {
     action: active ? "reactivate" : "deactivate", entityType: "expense_categories", entityId: id,
     before: { is_active: !active }, after: { is_active: active },

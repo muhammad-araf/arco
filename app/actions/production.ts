@@ -30,7 +30,7 @@ import {
   validateMassBalance,
   aggregateQuantities,
 } from "@/lib/calc";
-import { listGodowns, listProducts, listMachines, listPackagingTypes, listParties } from "./masters";
+import { clearMastersCache, listGodowns, listProducts, listMachines, listPackagingTypes, listParties } from "./masters";
 import { getStockSummary } from "./inventory";
 import { getBardanaLedger } from "./finance";
 import { listProcessingTypes } from "./processing-types";
@@ -878,6 +878,9 @@ export async function postBatch(id: string, clientToken?: string, varianceReason
         .update({ current_stock: Number(packaging.current_stock) - (bags + damaged) })
         .eq("id", packaging.id);
       if (pkgError) return fail(pkgError.message);
+      // packaging_types is cached by masters.ts (listPackagingTypes):
+      // this stock movement must not leave a stale current_stock behind.
+      await clearMastersCache();
       // Bardana ledger consumption (bags packed + bags damaged both
       // leave bardana stock), so the ledger agrees with the stock card.
       await bardanaEntry(supabase, {
@@ -1170,6 +1173,8 @@ export async function reverseBatch(id: string, reason: string, clientToken?: str
           .update({ current_stock: Number(pkg.current_stock) + bags + damaged })
           .eq("id", batch.packaging_type_id);
         if (pkgError) return fail(pkgError.message);
+        // See postBatch note: packaging_types is cached by masters.ts.
+        await clearMastersCache();
       }
       // Bardana ledger restoration, mirroring the post consumption.
       await bardanaEntry(supabase, {
@@ -1452,6 +1457,8 @@ export async function createPackingRecord(input: {
         .update({ current_stock: Number(pkg.current_stock) - needed })
         .eq("id", typeId);
       if (pkgError) return fail(pkgError.message);
+      // See postBatch note: packaging_types is cached by masters.ts.
+      await clearMastersCache();
       await bardanaEntry(supabase, {
         date,
         voucherType: "packing",
