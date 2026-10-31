@@ -30,7 +30,7 @@ import {
   Settings,
   BookOpen,
   Handshake,
-  Sparkles,
+  MessageSquare,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { type AppRole } from "@/app/actions/auth"
@@ -62,7 +62,7 @@ const navSections: NavSection[] = [
     heading: "Operations",
     items: [
       { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-      { title: "AI Assistant", href: "/chat", icon: Sparkles, badge: "AI" },
+      { title: "AI Assistant", href: "/chat", icon: MessageSquare },
       { title: "Inward", href: "/inward", icon: Truck },
       { title: "Stock", href: "/inventory", icon: Boxes },
       { title: "Gate Pass", href: "/gatepass", icon: FileCheck2 },
