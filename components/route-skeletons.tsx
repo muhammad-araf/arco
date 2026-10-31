@@ -23,10 +23,16 @@ export function BillingSkeleton() {
       <TitleRowSkeleton buttons={1} />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          <TableCardSkeleton rows={8} />
+          {/* Customers table: Party Code, Customer Name, Contact / Phone,
+              Opening Due, Current Balance, Action. */}
+          <TableCardSkeleton rows={8} columns={[1, 2, 2, 1, 1, 1]} />
         </div>
+        {/* Receipts feed beside it (list rows, not a table). */}
         <ListCardSkeleton rows={4} />
       </div>
+      {/* Customer Invoices table below: Invoice, Date, Customer, Total,
+          Paid, Balance, Status / Actions. */}
+      <TableCardSkeleton rows={8} columns={[1, 1, 2, 1, 1, 1, 1]} />
     </div>
   )
 }
@@ -82,8 +88,32 @@ export function DaybookSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
       <TitleRowSkeleton buttons={1} />
-      <StatCardsSkeleton count={3} cols="sm:grid-cols-3" />
-      <TableCardSkeleton rows={8} />
+      {/* 4 real liquidity cards: Cash in Hand, Bank, Online, Total Cash. */}
+      <StatCardsSkeleton count={4} cols="sm:grid-cols-2 lg:grid-cols-4" />
+      {/* Balances by account: Account, Kind, Opening, Closing. */}
+      <TableCardSkeleton rows={5} columns={[2, 1, 1, 1]} />
+      {/* Date-range filter: From / To + Load daybook. */}
+      <FilterFieldsSkeleton fields={2} button />
+      {/* Expenses in range: Expense, Date, Category, Payee, Location,
+          Amount, Status / Actions. The Cash transfer form between the
+          filter and this table is not shown. */}
+      <TableCardSkeleton rows={8} columns={[2, 1, 1, 1, 1, 1, 1]} />
+    </div>
+  )
+}
+
+export function EmployeesSkeleton() {
+  return (
+    <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
+      {/* Default tab is Directory: its one header button is Add employee.
+          Payroll tab has 4 buttons, Attendance/Advances 1 each — only the
+          default tab is shown, as on the real page. */}
+      <TitleRowSkeleton buttons={1} />
+      {/* 4 real tabs: Directory, Attendance, Payroll, Advances. */}
+      <TabBarSkeleton tabs={4} />
+      {/* Default Directory table: Code, Staff Name, Designation, Wage
+          Category, Base Rate, Phone, Payment, Status, Actions. */}
+      <TableCardSkeleton rows={8} title={false} columns={[1, 3, 2, 2, 1, 1, 1, 1, 1]} />
     </div>
   )
 }
@@ -91,8 +121,16 @@ export function DaybookSkeleton() {
 export function GatepassSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
-      <TitleRowSkeleton buttons={2} />
-      <TableCardSkeleton rows={8} />
+      {/* 4 real header buttons: Export CSV, Export Excel, Export PDF,
+          New Gate Pass. */}
+      <TitleRowSkeleton buttons={4} />
+      {/* Register filters: Status, Customer, Vehicle, From, To. No
+          always-on button — Clear appears only when a filter is set. */}
+      <FilterFieldsSkeleton fields={5} button={false} />
+      {/* Gate Passes table: Gate Pass No, Date & Time, Customer /
+          Receiver, Vehicle / Driver, Dispatch Godown, Bags, Weight (kg),
+          Status, Actions. */}
+      <TableCardSkeleton rows={8} columns={[2, 2, 2, 2, 2, 1, 1, 1, 1]} />
     </div>
   )
 }
@@ -100,18 +138,18 @@ export function GatepassSkeleton() {
 export function InventorySkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
-      <TitleRowSkeleton buttons={2} />
-      <div className="expensive-card p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-1.5 p-1 rounded-lg bg-muted border border-border self-start">
-          <Skel className="h-7 w-32 rounded-md bg-card" />
-          <Skel className="h-7 w-32 rounded-md bg-card" />
-        </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <Skel className="h-8 w-52 rounded-lg bg-muted" />
-          <Skel className="h-8 w-32 rounded-lg bg-muted" />
-        </div>
-      </div>
-      <TableCardSkeleton rows={8} />
+      {/* 5 real header buttons: Export CSV, Export Excel, Export PDF,
+          Transfer, Correct stock. */}
+      <TitleRowSkeleton buttons={5} />
+      {/* 6 real tabs: Live Stock Summary, Movement Ledger, Transfers,
+          Adjustments, Count, Ageing. */}
+      <TabBarSkeleton tabs={6} />
+      {/* Summary-tab filter: search + category select, no button. */}
+      <FilterFieldsSkeleton fields={2} button={false} />
+      {/* Default Live Stock Summary table, one godown card: Product /
+          Grain, Owner, Available Weight, Min Threshold, Status. The
+          real page repeats this card per godown. */}
+      <TableCardSkeleton rows={8} columns={[2, 1, 2, 1, 1]} />
     </div>
   )
 }
@@ -120,7 +158,28 @@ export function InwardSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
       <TitleRowSkeleton buttons={1} />
-      <TableCardSkeleton rows={8} />
+      {/* List filters: Search, From, To + Apply (Clear is conditional). */}
+      <FilterFieldsSkeleton fields={3} button />
+      {/* Vouchers table: Voucher No, Date, Supplier / Source, Target
+          Godown, Bilty / Vehicle, Bags, Net Weight, Total Value,
+          Actions. */}
+      <TableCardSkeleton rows={8} columns={[2, 1, 2, 2, 2, 1, 1, 1, 1]} />
+    </div>
+  )
+}
+
+export function LedgersSkeleton() {
+  return (
+    <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
+      <TitleRowSkeleton buttons={0} subtitle />
+      {/* 6 real tabs: Stock, Party, Cash, Bardana, Cost, Payments. */}
+      <TabBarSkeleton tabs={6} />
+      {/* Date range shared by every tab: From / To + Apply. */}
+      <FilterFieldsSkeleton fields={2} button />
+      {/* Default Stock ledger table: Date, Voucher, Type, Godown,
+          Product, Lot, Inward, Outward, Balance. Other tabs show their
+          own columns, not shown here. */}
+      <TableCardSkeleton rows={8} columns={[1, 1, 1, 1, 2, 1, 1, 1, 1]} />
     </div>
   )
 }
@@ -129,7 +188,10 @@ export function MachinerySkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
       <TitleRowSkeleton buttons={1} />
-      <TableCardSkeleton rows={8} />
+      {/* Jobs table: Job No, Date, Client / Owner, Machine Plant, Input
+          Grain, Processed Weight, Billing Basis, Rate, Total Charge,
+          Status. */}
+      <TableCardSkeleton rows={8} columns={[1, 1, 2, 2, 2, 1, 1, 1, 1, 1]} />
     </div>
   )
 }
@@ -164,10 +226,29 @@ export function MigrationSkeleton() {
 export function PackingSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
-      <TitleRowSkeleton buttons={1} />
-      <StatCardsSkeleton count={3} cols="sm:grid-cols-3" />
-      <TableCardSkeleton rows={5} />
-      <TableCardSkeleton rows={6} />
+      {/* No header buttons on the real page. */}
+      <TitleRowSkeleton buttons={0} />
+      {/* 4 real sections: Batch packing, Standalone packing, History,
+          Bardana. */}
+      <TabBarSkeleton tabs={4} />
+      {/* Default Batch packing tab is a form, not a table or stat cards:
+          labeled field blocks + a submit block. The old stat cards
+          matched no section on this page. History and Bardana tables
+          live on their own tabs, not shown here. */}
+      <div className="expensive-card p-5 space-y-4">
+        <Skel className="h-4 w-36 max-w-full bg-muted rounded" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="space-y-2 min-w-0">
+              <Skel className="h-3 w-16 bg-muted rounded" />
+              <Skel className="h-9 w-full rounded-lg bg-muted" />
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-end">
+          <Skel className="h-10 w-36 max-w-full rounded-lg bg-muted" />
+        </div>
+      </div>
     </div>
   )
 }
@@ -195,11 +276,30 @@ export function PayrollSkeleton() {
   )
 }
 
+export function PeopleSkeleton() {
+  return (
+    <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
+      <TitleRowSkeleton buttons={0} subtitle />
+      {/* 2 real tabs: Employees, System users. */}
+      <TabBarSkeleton tabs={2} />
+      {/* System-users table (the tab this skeleton replaces in-page):
+          Operator, Role, Status, Action. The default Employees tab is
+          a link card, not this table. */}
+      <TableCardSkeleton rows={6} title={false} columns={[3, 2, 1, 2]} />
+    </div>
+  )
+}
+
 export function ProductionSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
       <TitleRowSkeleton buttons={1} />
-      <TableCardSkeleton rows={8} />
+      {/* Batches table: Batch No, Date, Machine Plant, Godown, Raw
+          Input, Graded Output, By-Product, Yield %, Actions. */}
+      <TableCardSkeleton rows={8} columns={[2, 1, 2, 1, 1, 1, 1, 1, 1]} />
+      {/* Seed Recipes table below it: Code, Name, Version, Expected
+          yield. Its create form is not shown. */}
+      <TableCardSkeleton rows={4} columns={[1, 2, 1, 1]} />
     </div>
   )
 }
@@ -208,7 +308,14 @@ export function PurchasesSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
       <TitleRowSkeleton buttons={1} />
-      <TableCardSkeleton rows={8} />
+      {/* Invoices table: Purchase No, Date, Supplier / Grower, Invoice
+          Ref, Total Payable, Paid Amount, Remaining Balance, Status,
+          Actions. */}
+      <TableCardSkeleton rows={8} columns={[2, 1, 2, 1, 1, 1, 1, 1, 1]} />
+      {/* Pay a posted purchase form (always shown): 4 fields + Pay. The
+          conditional draft-purchases card and the returns section below
+          it are not shown. */}
+      <FilterFieldsSkeleton fields={4} button />
     </div>
   )
 }
@@ -249,6 +356,59 @@ export function ReportsSkeleton() {
         </div>
         <Skel className="h-14 w-full rounded-md bg-muted" />
       </div>
+    </div>
+  )
+}
+
+export function SettingsSkeleton() {
+  return (
+    <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
+      <TitleRowSkeleton buttons={0} subtitle />
+      {/* Company card: Name, Phone, Email, Logo URL, Address (full
+          width) + Save company. */}
+      <div className="expensive-card p-5 space-y-4">
+        <Skel className="h-4 w-28 max-w-full bg-muted rounded" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="space-y-2 min-w-0">
+              <Skel className="h-3 w-16 bg-muted rounded" />
+              <Skel className="h-9 w-full rounded-lg bg-muted" />
+            </div>
+          ))}
+          <div className="space-y-2 sm:col-span-2 min-w-0">
+            <Skel className="h-3 w-16 bg-muted rounded" />
+            <Skel className="h-9 w-full rounded-lg bg-muted" />
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <Skel className="h-10 w-36 max-w-full rounded-lg bg-muted" />
+        </div>
+      </div>
+      {/* Business settings card: Business model, Valuation method,
+          Currency, Session timeout, Cutover date, Bilty duplicate
+          check, Variance tolerance, plus two checkbox rows + Save. */}
+      <div className="expensive-card p-5 space-y-4">
+        <Skel className="h-4 w-36 max-w-full bg-muted rounded" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {Array.from({ length: 7 }).map((_, i) => (
+            <div key={i} className="space-y-2 min-w-0">
+              <Skel className="h-3 w-16 bg-muted rounded" />
+              <Skel className="h-9 w-full rounded-lg bg-muted" />
+            </div>
+          ))}
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <Skel className="h-4 w-4 shrink-0 rounded bg-muted" />
+              <Skel className="h-3 w-48 max-w-full bg-muted rounded" />
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-end">
+          <Skel className="h-10 w-36 max-w-full rounded-lg bg-muted" />
+        </div>
+      </div>
+      {/* Voucher prefixes table: Series, Prefix, Last number, Action. */}
+      <TableCardSkeleton rows={4} columns={[2, 2, 1, 1]} />
     </div>
   )
 }
