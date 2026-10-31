@@ -306,7 +306,7 @@ export default function InwardPage() {
 
       {/* Printable Inward Slip View */}
       {selectedVoucherForPrint && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 overflow-y-auto">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/70 overflow-y-auto">
           <div className="expensive-card w-full max-w-2xl p-4 sm:p-8 bg-white text-black shadow-md rounded-md printable-document space-y-6 max-h-[90dvh] overflow-y-auto">
             <div className="flex items-start justify-between border-b pb-4">
               <div>

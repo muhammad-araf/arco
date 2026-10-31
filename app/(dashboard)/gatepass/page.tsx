@@ -589,7 +589,7 @@ export default function GatePassPage() {
           come from settings (getCompanySettings); when none are
           configured the header simply renders without them. */}
       {selectedPassForPrint && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/70 overflow-y-auto">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/70 overflow-y-auto">
           <div className="w-full max-w-2xl bg-white text-black rounded-md shadow-md max-h-[90dvh] overflow-y-auto">
             <div className="p-4 sm:p-6">
               <GatePassPrint

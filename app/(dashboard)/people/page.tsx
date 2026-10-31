@@ -213,7 +213,7 @@ export default function PeoplePage() {
 
       {target && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 overflow-y-auto"
+          className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/60 overflow-y-auto"
           onClick={() => {
             if (!pending) {
               setTarget(null)

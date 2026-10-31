@@ -57,9 +57,9 @@ export function Modal({
   }, [open, onClose])
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
+    <div className="fixed inset-0 z-[100] flex overflow-y-auto p-4 bg-black/60">
       <div
-        className={`expensive-card w-full ${xl ? "max-w-5xl" : wide ? "max-w-2xl" : "max-w-md"} p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto`}
+        className={`expensive-card m-auto w-full ${xl ? "max-w-5xl" : wide ? "max-w-2xl" : "max-w-md"} p-6 bg-card border border-border shadow-md rounded-md space-y-4 max-h-[90dvh] overflow-y-auto`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
