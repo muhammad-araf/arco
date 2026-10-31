@@ -33,7 +33,8 @@ import { PrintButton } from "@/components/print/print-button"
 import { formatCurrency, formatWeight } from "@/lib/utils"
 import { exportReportToCsv, exportToExcel, exportToPdf } from "@/lib/export-utils"
 import { logExport } from "@/app/actions/audit-log"
-import { AlertBanner, EmptyState, PageSkeleton } from "@/components/erp-ui"
+import { AlertBanner, EmptyState } from "@/components/erp-ui"
+import { LedgersSkeleton } from "@/components/route-skeletons"
 
 type Tab = "stock" | "party" | "cash" | "bardana" | "cost" | "payments"
 
@@ -349,7 +350,7 @@ export default function LedgersPage() {
     [parties, stmtKind],
   )
 
-  if (isLoading) return <PageSkeleton rows={8} />
+  if (isLoading) return <LedgersSkeleton />
 
   return (
     <div className="space-y-6">

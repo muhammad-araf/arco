@@ -1,1 +1,1 @@
-export { PageSkeleton as default } from "@/components/erp-ui"
+export { LedgersSkeleton as default } from "@/components/route-skeletons"
