@@ -2,11 +2,10 @@
 
 import * as React from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { 
-  Sparkles, 
-  ArrowUp, 
-  Loader2, 
-  CheckCircle2, 
+import {
+  ArrowUp,
+  Loader2,
+  CheckCircle2,
   Database,
   Boxes,
   Users2,
@@ -18,6 +17,7 @@ import {
   Trash2,
   Brain,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   MessageSquare,
   Bot
@@ -77,7 +77,7 @@ function ThinkingBlock({ thinking, status }: { thinking?: string; status?: strin
       </button>
 
       {open && thinking && (
-        <div className="px-3 py-2 border-t border-border/60 font-mono text-[11px] leading-relaxed text-muted-foreground whitespace-pre-wrap bg-background/50 max-h-48 overflow-y-auto select-text">
+        <div className="px-3 py-2 border-t border-border/60 font-mono text-[11px] leading-relaxed text-muted-foreground whitespace-pre-wrap bg-background max-h-48 overflow-y-auto select-text">
           {thinking}
         </div>
       )}
@@ -123,7 +123,10 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
   const [input, setInput] = React.useState('')
   const [loading, setLoading] = React.useState(false)
   const [copiedId, setCopiedId] = React.useState<string | null>(null)
-  const [showHistory, setShowHistory] = React.useState(true)
+  // Mobile only: one panel at a time — the conversation list OR the chat
+  // panel. Desktop always shows both side by side (md:flex below), so
+  // this state never hides anything at md and up.
+  const [mobileView, setMobileView] = React.useState<'list' | 'panel'>('list')
 
   const messagesEndRef = React.useRef<HTMLDivElement>(null)
   const textareaRef = React.useRef<HTMLTextAreaElement>(null)
@@ -138,6 +141,7 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
       if (active) {
         setMessages(active.messages as Message[])
         setActiveSessionId(active.id)
+        setMobileView('panel')
         return
       }
     }
@@ -146,6 +150,7 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
       const first = list[0]
       setActiveSessionId(first.id)
       setMessages(first.messages as Message[])
+      setMobileView('panel')
     }
   }, [sessionId])
 
@@ -177,6 +182,8 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
     if (session) {
       setActiveSessionId(session.id)
       setMessages(session.messages as Message[])
+      // Mobile: selecting a conversation shows its panel.
+      setMobileView('panel')
       router.push(`/chat?session=${id}`)
     }
   }
@@ -185,6 +192,8 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
     setActiveSessionId(null)
     setMessages([])
     setInput('')
+    // Mobile: a new chat opens the (empty) panel, not the list.
+    setMobileView('panel')
     router.push('/chat')
   }
 
@@ -389,8 +398,9 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
 
   return (
     <div className="h-[calc(100vh-6.5rem)] flex rounded-md border border-border bg-card shadow-xs overflow-hidden">
-      {/* Session History Sidebar */}
-      <div className={`w-72 border-r border-border bg-muted/20 flex flex-col shrink-0 transition-all duration-200 ${showHistory ? 'flex' : 'hidden md:flex'}`}>
+      {/* Session History Sidebar — full width on mobile (one panel at a
+          time), w-72 beside the panel on desktop. */}
+      <div className={`w-full md:w-72 border-r border-border bg-muted/20 flex-col shrink-0 ${mobileView === 'panel' ? 'hidden md:flex' : 'flex'}`}>
         <div className="p-3 border-b border-border flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Bot className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
@@ -426,7 +436,7 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
                 <button
                   type="button"
                   onClick={(e) => handleDeleteSession(e, s.id)}
-                  className="opacity-0 group-hover:opacity-100 hover:text-red-500 p-0.5 rounded transition-opacity"
+                  className="opacity-100 md:opacity-0 md:group-hover:opacity-100 hover:text-red-500 p-0.5 rounded transition-opacity"
                   title="Delete chat"
                 >
                   <Trash2 className="h-3 w-3" />
@@ -436,26 +446,28 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
           })}
         </div>
 
-        <div className="p-2.5 border-t border-border bg-card/60 text-[11px] text-muted-foreground flex items-center justify-between">
-          <span className="truncate">{actor.displayName} ({actor.role})</span>
-          <span className="flex h-2 w-2 rounded-full bg-emerald-500" title="Online" />
+        <div className="p-2.5 border-t border-border bg-card text-[11px] text-muted-foreground flex items-center justify-between gap-2">
+          <span className="truncate min-w-0">{actor.displayName} ({actor.role})</span>
+          <span className="flex h-2 w-2 shrink-0 rounded-full bg-emerald-500" title="Online" />
         </div>
       </div>
 
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col min-w-0 bg-background">
+      {/* Main Chat Area — hidden on mobile while the list is shown. */}
+      <div className={`flex-1 flex-col min-w-0 bg-background ${mobileView === 'list' ? 'hidden md:flex' : 'flex'}`}>
         {/* Top Header */}
-        <div className="h-12 border-b border-border px-4 flex items-center justify-between bg-card/50">
+        <div className="h-12 border-b border-border px-4 flex items-center justify-between gap-2 bg-card">
           <div className="flex items-center gap-2 min-w-0">
             <button
               type="button"
-              onClick={() => setShowHistory(!showHistory)}
-              className="md:hidden p-1.5 rounded hover:bg-muted text-muted-foreground"
+              onClick={() => setMobileView('list')}
+              aria-label="Back to conversations"
+              className="md:hidden inline-flex items-center gap-0.5 shrink-0 p-1.5 rounded hover:bg-muted text-muted-foreground"
             >
-              <MessageSquare className="h-4 w-4" />
+              <ChevronLeft className="h-4 w-4" />
+              <span className="text-xs font-medium">Back</span>
             </button>
             <div className="h-7 w-7 rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0">
-              <Sparkles className="h-3.5 w-3.5" />
+              <Bot className="h-3.5 w-3.5" />
             </div>
             <div className="min-w-0">
               <h2 className="text-xs font-bold text-foreground truncate">
@@ -484,7 +496,7 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center max-w-xl mx-auto py-8">
               <div className="h-12 w-12 rounded-lg bg-emerald-600/10 text-emerald-600 dark:text-emerald-400 border border-emerald-600/25 flex items-center justify-center mb-3">
-                <Sparkles className="h-6 w-6" />
+                <Bot className="h-6 w-6" />
               </div>
               <h3 className="text-sm font-bold text-foreground">
                 How can I assist your operations today?
@@ -526,13 +538,13 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
                 >
                   {!isUser && (
                     <div className="h-7 w-7 rounded bg-emerald-600/15 text-emerald-600 dark:text-emerald-400 border border-emerald-600/30 flex items-center justify-center shrink-0 mt-0.5">
-                      <Sparkles className="h-3.5 w-3.5" />
+                      <Bot className="h-3.5 w-3.5" />
                     </div>
                   )}
 
-                  <div className={`max-w-[85%] sm:max-w-[78%] space-y-1.5`}>
+                  <div className={`min-w-0 max-w-[85%] sm:max-w-[78%] space-y-1.5`}>
                     <div
-                      className={`rounded-md p-3.5 text-xs ${
+                      className={`min-w-0 break-words rounded-md p-3.5 text-xs ${
                         isUser
                           ? 'bg-emerald-600 text-white ml-auto shadow-xs'
                           : 'bg-card border border-border shadow-2xs text-foreground'
@@ -552,11 +564,11 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
                               className="flex items-start gap-2 p-2 rounded bg-muted/60 border border-border/70 text-[11px]"
                             >
                               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0 mt-0.5" />
-                              <div className="min-w-0">
-                                <span className="font-semibold text-foreground uppercase tracking-wide">
+                              <div className="min-w-0 flex-1">
+                                <span className="font-semibold text-foreground uppercase tracking-wide break-words">
                                   {act.action}
                                 </span>
-                                <p className="text-muted-foreground mt-0.5">{act.details}</p>
+                                <p className="text-muted-foreground mt-0.5 break-words">{act.details}</p>
                               </div>
                             </div>
                           ))}
@@ -565,7 +577,7 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
 
                       {/* Content */}
                       {isUser ? (
-                        <p className="whitespace-pre-wrap leading-relaxed select-text font-normal">
+                        <p className="whitespace-pre-wrap break-words leading-relaxed select-text font-normal">
                           {m.content}
                         </p>
                       ) : (
@@ -574,7 +586,7 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
                     </div>
 
                     {/* Metadata & Copy action */}
-                    <div className={`flex items-center gap-2 px-1 text-[10px] text-muted-foreground ${isUser ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`flex flex-wrap items-center gap-2 px-1 text-[10px] text-muted-foreground ${isUser ? 'justify-end' : 'justify-start'}`}>
                       <span>{m.timestamp}</span>
                       {!isUser && m.content && (
                         <button
@@ -629,7 +641,7 @@ export function ChatClient({ actor }: { actor: { userId: string; email: string |
               placeholder="Ask anything: Daybook summary, party balances, check godown stock, record attendance..."
               rows={1}
               disabled={loading}
-              className="w-full resize-none border-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none p-2 min-h-[38px] max-h-[160px] leading-relaxed"
+              className="w-full min-w-0 resize-none border-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none p-2 min-h-[38px] max-h-[160px] leading-relaxed"
             />
             <button
               type="button"
