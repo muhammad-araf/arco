@@ -219,34 +219,32 @@ export function ReportsSkeleton() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <Skel className="h-7 w-56 max-w-full bg-muted rounded" />
         <div className="flex flex-wrap items-center gap-2">
-          <Skel className="h-8 w-32 rounded-lg bg-muted" />
-          <Skel className="h-8 w-32 rounded-lg bg-muted" />
-          <Skel className="h-10 w-28 rounded-lg bg-muted" />
-          <Skel className="h-10 w-40 rounded-lg bg-muted" />
+          {/* Real header controls: From / To dates, then Export CSV,
+              Export Excel, Export PDF, Print. */}
+          <Skel className="h-8 w-32 max-w-full rounded-lg bg-muted" />
+          <Skel className="h-8 w-32 max-w-full rounded-lg bg-muted" />
+          <Skel className="h-10 w-28 max-w-full rounded-lg bg-muted" />
+          <Skel className="h-10 w-32 max-w-full rounded-lg bg-muted" />
+          <Skel className="h-10 w-28 max-w-full rounded-lg bg-muted" />
+          <Skel className="h-10 w-40 max-w-full rounded-lg bg-muted" />
         </div>
       </div>
-      <TabBarSkeleton tabs={6} />
+      <Skel className="h-3 w-64 max-w-full bg-muted rounded -mt-3" />
+      {/* 3 real tabs: Profit & Loss, Godown Stock Summary, Valuation. */}
+      <TabBarSkeleton tabs={3} />
+      {/* Default tab is the P&L sheet: header, two label/value columns,
+          totals bar. */}
       <div className="expensive-card p-6 space-y-6">
-        <div className="flex items-start justify-between border-b border-border pb-4">
+        <div className="flex items-start justify-between gap-3 border-b border-border pb-4">
           <div className="space-y-2">
             <Skel className="h-5 w-72 max-w-full bg-muted rounded" />
             <Skel className="h-3 w-56 max-w-full bg-muted rounded" />
           </div>
-          <Skel className="h-6 w-24 rounded bg-muted" />
+          <Skel className="h-6 w-24 shrink-0 rounded bg-muted" />
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           {Array.from({ length: 2 }).map((_, col) => (
-            <div key={col} className="space-y-3">
-              <div className="flex items-center justify-between border-b border-border pb-2">
-                <Skel className="h-3 w-32 bg-muted rounded" />
-                <Skel className="h-3 w-20 bg-muted rounded" />
-              </div>
-              <div className="space-y-2">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <Skel key={i} className="h-9 w-full rounded bg-muted" />
-                ))}
-              </div>
-            </div>
+            <DetailRowsSkeleton key={col} rows={4} card={false} />
           ))}
         </div>
         <Skel className="h-14 w-full rounded-md bg-muted" />
