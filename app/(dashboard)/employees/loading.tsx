@@ -1,1 +1,1 @@
-export { PayrollSkeleton as default } from "@/components/route-skeletons"
+export { EmployeesSkeleton as default } from "@/components/route-skeletons"
