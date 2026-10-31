@@ -28,10 +28,17 @@ import {
   getUrlFilter,
   isTodayISO,
 } from "@/components/erp-ui"
-import { GatePassDialog } from "@/components/gate-pass-dialog"
-import { GatePassReturnDialog } from "@/components/gate-pass-return-dialog"
-import { GatePassRejectDialog } from "@/components/gate-pass-reject-dialog"
+import dynamic from "next/dynamic"
 import { GatepassSkeleton } from "@/components/route-skeletons"
+
+// Dialogs are code-split: each returns null while closed (verified in
+// its component), so splitting its chunk out of the page bundle changes
+// nothing on screen — the same props, the same dialog when opened.
+// They stay mounted with the same props as before; only the import
+// mechanism changes, so open/close and form state are untouched.
+const GatePassDialog = dynamic(() => import("@/components/gate-pass-dialog").then((m) => m.GatePassDialog))
+const GatePassReturnDialog = dynamic(() => import("@/components/gate-pass-return-dialog").then((m) => m.GatePassReturnDialog))
+const GatePassRejectDialog = dynamic(() => import("@/components/gate-pass-reject-dialog").then((m) => m.GatePassRejectDialog))
 
 /** A gate pass row plus the spec §9 columns (kept local so this page
  *  does not depend on shared-type edits owned by other teams). */
@@ -101,7 +108,16 @@ export default function GatePassPage() {
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
-      const initRes = await getGatePassInitData()
+      // Init data and the approval-setting read run together instead of
+      // one after the other. The setting is display-only (the server
+      // re-reads it on every post), and on an init failure the setting
+      // result is ignored and approvalRequired is left exactly as it
+      // was — the same as the old code, which never reached the
+      // setting read on that path.
+      const [initRes, apRes] = await Promise.all([
+        getGatePassInitData(),
+        getAppSetting("gatepass_approval_required").catch(() => null),
+      ])
       if (!initRes.success) {
         setFormError(initRes.error ?? "Could not load gate pass data.")
         return
@@ -119,13 +135,12 @@ export default function GatePassPage() {
       }
       // Approval gate display only: the server re-reads the setting on
       // every post, so a stale or missing value here only affects the
-      // confirm-dialog wording, never the enforced behaviour.
-      try {
-        const ap = await getAppSetting("gatepass_approval_required")
-        const v = (ap as any)?.data
+      // confirm-dialog wording, never the enforced behaviour. The value
+      // comes from the parallel read above; a failed read (null) yields
+      // false, exactly as the old catch block did.
+      {
+        const v = (apRes as any)?.data
         setApprovalRequired(v === true || v === "true" || (v && typeof v === "object" && (v.required === true || v.enabled === true || v.value === true)))
-      } catch {
-        setApprovalRequired(false)
       }
       setSummaryRows(Array.isArray(data.summary) ? data.summary : [])
       setGatePasses((Array.isArray(data.passes) ? data.passes : []).map((row: any) => ({

@@ -20,16 +20,33 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode
 }) {
+  // connection() first: it opts this route into dynamic rendering, and
+  // the cookie reads below (createClient) must happen in that dynamic
+  // context. Everything after it is independent work, run concurrently.
   await connection()
 
   // Session guard: no authenticated Supabase session -> /login.
   // Fail closed on any auth lookup error, the same as no session.
-  let session = null
+  // The session check still gates the redirect exactly as before: actor
+  // and settings are only resolved once a session exists, so an
+  // unauthenticated request still redirects without those lookups.
+  // getCurrentActor re-reads the session itself from the same (cached)
+  // client, and getSettingsSnapshot builds its own (cached) client, so
+  // neither depends on the session value resolved here — only on the
+  // client existing, which is why they can run in parallel with each
+  // other once the guard has passed.
   let supabase: Awaited<ReturnType<typeof createClient>> | null = null
   try {
     supabase = await createClient()
-    const { data } = await supabase.auth.getSession()
-    session = data.session
+  } catch {
+    supabase = null
+  }
+  let session = null
+  try {
+    if (supabase) {
+      const { data } = await supabase.auth.getSession()
+      session = data.session
+    }
   } catch {
     session = null
   }
@@ -39,15 +56,18 @@ export default async function DashboardLayout({
   // sidebar no longer spends a client round trip (getUser + profile) after
   // every app load just to render a name and role. Display-only: all
   // enforcement still happens inside the server actions.
-  const actor = supabase ? await getCurrentActor(supabase).catch(() => null) : null
-
   // Idle sign-out: the configured timeout (default 60 minutes; 0
   // disables it in the component). A failed settings read keeps the
   // default rather than disabling the timer or signing anyone out.
+  // Previously these two awaited sequentially; they are independent
+  // (different tables, different actions), so they now run together.
+  const [actor, snap] = await Promise.all([
+    supabase ? getCurrentActor(supabase).catch(() => null) : Promise.resolve(null),
+    getSettingsSnapshot().catch(() => null),
+  ])
   let timeoutMinutes = 60
   try {
-    const snap = await getSettingsSnapshot()
-    if (snap.success && snap.data) timeoutMinutes = snap.data.session_timeout_minutes
+    if (snap && snap.success && snap.data) timeoutMinutes = snap.data.session_timeout_minutes
   } catch {
     timeoutMinutes = 60
   }

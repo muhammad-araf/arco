@@ -23,14 +23,21 @@ import {
 } from "@/components/erp-ui"
 import { PayrollSkeleton } from "@/components/route-skeletons"
 import { PayrollPrint } from "@/components/print/payroll-print"
-import { EmployeeFormDialog } from "@/components/employee-form-dialog"
-import { EmployeeViewDialog } from "@/components/employee-view-dialog"
-import { PayrollRunDialog } from "@/components/payroll-run-dialog"
-import { PayrollPayDialog } from "@/components/payroll-pay-dialog"
-import { PayrollAdjustDialog } from "@/components/payroll-adjust-dialog"
-import { PayrollReverseDialog } from "@/components/payroll-reverse-dialog"
-import { AdvanceDialog } from "@/components/advance-dialog"
-import { PayrollRulesDialog } from "@/components/payroll-rules-dialog"
+import dynamic from "next/dynamic"
+
+// Dialogs are code-split: each returns null while closed (verified in
+// its component), so splitting its chunk out of the page bundle changes
+// nothing on screen — the same props, the same dialog when opened.
+// They stay mounted with the same props as before; only the import
+// mechanism changes, so open/close and form state are untouched.
+const EmployeeFormDialog = dynamic(() => import("@/components/employee-form-dialog").then((m) => m.EmployeeFormDialog))
+const EmployeeViewDialog = dynamic(() => import("@/components/employee-view-dialog").then((m) => m.EmployeeViewDialog))
+const PayrollRunDialog = dynamic(() => import("@/components/payroll-run-dialog").then((m) => m.PayrollRunDialog))
+const PayrollPayDialog = dynamic(() => import("@/components/payroll-pay-dialog").then((m) => m.PayrollPayDialog))
+const PayrollAdjustDialog = dynamic(() => import("@/components/payroll-adjust-dialog").then((m) => m.PayrollAdjustDialog))
+const PayrollReverseDialog = dynamic(() => import("@/components/payroll-reverse-dialog").then((m) => m.PayrollReverseDialog))
+const AdvanceDialog = dynamic(() => import("@/components/advance-dialog").then((m) => m.AdvanceDialog))
+const PayrollRulesDialog = dynamic(() => import("@/components/payroll-rules-dialog").then((m) => m.PayrollRulesDialog))
 import { PrintButton } from "@/components/print/print-button"
 
 const ALL_STATUSES: AttendanceStatus[] = ["present", "half_day", "leave", "absent", "holiday"]

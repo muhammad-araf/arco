@@ -68,6 +68,46 @@ export default function ReportsPage() {
 
   const effFrom = dateFrom || defaultFrom
   const effTo = dateTo || defaultTo
+
+  // Saved COGS approval for the report month, fetched BEFORE the main
+  // load so the main load runs once with it. Previously the approval
+  // effect set appliedCogs after the first load had already run, which
+  // re-triggered loadData and loaded everything a second time whenever
+  // a saved approval existed. The gate below (approvalPendingRef +
+  // approvalEpoch) makes the main load wait for this fetch: it runs
+  // once per period, either with the saved approval or, when none
+  // exists, with no COGS — the same two outcomes the old code produced,
+  // minus the duplicate run. Save/Clear still reload via loadData's
+  // appliedCogs dependency. The approval fetch itself is unchanged
+  // (same action, same month/year args); like before, when the new
+  // month has no approval the previous month's approval is left in
+  // place — that quirk is preserved, not fixed here.
+  const [approvalEpoch, setApprovalEpoch] = React.useState(0)
+  const approvalPendingRef = React.useRef(false)
+  React.useEffect(() => {
+    let cancelled = false
+    approvalPendingRef.current = true
+    const month = Number(effFrom.slice(5, 7)) || 1
+    const year = Number(effFrom.slice(0, 4)) || 2026
+    ;(async () => {
+      try {
+        const res: any = await getCogsApproval({ month, year })
+        if (!cancelled && res?.success && res.data) {
+          setAppliedCogs({ amount: Number(res.data.amount || 0), basis: res.data.basis ?? "", note: res.data.note ?? "", saved: true })
+          setCogsInput(String(res.data.amount ?? "")); setCogsBasisInput(res.data.basis ?? ""); setCogsNoteInput(res.data.note ?? "")
+        }
+      } catch { /* as before: a failed approval read is ignored */ }
+      finally {
+        if (!cancelled) {
+          approvalPendingRef.current = false
+          setApprovalEpoch((e) => e + 1)
+        }
+      }
+    })()
+    setCogsUnavailable(false)
+    return () => { cancelled = true }
+  }, [effFrom])
+
   const loadData = React.useCallback(async () => {
     setIsLoading(true)
     try {
@@ -101,9 +141,9 @@ export default function ReportsPage() {
   }, [effFrom, effTo, appliedCogs])
 
   React.useEffect(() => {
-    if (!effFrom || !effTo) return
+    if (!effFrom || !effTo || approvalPendingRef.current) return
     loadData()
-  }, [loadData])
+  }, [loadData, approvalEpoch])
 
   React.useEffect(() => {
     listGodowns().then((g) => {
@@ -123,15 +163,40 @@ export default function ReportsPage() {
     setMovLoading(true)
     ;(async () => {
       try {
+        // Ledger pages in parallel, not one-by-one. getStockLedger caps
+        // pageSize at 200 server-side, so no single range/limit call can
+        // return the whole ledger — pages are still the unit, they just
+        // no longer wait on each other. Page 1 reveals the total, the
+        // remaining pages (same 50-page cap as before) are fetched
+        // together and concatenated in page order, so the rows and
+        // their order are identical to the old sequential loop. A page
+        // that comes back unsuccessful truncates the result at that
+        // page, matching the old loop's break. The openings fetch is
+        // independent of the ledger, so it runs alongside the pages;
+        // openings are still processed before ledger rows below, so
+        // the pool order (and therefore the movement rows' order) is
+        // unchanged.
+        const openingsPromise = listOpeningBalances()
+        const first: any = await getStockLedger({ page: 1, pageSize: 200 })
         const all: any[] = []
-        for (let page = 1; page <= 50; page++) {
-          const res: any = await getStockLedger({ page, pageSize: 200 })
-          if (!res.success || !res.data) break
-          const rows = Array.isArray(res.data.rows) ? res.data.rows : []
-          all.push(...rows)
-          if (rows.length < 200 || all.length >= (res.data.total ?? 0)) break
+        if (first.success && first.data) {
+          const firstRows = Array.isArray(first.data.rows) ? first.data.rows : []
+          all.push(...firstRows)
+          const total = first.data.total
+          if (firstRows.length >= 200 && total != null && all.length < total) {
+            const lastPage = Math.min(50, Math.ceil(total / 200))
+            const rest: any[] = await Promise.all(
+              Array.from({ length: lastPage - 1 }, (_, i) => i + 2).map((page) => getStockLedger({ page, pageSize: 200 })),
+            )
+            for (const res of rest) {
+              if (!res.success || !res.data) break
+              const rows = Array.isArray(res.data.rows) ? res.data.rows : []
+              all.push(...rows)
+              if (rows.length < 200) break
+            }
+          }
         }
-        const openings: any = await listOpeningBalances()
+        const openings: any = await openingsPromise
         const openRows = openings.success && Array.isArray(openings.data) ? openings.data.filter((o: any) => o.balance_kind === "stock") : []
         if (cancelled) return
         const pools = new Map<string, any>()
@@ -164,20 +229,13 @@ export default function ReportsPage() {
     return () => { cancelled = true }
   }, [selectedReport, stockView, effFrom, effTo])
 
-  // COGS approval + stock valuation (finance team's actions, import only).
+  // Stock valuation (finance team's action, import only). The COGS
+  // approval half of this effect moved above loadData so the main load
+  // runs once with the approval instead of twice; this half is unchanged.
   // The valuation method comes from the valuation_method app setting via
   // the settings snapshot; when it is unconfirmed the valuation action
   // itself returns method_not_set with a null total, and no number is shown.
   React.useEffect(() => {
-    const month = Number(effFrom.slice(5, 7)) || 1
-    const year = Number(effFrom.slice(0, 4)) || 2026
-    getCogsApproval({ month, year }).then((res: any) => {
-      if (res?.success && res.data) {
-        setAppliedCogs({ amount: Number(res.data.amount || 0), basis: res.data.basis ?? "", note: res.data.note ?? "", saved: true })
-        setCogsInput(String(res.data.amount ?? "")); setCogsBasisInput(res.data.basis ?? ""); setCogsNoteInput(res.data.note ?? "")
-      }
-    }).catch(() => undefined)
-    setCogsUnavailable(false)
     getSettingsSnapshot().then(async (snap: any) => {
       const method = snap?.success ? String((snap.data as any)?.valuation_method ?? "unconfirmed") : "unconfirmed"
       setValMethod(method)
