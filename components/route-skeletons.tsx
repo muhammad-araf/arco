@@ -1,4 +1,4 @@
-import { FilterFieldsSkeleton, ListCardSkeleton, Skel, StatCardsSkeleton, TabBarSkeleton, TableCardSkeleton, TitleRowSkeleton } from "@/components/erp-ui"
+import { DetailRowsSkeleton, FilterFieldsSkeleton, ListCardSkeleton, Skel, StatCardsSkeleton, TabBarSkeleton, TableCardSkeleton, TitleRowSkeleton } from "@/components/erp-ui"
 
 /* Shared route skeletons: each route's loading.tsx and the page's own
    in-page loading state render the SAME component, so the shape never
@@ -7,12 +7,12 @@ import { FilterFieldsSkeleton, ListCardSkeleton, Skel, StatCardsSkeleton, TabBar
 export function AuditSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
-      <TitleRowSkeleton buttons={0} />
+      <TitleRowSkeleton buttons={0} subtitle />
       <FilterFieldsSkeleton fields={4} button />
-      <div className="flex flex-col items-center py-8 space-y-2">
-        <Skel className="h-4 w-56 bg-muted rounded" />
-        <Skel className="h-3 w-80 max-w-full bg-muted rounded" />
-      </div>
+      {/* Real audit table: When, User, Action, Entity, Voucher, Reason,
+          Before / After. The old centred text blocks matched no section
+          on the page, so they are replaced by this table. */}
+      <TableCardSkeleton rows={8} columns={[2, 2, 1, 2, 1, 2, 2]} />
     </div>
   )
 }
