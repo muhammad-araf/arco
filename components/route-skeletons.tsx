@@ -34,11 +34,17 @@ export function BillingSkeleton() {
 export function DashboardSkeleton() {
   return (
     <div className="space-y-6" aria-label="Loading page content" aria-busy="true">
-      <TitleRowSkeleton buttons={3} />
+      {/* 7 real quick actions: New Inward, Issue Gate Pass, Run Batch,
+          Purchase, Receipt, Expense, Attendance. They wrap on phones
+          via the shared title row. */}
+      <TitleRowSkeleton buttons={7} />
+      {/* 4 real stat cards: Today's Inward, Processing Output,
+          Dispatched, Cash. */}
       <StatCardsSkeleton count={4} cols="sm:grid-cols-2 lg:grid-cols-4" />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
-          <TableCardSkeleton rows={6} />
+          {/* Stock by Product: Product / Grade, Available Weight, Status. */}
+          <TableCardSkeleton rows={6} columns={[3, 2, 1]} />
           <ListCardSkeleton rows={4} />
         </div>
         <div className="space-y-6">
@@ -48,11 +54,23 @@ export function DashboardSkeleton() {
             <Skel className="h-16 w-full rounded-lg bg-muted" />
             <Skel className="h-10 w-full rounded-lg bg-muted" />
           </div>
+          {/* Godown Space: one block per godown — name/percent row,
+              occupancy bar, stored/capacity row. */}
           <div className="expensive-card p-5 space-y-4">
             <Skel className="h-4 w-28 bg-muted rounded" />
-            <Skel className="h-2 w-full rounded bg-muted" />
-            <Skel className="h-2 w-full rounded bg-muted" />
-            <Skel className="h-2 w-full rounded bg-muted" />
+            {Array.from({ length: 2 }).map((_, i) => (
+              <div key={i} className="space-y-1.5">
+                <div className="flex items-center justify-between gap-3">
+                  <Skel className="h-3 w-24 bg-muted rounded" />
+                  <Skel className="h-3 w-16 shrink-0 bg-muted rounded" />
+                </div>
+                <Skel className="h-2 w-full rounded bg-muted" />
+                <div className="flex items-center justify-between gap-3">
+                  <Skel className="h-3 w-20 bg-muted rounded" />
+                  <Skel className="h-3 w-16 shrink-0 bg-muted rounded" />
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </div>
