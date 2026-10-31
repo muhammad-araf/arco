@@ -73,7 +73,7 @@ export async function IdleTimeoutLoader() {
  * real sidebar does not shift the page. Nav links are not clickable
  * during this brief window; the page content beside it already is.
  */
-const SIDEBAR_SECTIONS: number[] = [4, 3, 5, 8]
+const SIDEBAR_SECTIONS: number[] = [5, 3, 5, 8]
 
 export function SidebarSkeleton() {
   return (
